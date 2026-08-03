@@ -2,10 +2,9 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import {
   LayoutDashboard, Users, Contact, PhoneCall, LogOut, Menu, X,
-  AlarmClock, Download, Loader2, MapPin, MessagesSquare, Settings as SettingsIcon,
+  AlarmClock, MapPin, MessagesSquare, Settings as SettingsIcon,
   UserCog, Building2,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
 import { useAuth } from "../context/AuthContext";
@@ -16,7 +15,6 @@ export const Layout = ({ children }) => {
   const { user, logout, isAdmin, isTL, isEmployee, isManager, attendanceExempt } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [dl, setDl] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
@@ -51,26 +49,6 @@ export const Layout = ({ children }) => {
   const handleLogout = async () => {
     await logout();
     navigate("/login");
-  };
-
-  const downloadSource = async () => {
-    setDl(true);
-    try {
-      const r = await api.get("/source/download", { responseType: "blob" });
-      const url = URL.createObjectURL(r.data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "unique-prime-reality-crm-source.zip";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast.success("Full source code downloaded (.zip)");
-    } catch {
-      toast.error("Download failed. Please try again.");
-    } finally {
-      setDl(false);
-    }
   };
 
   const roleLabel = ({
@@ -140,19 +118,6 @@ export const Layout = ({ children }) => {
               </div>
             </div>
           </div>
-          {isAdmin && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mb-2 w-full justify-start gap-2"
-              onClick={downloadSource}
-              disabled={dl}
-              data-testid="download-source-btn"
-            >
-              {dl ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {dl ? "Preparing zip…" : "Download code (.zip)"}
-            </Button>
-          )}
           <Button
             variant="outline"
             size="sm"
