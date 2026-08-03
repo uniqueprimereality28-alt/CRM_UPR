@@ -1,113 +1,24 @@
-@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap");
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import "./index.css";
+import App from "./App";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
-body {
-    margin: 0;
-    font-family: "Inter", sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
+const root = ReactDOM.createRoot(document.getElementById("root"));
 
-@layer base {
-    :root {
-        --background: 210 40% 98%;
-        --foreground: 222 47% 11%;
-        --card: 0 0% 100%;
-        --card-foreground: 222 47% 11%;
-        --popover: 0 0% 100%;
-        --popover-foreground: 222 47% 11%;
-        --primary: 227 76% 43%;
-        --primary-foreground: 0 0% 100%;
-        --secondary: 210 40% 96%;
-        --secondary-foreground: 222 47% 11%;
-        --muted: 210 40% 96%;
-        --muted-foreground: 215 16% 47%;
-        --accent: 226 100% 97%;
-        --accent-foreground: 227 76% 43%;
-        --destructive: 0 84% 60%;
-        --destructive-foreground: 0 0% 100%;
-        --border: 214 32% 91%;
-        --input: 214 32% 91%;
-        --ring: 227 76% 43%;
-        --chart-1: 227 76% 43%;
-        --chart-2: 160 84% 39%;
-        --chart-3: 38 92% 50%;
-        --chart-4: 215 16% 47%;
-        --chart-5: 199 89% 48%;
-        --radius: 0.65rem;
-    }
-}
-
-@layer base {
-    * {
-        @apply border-border;
-    }
-    body {
-        @apply bg-background text-foreground;
-    }
-    h1,
-    h2,
-    h3,
-    h4 {
-        font-family: "Outfit", sans-serif;
-        letter-spacing: -0.02em;
-    }
-    ::selection {
-        background: #1a3fbf;
-        color: #fff;
-    }
-}
-
-.brand-font {
-    font-family: "Outfit", sans-serif;
-}
-
-.stagger-in {
-    animation: fadeUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-@keyframes fadeUp {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-    to {
-        opacity: 1;
-        transform: none;
-    }
-}
-
-.pulse-ring {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.55);
-    animation: pulseRing 1.6s infinite;
-}
-
-@keyframes pulseRing {
-    70% {
-        box-shadow: 0 0 0 12px rgba(16, 185, 129, 0);
-    }
-    100% {
-        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-    }
-}
-
-::-webkit-scrollbar {
-    width: 9px;
-    height: 9px;
-}
-::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 99px;
-}
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-@layer base {
-    [data-debug-wrapper="true"] {
-        display: contents !important;
-    }
-}
+root.render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
+  </React.StrictMode>
+);
