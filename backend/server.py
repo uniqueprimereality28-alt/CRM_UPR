@@ -11,7 +11,6 @@ import math
 import asyncio
 import logging
 import uuid
-import zipfile
 from datetime import datetime, timezone, timedelta, date as _date
 from typing import List, Optional, Annotated, Any
 
@@ -1791,113 +1790,6 @@ async def daily_report(admin: dict = Depends(require_admin), tz_offset: int = 0)
         "overdue_followups": overdue_fu,
         "whatsapp_text": "\n".join(lines),
     }
-
-
-# ---------------- Source code export (admin) ----------------
-ZIP_EXCLUDE_DIRS = {"node_modules", ".git", "__pycache__", ".pytest_cache",
-                    "build", "dist", "coverage", ".venv", "venv", "test_reports"}
-ZIP_ROOT = "unique-prime-reality-crm"
-
-BACKEND_ENV_EXAMPLE = """MONGO_URL="mongodb://localhost:27017"
-DB_NAME="upr_crm"
-CORS_ORIGINS="*"
-JWT_SECRET="replace-with-a-long-random-secret-string"
-COOKIE_SECURE="false"
-
-ADMIN_EMAIL="sandeep.chauhan"
-ADMIN_PASSWORD="Sandeep@123"
-ADMIN_NAME="Sandeep Chauhan"
-ADMIN_PHONE="+919810000001"
-
-SUPERADMIN_EMAIL="vranda.aggarwal"
-SUPERADMIN_PASSWORD="Vranda@123"
-SUPERADMIN_NAME="Vranda Aggarwal"
-SUPERADMIN_PHONE="+919810000002"
-
-DEFAULT_USER_PASSWORD="Welcome@123"
-
-OFFICE_LAT="28.4595"
-OFFICE_LNG="77.0266"
-OFFICE_RADIUS_M="500"
-OFFICE_START="11:00"
-OFFICE_END="18:00"
-OFFICE_LABEL="Unique Prime Reality HQ"
-"""
-
-FRONTEND_ENV_EXAMPLE = """REACT_APP_BACKEND_URL=http://localhost:8001
-"""
-
-SETUP_README = """# Unique Prime Reality CRM
-
-Full-stack CRM with role hierarchy, GPS-verified attendance, lead management,
-call recording, team chat and broadcast alerts. FastAPI + React + MongoDB.
-
-## Prerequisites
-Python 3.11+, Node 18+ with yarn (`npm i -g yarn`), MongoDB.
-
-## Backend
-    cd backend
-    pip install -r requirements.txt
-    cp .env.example .env  # then edit if needed
-    uvicorn server:app --host 0.0.0.0 --port 8001
-
-## Frontend
-    cd frontend
-    yarn install
-    cp .env.example .env
-    yarn start        # http://localhost:3000
-    yarn build        # production build
-
-## Seeded logins
-- Superadmin (Technical Head): `vranda.aggarwal` / `Vranda@123`
-- Admin: `sandeep.chauhan` / `Sandeep@123`
-- Team leaders: `manish.singh`, `pankaj.verma`, `abhishek.janghu`, `rakesh.shanwal` / `Welcome@123`
-- Sales (under abhishek.janghu): `kashish.aggarwal`, `paviter.dahiya` / `Welcome@123`
-
-Change passwords after first login (Profile → Change password).
-
-## Highlights
-- Role hierarchy: superadmin → admin → team_lead → sales / employee
-- GPS-verified attendance with configurable office coords + 500 m radius
-- Automatic late & overtime calculation, weekly/monthly absentee dashboard
-- CSV / manual lead import with hot/raw/custom tags and follow-up filters
-- Click-to-call console with browser mic recording
-- Team chat groups + broadcast alerts (polling)
-- Superadmin can edit anyone (including missed attendance)
-- Fully responsive — mobile-friendly for field sales
-
-Built for Unique Prime Reality by Vranda Aggarwal.
-"""
-
-
-def _build_source_zip() -> bytes:
-    buf = io.BytesIO()
-    root = Path(__file__).resolve().parent.parent
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in root.rglob("*"):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(root)
-            if set(rel.parts) & ZIP_EXCLUDE_DIRS:
-                continue
-            if rel.name == ".env" or rel.suffix in (".pyc", ".log", ".zip"):
-                continue
-            try:
-                z.write(p, f"{ZIP_ROOT}/{rel}")
-            except OSError:
-                continue
-        z.writestr(f"{ZIP_ROOT}/backend/.env.example", BACKEND_ENV_EXAMPLE)
-        z.writestr(f"{ZIP_ROOT}/frontend/.env.example", FRONTEND_ENV_EXAMPLE)
-        z.writestr(f"{ZIP_ROOT}/README-SETUP.md", SETUP_README)
-    return buf.getvalue()
-
-
-@api.get("/source/download")
-async def download_source(admin: dict = Depends(require_admin)):
-    data = await asyncio.to_thread(_build_source_zip)
-    return Response(
-        content=data, media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="unique-prime-reality-crm-source.zip"'})
 
 
 @api.get("/")
