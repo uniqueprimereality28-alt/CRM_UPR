@@ -5,6 +5,17 @@ export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API, withCredentials: true });
 
+// The backend returns asset paths like "/api/avatars/xyz.jpg" — these are
+// relative to the BACKEND host, not the frontend host they render on. Since
+// the frontend and backend are deployed on separate domains, an <img src>
+// pointed straight at that relative path 404s. This resolves it against the
+// actual backend origin (and passes absolute/blob/data URLs through as-is).
+export function assetUrl(path) {
+  if (!path) return null;
+  if (/^(https?:|blob:|data:)/i.test(path)) return path;
+  return `${BACKEND_URL || ""}${path}`;
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("upr_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
