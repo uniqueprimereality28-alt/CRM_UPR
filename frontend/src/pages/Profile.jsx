@@ -14,6 +14,7 @@ export default function Profile() {
   const [pwdBusy, setPwdBusy] = useState(false);
   const [infoBusy, setInfoBusy] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export default function Profile() {
 
   const uploadAvatar = async (f) => {
     if (!f) return;
+    if (!f.type?.startsWith("image/")) return toast.error("Please drop an image file");
     if (f.size > 3 * 1024 * 1024) return toast.error("Image too large (max 3 MB)");
     setAvatarBusy(true);
     try {
@@ -71,6 +73,17 @@ export default function Profile() {
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
     } finally { setAvatarBusy(false); }
+  };
+
+  const stopEvt = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const onAvatarDragEnter = (e) => { stopEvt(e); setIsDragging(true); };
+  const onAvatarDragOver = (e) => { stopEvt(e); setIsDragging(true); };
+  const onAvatarDragLeave = (e) => { stopEvt(e); setIsDragging(false); };
+  const onAvatarDrop = (e) => {
+    stopEvt(e);
+    setIsDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) uploadAvatar(f);
   };
 
   const workingDays = (user?.working_days || []).map((d) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d]).join(", ");
@@ -90,18 +103,31 @@ export default function Profile() {
           </div>
 
           <div className="mt-5 flex items-center gap-4">
-            <div className="relative">
+            <div
+              className={`relative cursor-pointer rounded-full transition-all ${isDragging ? "ring-4 ring-brand ring-offset-2" : ""}`}
+              onClick={() => fileRef.current?.click()}
+              onDragEnter={onAvatarDragEnter}
+              onDragOver={onAvatarDragOver}
+              onDragLeave={onAvatarDragLeave}
+              onDrop={onAvatarDrop}
+              data-testid="avatar-dropzone"
+            >
               {user?.avatar_url ? (
                 <img src={user.avatar_url} alt={user.name} data-testid="profile-avatar"
-                  className="h-20 w-20 rounded-full border-2 border-white object-cover shadow" />
+                  className={`h-20 w-20 rounded-full border-2 object-cover shadow transition-opacity ${isDragging ? "border-brand opacity-60" : "border-white"}`} />
               ) : (
-                <div className="grid h-20 w-20 place-items-center rounded-full bg-brand-light text-2xl font-bold text-brand" data-testid="profile-avatar">
+                <div className={`grid h-20 w-20 place-items-center rounded-full bg-brand-light text-2xl font-bold text-brand transition-opacity ${isDragging ? "opacity-60" : ""}`} data-testid="profile-avatar">
                   {user?.name?.slice(0, 1)}
+                </div>
+              )}
+              {isDragging && (
+                <div className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-brand/20 text-[9px] font-semibold uppercase tracking-wide text-brand">
+                  Drop
                 </div>
               )}
               <button
                 type="button"
-                onClick={() => fileRef.current?.click()}
+                onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}
                 data-testid="upload-avatar-btn"
                 className="absolute -bottom-1 -right-1 grid h-8 w-8 place-items-center rounded-full border-2 border-white bg-brand text-white shadow-md transition-transform hover:scale-110"
                 title="Change picture"
@@ -118,6 +144,7 @@ export default function Profile() {
               <div className="mt-1 flex items-center gap-1 text-[11px] text-slate-500">
                 <CalIcon className="h-3 w-3" /> Joined {user?.joining_date || "—"}
               </div>
+              <div className="mt-1 text-[10px] text-slate-400">Drag &amp; drop an image, or click to change</div>
             </div>
           </div>
 
