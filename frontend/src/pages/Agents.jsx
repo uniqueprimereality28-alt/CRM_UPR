@@ -31,6 +31,7 @@ const emptyForm = {
   date_of_birth: "", joining_date: "",
   office_start: "11:00", office_end: "18:00",
   working_days: [0, 1, 2, 3, 4, 5],
+  wfh: false, attendance_exempt: false,
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -81,6 +82,8 @@ export default function Agents() {
         if (isAdmin) {
           payload.role = form.role;
           payload.team_lead_id = form.team_lead_id || null;
+          payload.wfh = form.wfh;
+          payload.attendance_exempt = form.attendance_exempt;
         }
         await api.put(`/users/${editing}`, payload);
         toast.success("Profile updated");
@@ -132,6 +135,7 @@ export default function Agents() {
       date_of_birth: u.date_of_birth || "", joining_date: u.joining_date || "",
       office_start: u.office_start || "11:00", office_end: u.office_end || "18:00",
       working_days: u.working_days || [0, 1, 2, 3, 4, 5],
+      wfh: !!u.wfh, attendance_exempt: !!u.attendance_exempt,
     });
     setOpen(true);
   };
@@ -253,6 +257,38 @@ export default function Agents() {
                     })}
                   </div>
                 </div>
+
+                {isAdmin && (
+                  <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <Label className="text-sm font-semibold text-slate-800">Work from home (no GPS)</Label>
+                        <p className="text-xs text-slate-500">
+                          Attendance check-in/out is marked without verifying office GPS location.
+                        </p>
+                      </div>
+                      <Switch
+                        data-testid="user-wfh-switch"
+                        checked={form.wfh}
+                        onCheckedChange={(v) => setForm({ ...form, wfh: v })}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                      <div>
+                        <Label className="text-sm font-semibold text-slate-800">Attendance not required</Label>
+                        <p className="text-xs text-slate-500">
+                          This profile won't need to check in/out at all (e.g. exempt roles).
+                        </p>
+                      </div>
+                      <Switch
+                        data-testid="user-attendance-exempt-switch"
+                        checked={form.attendance_exempt}
+                        onCheckedChange={(v) => setForm({ ...form, attendance_exempt: v })}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <DialogFooter>
                   <Button type="submit" disabled={busy} data-testid="user-submit-btn" className="bg-brand hover:bg-brand-dark">
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? "Save changes" : "Create profile"}
@@ -292,6 +328,11 @@ export default function Agents() {
                   <Badge variant="outline" className={meta.cls}>
                     {meta.label}
                   </Badge>
+                  {u.wfh && (
+                    <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">
+                      WFH
+                    </Badge>
+                  )}
                   {u.team_lead_name && (
                     <div className="text-[10px] text-slate-400">under <b>{u.team_lead_name}</b></div>
                   )}
