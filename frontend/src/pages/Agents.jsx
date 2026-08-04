@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { UserPlus, Loader2, Pencil, Trash2, Timer, Trophy } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiError, fmtDuration, fmtMoney } from "../lib/api";
+import { api, apiError, fmtDuration, fmtMoney, assetUrl } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -313,7 +313,7 @@ export default function Agents() {
               <div className="flex items-start justify-between gap-2">
                 <Link to={`/team/${u.id}`} className="flex items-center gap-3">
                   {u.avatar_url ? (
-                    <img src={u.avatar_url} alt={u.name} className="h-11 w-11 rounded-full object-cover" />
+                    <img src={assetUrl(u.avatar_url)} alt={u.name} className="h-11 w-11 rounded-full object-cover" />
                   ) : (
                     <div className="grid h-11 w-11 place-items-center rounded-full bg-brand-light text-sm font-bold text-brand">
                       {u.name.slice(0, 1)}
