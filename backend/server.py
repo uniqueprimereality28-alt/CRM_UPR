@@ -18,9 +18,14 @@ import bcrypt
 import jwt
 from bson import ObjectId
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict
 from starlette.middleware.cors import CORSMiddleware
+from openpyxl import Workbook, load_workbook
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crm")
@@ -844,6 +849,85 @@ async def assign_leads(payload: AssignRequest, user: dict = Depends(require_mana
     return {"ok": True, "assigned": len(payload.lead_ids)}
 
 
+@api.get("/leads/export")
+async def export_leads(
+    format: str = "xlsx",
+    user: dict = Depends(require_manager),
+    status: Optional[str] = None,
+    tag: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+):
+    """Bulk export of visible leads to Excel or PDF. Tags/remarks columns included as-is, unchanged."""
+    base_q = _lead_visibility_query(user)
+    query = await _apply_visibility(base_q, user)
+    if status:
+        query["status"] = status
+    if tag:
+        query["tag"] = tag
+    if assigned_to:
+        query["assigned_to"] = assigned_to
+    docs = await db.leads.find(query).sort("created_at", -1).to_list(20000)
+
+    columns = ["Name", "Phone Number", "Email", "Status", "Tag", "Remark",
+               "Source", "City", "Assigned To", "Created At"]
+
+    def row_for(d):
+        return [
+            d.get("name") or "", d.get("phone") or "", d.get("email") or "",
+            d.get("status") or "", d.get("tag") or "", d.get("remark") or "",
+            d.get("source") or "", d.get("city") or "",
+            d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
+        ]
+
+    if format == "pdf":
+        buf = io.BytesIO()
+        pdf_doc = SimpleDocTemplate(buf, pagesize=landscape(A4))
+        data = [columns] + [row_for(d) for d in docs]
+        table = Table(data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+        ]))
+        pdf_doc.build([table])
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=leads_{ist_today_str()}.pdf"})
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+    ws.append(columns)
+    for d in docs:
+        ws.append(row_for(d))
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=leads_{ist_today_str()}.xlsx"})
+
+
+@api.get("/leads/import-template")
+async def leads_import_template(user: dict = Depends(require_manager)):
+    """Blank Excel template with just Name and Phone Number columns for clean imports."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+    ws.append(["Name", "Phone Number"])
+    ws.append(["Rahul Sharma", "9876543210"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=leads_import_template.xlsx"})
+
+
 @api.post("/leads/import")
 async def import_leads(
     file: UploadFile = File(...),
@@ -854,18 +938,43 @@ async def import_leads(
     user: dict = Depends(require_manager),
 ):
     raw = await file.read()
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1")
-    reader = csv.DictReader(io.StringIO(text))
+    filename = (file.filename or "").lower()
+
+    rows: List[dict] = []
+    if filename.endswith(".xlsx") or filename.endswith(".xlsm"):
+        try:
+            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        except Exception:
+            raise HTTPException(status_code=400,
+                                detail="Could not read the Excel file. Please re-save it as .xlsx and try again.")
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        try:
+            header = [str(h or "").strip().lower().replace(" ", "_") for h in next(rows_iter)]
+        except StopIteration:
+            header = []
+        for r in rows_iter:
+            row = {}
+            for i, val in enumerate(r):
+                if i < len(header) and header[i]:
+                    row[header[i]] = "" if val is None else str(val).strip()
+            if any(v for v in row.values()):
+                rows.append(row)
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1")
+        reader = csv.DictReader(io.StringIO(text))
+        for r in reader:
+            rows.append({(k or "").strip().lower().replace(" ", "_"): (v or "").strip() for k, v in r.items()})
+
     agent_name = None
     if assigned_to:
         agent = await db.users.find_one({"_id": ObjectId(assigned_to)})
         agent_name = agent.get("name") if agent else None
 
     skip_dupes = str(skip_duplicates).lower() in ("true", "1", "yes")
-    # Preload existing phone numbers (normalised) for dedupe
     existing = await db.leads.find({}, {"phone": 1, "name": 1}).to_list(50000)
 
     def norm_phone(p: str) -> str:
@@ -875,10 +984,9 @@ async def import_leads(
 
     inserted, skipped, dupes, missing = 0, 0, [], 0
     seen_in_file = set()
-    for row in reader:
-        row = {(k or "").strip().lower().replace(" ", "_"): (v or "").strip() for k, v in row.items()}
+    for row in rows:
         name = row.get("name") or row.get("full_name") or row.get("lead_name")
-        phone = row.get("phone") or row.get("mobile") or row.get("contact")
+        phone = row.get("phone") or row.get("phone_number") or row.get("mobile") or row.get("contact")
         if not name or not phone:
             missing += 1
             continue
@@ -899,7 +1007,7 @@ async def import_leads(
         status = row.get("status", "new").lower()
         doc = Lead(
             name=name, phone=phone, email=row.get("email") or None,
-            source=row.get("source") or "CSV Import",
+            source=row.get("source") or "Excel Import",
             status=status if status in LEAD_STATUSES else "new",
             tag=row.get("tag") or default_tag or None,
             remark=row.get("remark") or default_remark or None,
