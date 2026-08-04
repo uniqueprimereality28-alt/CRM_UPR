@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
-import { Loader2, Users, UserX, Timer, Award } from "lucide-react";
-import { api, fmtDate, fmtDuration } from "../lib/api";
+import { Loader2, Users, UserX, Timer, Award, ClipboardEdit } from "lucide-react";
+import { toast } from "sonner";
+import { api, apiError, fmtDate, fmtDuration } from "../lib/api";
 import { StatCard } from "../components/StatCard";
+import { useAuth } from "../context/AuthContext";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Textarea } from "../components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+} from "../components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "../components/ui/select";
 
 const statusLabel = {
   present: { text: "Present", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
@@ -9,10 +21,17 @@ const statusLabel = {
   leave: { text: "On Leave", cls: "bg-amber-50 text-amber-700 border-amber-200" },
 };
 
+const emptyMarkForm = { user_id: "", date_str: new Date().toISOString().slice(0, 10), status: "present", note: "" };
+
 export default function TeamAttendance() {
+  const { isAdmin } = useAuth();
   const [period, setPeriod] = useState("week");
   const [stats, setStats] = useState(null);
   const [today, setToday] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [markOpen, setMarkOpen] = useState(false);
+  const [markForm, setMarkForm] = useState(emptyMarkForm);
+  const [markBusy, setMarkBusy] = useState(false);
 
   const loadStats = (p) => api.get("/attendance/stats", { params: { period: p } })
     .then((r) => setStats(r.data)).catch(() => setStats(false));
@@ -22,6 +41,30 @@ export default function TeamAttendance() {
 
   useEffect(() => { loadStats(period); }, [period]);
   useEffect(() => { loadToday(); }, []);
+  useEffect(() => {
+    if (isAdmin) api.get("/users").then((r) => setUsers(r.data || [])).catch(() => setUsers([]));
+  }, [isAdmin]);
+
+  const submitMark = async (e) => {
+    e.preventDefault();
+    if (!markForm.user_id) return toast.error("Choose a team member");
+    setMarkBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("user_id", markForm.user_id);
+      fd.append("date_str", markForm.date_str);
+      fd.append("status", markForm.status);
+      if (markForm.note) fd.append("note", markForm.note);
+      await api.post("/attendance/mark-manual", fd);
+      toast.success("Attendance marked");
+      setMarkOpen(false);
+      setMarkForm(emptyMarkForm);
+      loadToday();
+      loadStats(period);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setMarkBusy(false); }
+  };
 
   const perUser = stats?.per_user || [];
   const totalOvertime = perUser.reduce((a, u) => a + (u.overtime_seconds || 0), 0);
@@ -30,11 +73,70 @@ export default function TeamAttendance() {
 
   return (
     <div className="space-y-6" data-testid="team-attendance-page">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Team Attendance</h1>
-        <p className="mt-1.5 text-sm text-slate-500">
-          Weekly and monthly attendance stats across the whole team.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Team Attendance</h1>
+          <p className="mt-1.5 text-sm text-slate-500">
+            Weekly and monthly attendance stats across the whole team.
+          </p>
+        </div>
+        {isAdmin && (
+          <Dialog open={markOpen} onOpenChange={(v) => { setMarkOpen(v); if (!v) setMarkForm(emptyMarkForm); }}>
+            <DialogTrigger asChild>
+              <Button data-testid="mark-attendance-btn" variant="outline" className="gap-2">
+                <ClipboardEdit className="h-4 w-4" /> Mark attendance
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Mark attendance manually</DialogTitle>
+              </DialogHeader>
+              <p className="-mt-2 text-sm text-slate-500">
+                For anyone who forgot to check in/out, or needs a leave/absence recorded.
+              </p>
+              <form onSubmit={submitMark} className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Team member *</Label>
+                  <Select value={markForm.user_id} onValueChange={(v) => setMarkForm({ ...markForm, user_id: v })}>
+                    <SelectTrigger data-testid="mark-attendance-user-select"><SelectValue placeholder="Choose a team member" /></SelectTrigger>
+                    <SelectContent>
+                      {users.map((u) => <SelectItem key={u.id} value={u.id}>{u.name} ({u.username})</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Date</Label>
+                    <Input type="date" data-testid="mark-attendance-date-input" value={markForm.date_str}
+                      onChange={(e) => setMarkForm({ ...markForm, date_str: e.target.value })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <Select value={markForm.status} onValueChange={(v) => setMarkForm({ ...markForm, status: v })}>
+                      <SelectTrigger data-testid="mark-attendance-status-select"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="present">Present</SelectItem>
+                        <SelectItem value="absent">Absent</SelectItem>
+                        <SelectItem value="leave">On Leave</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Note (optional)</Label>
+                  <Textarea data-testid="mark-attendance-note-input" value={markForm.note} rows={2}
+                    placeholder="e.g. Forgot to check in, confirmed present in office"
+                    onChange={(e) => setMarkForm({ ...markForm, note: e.target.value })} />
+                </div>
+                <DialogFooter>
+                  <Button type="submit" disabled={markBusy} data-testid="mark-attendance-submit-btn" className="bg-brand hover:bg-brand-dark">
+                    {markBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save attendance"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
