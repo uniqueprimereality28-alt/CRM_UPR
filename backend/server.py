@@ -396,6 +396,14 @@ async def require_super(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+async def require_superadmin_only(user: dict = Depends(get_current_user)) -> dict:
+    # Strictly Vranda's role (superadmin) — used for the irreversible system data reset,
+    # which is intentionally NOT available to the admin (Sandeep) account.
+    if not is_super(user):
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+    return user
+
+
 async def require_manager(user: dict = Depends(get_current_user)) -> dict:
     if not is_manager(user):
         raise HTTPException(status_code=403, detail="Managerial access required")
@@ -1290,7 +1298,7 @@ async def update_settings(payload: SettingsUpdate, actor: dict = Depends(require
 
 
 @api.post("/settings/reset-data")
-async def reset_operational_data(payload: SystemResetRequest, actor: dict = Depends(require_super)):
+async def reset_operational_data(payload: SystemResetRequest, actor: dict = Depends(require_superadmin_only)):
     """
     Irreversibly wipes all call logs and attendance records so the system starts
     fresh from this moment. Requires the confirmation phrase 'RESET' (exact, case-sensitive).
