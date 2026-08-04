@@ -8,7 +8,7 @@ import {
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
 import { useAuth } from "../context/AuthContext";
-import { api } from "../lib/api";
+import { api, assetUrl } from "../lib/api";
 import { Button } from "./ui/button";
 
 export const Layout = ({ children }) => {
@@ -104,7 +104,7 @@ export const Layout = ({ children }) => {
         <div className="shrink-0 border-t border-slate-200 p-4">
           <div className="mb-3 flex items-center gap-3">
             {user?.avatar_url ? (
-              <img src={user.avatar_url} alt={user.name}
+              <img src={assetUrl(user.avatar_url)} alt={user.name}
                 className="h-9 w-9 rounded-full object-cover" />
             ) : (
               <div className="grid h-9 w-9 place-items-center rounded-full bg-brand-light text-sm font-semibold text-brand">
