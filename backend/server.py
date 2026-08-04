@@ -1573,6 +1573,15 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
         start = today - timedelta(days=today.weekday())  # monday
     start_str = start.isoformat()
 
+    # If an operational data reset happened inside this period, don't count days
+    # before the reset as "absent" — those days' real records were wiped, not missed.
+    reset_doc = await db.settings.find_one({"_id": "operational_reset"})
+    effective_start = start
+    if reset_doc and reset_doc.get("reset_at"):
+        reset_date = (_iso_to_dt(reset_doc["reset_at"]) + timedelta(minutes=330)).date()
+        if reset_date > effective_start:
+            effective_start = reset_date
+
     # Users in scope
     if can_view_all(actor):
         users = await db.users.find({"active": True, "attendance_exempt": {"$ne": True},
@@ -1594,7 +1603,7 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
         by_user[r["user_id"]].append(r)
 
     working_days_count = 0
-    d = start
+    d = effective_start
     while d <= today:
         working_days_count += 1
         d += timedelta(days=1)
@@ -1604,7 +1613,25 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
         uid = str(u["_id"])
         user_rows = by_user.get(uid, [])
         present = sum(1 for r in user_rows if r.get("status") == "present")
-        absent = max(0, working_days_count - present)
+        # Only count days on/after this person's own working-day baseline
+        # (joining date, if it's later than the period/reset floor) as expected days.
+        person_floor = effective_start
+        joining = u.get("joining_date")
+        if joining:
+            try:
+                jd = datetime.fromisoformat(joining).date()
+                if jd > person_floor:
+                    person_floor = jd
+            except (ValueError, TypeError):
+                pass
+        allowed_days = set(u.get("working_days") or [0, 1, 2, 3, 4, 5])
+        expected = 0
+        d = person_floor
+        while d <= today:
+            if d.weekday() in allowed_days:
+                expected += 1
+            d += timedelta(days=1)
+        absent = max(0, expected - present)
         overtime = sum(r.get("overtime_seconds", 0) for r in user_rows)
         late = sum(r.get("late_seconds", 0) for r in user_rows)
         late_days = sum(1 for r in user_rows if (r.get("late_seconds", 0) or 0) > 300)  # >5 min
