@@ -289,6 +289,10 @@ class SettingsUpdate(BaseModel):
     office_label: Optional[str] = None
 
 
+class SystemResetRequest(BaseModel):
+    confirm: str
+
+
 class GroupCreate(BaseModel):
     name: str
     member_ids: List[str] = []
@@ -1269,7 +1273,11 @@ async def _get_settings() -> dict:
 
 @api.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
-    return await _get_settings()
+    settings = await _get_settings()
+    reset_doc = await db.settings.find_one({"_id": "operational_reset"})
+    settings["data_reset_at"] = reset_doc.get("reset_at") if reset_doc else None
+    settings["data_reset_by"] = reset_doc.get("reset_by") if reset_doc else None
+    return settings
 
 
 @api.put("/settings")
@@ -1279,6 +1287,35 @@ async def update_settings(payload: SettingsUpdate, actor: dict = Depends(require
         return await _get_settings()
     await db.settings.update_one({"_id": "office"}, {"$set": updates}, upsert=True)
     return await _get_settings()
+
+
+@api.post("/settings/reset-data")
+async def reset_operational_data(payload: SystemResetRequest, actor: dict = Depends(require_super)):
+    """
+    Irreversibly wipes all call logs and attendance records so the system starts
+    fresh from this moment. Requires the confirmation phrase 'RESET' (exact, case-sensitive).
+    Leads, users, and office settings are left untouched — only call/attendance history
+    and each lead's derived talk-time/call-count are cleared.
+    """
+    if (payload.confirm or "").strip() != "RESET":
+        raise HTTPException(status_code=400, detail="Type RESET exactly to confirm this action.")
+
+    calls_result = await db.calls.delete_many({})
+    attendance_result = await db.attendance.delete_many({})
+    await db.leads.update_many({}, {"$set": {"total_talk_time": 0, "call_count": 0}})
+
+    reset_at = now_iso()
+    await db.settings.update_one(
+        {"_id": "operational_reset"},
+        {"$set": {"reset_at": reset_at, "reset_by": actor.get("name")}},
+        upsert=True,
+    )
+    return {
+        "ok": True,
+        "reset_at": reset_at,
+        "calls_deleted": calls_result.deleted_count,
+        "attendance_deleted": attendance_result.deleted_count,
+    }
 
 
 # ---------------- Attendance ----------------
