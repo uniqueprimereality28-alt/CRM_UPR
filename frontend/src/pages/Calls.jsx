@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Loader2, Phone, Timer } from "lucide-react";
-import { api, fmtDuration, fmtDate } from "../lib/api";
+import { Loader2, Phone, Timer, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { api, apiError, fmtDuration, fmtDate } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { StatCard } from "../components/StatCard";
 import { RecordingPlayer } from "../components/RecordingPlayer";
 import { Badge } from "../components/ui/badge";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "../components/ui/alert-dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
@@ -15,6 +20,7 @@ export default function Calls() {
   const [calls, setCalls] = useState(null);
   const [agents, setAgents] = useState([]);
   const [agent, setAgent] = useState("all");
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     api.get("/calls", { params: agent !== "all" ? { agent_id: agent } : {} })
@@ -30,6 +36,17 @@ export default function Calls() {
     const talk = done.reduce((a, c) => a + (c.duration || 0), 0);
     return { count: done.length, talk, avg: done.length ? Math.round(talk / done.length) : 0 };
   }, [calls]);
+
+  const deleteCall = async (callId) => {
+    setDeletingId(callId);
+    try {
+      await api.delete(`/calls/${callId}`);
+      setCalls((prev) => (prev || []).filter((c) => c._id !== callId));
+      toast.success("Call log deleted");
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setDeletingId(null); }
+  };
 
   return (
     <div className="space-y-5" data-testid="calls-page">
@@ -66,14 +83,15 @@ export default function Calls() {
                 <th className="px-3 py-3 text-left">Recording</th>
                 <th className="px-3 py-3 text-right">Duration</th>
                 <th className="px-5 py-3 text-right">Started</th>
+                {isAdmin && <th className="px-5 py-3 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {calls === null && (
-                <tr><td colSpan={6} className="p-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></td></tr>
+                <tr><td colSpan={isAdmin ? 7 : 6} className="p-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></td></tr>
               )}
               {calls?.length === 0 && (
-                <tr><td colSpan={6} className="p-10 text-center text-slate-400">No calls logged yet.</td></tr>
+                <tr><td colSpan={isAdmin ? 7 : 6} className="p-10 text-center text-slate-400">No calls logged yet.</td></tr>
               )}
               {calls?.map((c) => (
                 <tr key={c._id} data-testid={`call-row-${c._id}`} className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50">
@@ -90,6 +108,39 @@ export default function Calls() {
                   </td>
                   <td className="px-3 py-2.5 text-right font-semibold text-slate-800">{fmtDuration(c.duration)}</td>
                   <td className="px-5 py-2.5 text-right text-xs text-slate-400">{fmtDate(c.started_at)}</td>
+                  {isAdmin && (
+                    <td className="px-5 py-2.5 text-right">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button
+                            data-testid={`delete-call-${c._id}`}
+                            disabled={deletingId === c._id}
+                            className="text-slate-300 transition-colors hover:text-rose-500 disabled:opacity-50"
+                          >
+                            {deletingId === c._id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete this call log?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This removes the call with <b>{c.lead_name}</b> ({c.lead_phone}) logged by <b>{c.agent_name}</b> on {fmtDate(c.started_at)}. This can't be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              data-testid={`confirm-delete-call-${c._id}`}
+                              onClick={() => deleteCall(c._id)}
+                              className="bg-rose-600 hover:bg-rose-700"
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
