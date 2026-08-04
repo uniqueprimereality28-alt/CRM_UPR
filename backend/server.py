@@ -1117,6 +1117,21 @@ def _can_access_call(user: dict, call: dict) -> bool:
     return call.get("agent_id") == str(user["_id"])
 
 
+@api.delete("/calls/{call_id}")
+async def delete_call(call_id: str, admin: dict = Depends(require_admin)):
+    """Admins (admin/superadmin — e.g. Sandeep or Vranda) can permanently delete a call log."""
+    call = await db.calls.find_one({"_id": ObjectId(call_id)})
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    # Roll back any talk-time/call-count this completed call had added to the lead
+    if call.get("status") == "completed" and call.get("lead_id"):
+        await db.leads.update_one(
+            {"_id": ObjectId(call["lead_id"])},
+            {"$inc": {"total_talk_time": -int(call.get("duration") or 0), "call_count": -1}})
+    await db.calls.delete_one({"_id": ObjectId(call_id)})
+    return {"ok": True}
+
+
 @api.post("/calls/{call_id}/recording")
 async def upload_recording(call_id: str, file: UploadFile = File(...),
                            user: dict = Depends(get_current_user)):
