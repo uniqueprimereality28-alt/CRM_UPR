@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MapPin, Save, Loader2, Building2, ShieldCheck, AlertTriangle, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDate } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -11,6 +12,8 @@ import {
 } from "../components/ui/alert-dialog";
 
 export default function Settings() {
+  const { user } = useAuth();
+  const isSuperadmin = user?.role === "superadmin";
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
   const [resetConfirm, setResetConfirm] = useState("");
@@ -145,7 +148,8 @@ export default function Settings() {
         </div>
       </form>
 
-      {/* Danger zone */}
+      {/* Danger zone — Vranda (superadmin) only */}
+      {isSuperadmin && (
       <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-6 shadow-sm">
         <div className="flex items-center gap-2 text-lg font-semibold text-rose-700">
           <AlertTriangle className="h-5 w-5" /> Reset system data
@@ -179,7 +183,9 @@ export default function Settings() {
               <Label>Type RESET to confirm</Label>
               <Input
                 data-testid="reset-confirm-input"
+                type="password"
                 autoFocus
+                autoComplete="off"
                 value={resetConfirm}
                 onChange={(e) => setResetConfirm(e.target.value)}
                 placeholder="RESET"
@@ -199,6 +205,7 @@ export default function Settings() {
           </AlertDialogContent>
         </AlertDialog>
       </div>
+      )}
     </div>
   );
 }
