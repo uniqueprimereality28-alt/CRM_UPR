@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { KeyRound, Loader2, UserCog, Save, Camera, Calendar as CalIcon } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiError } from "../lib/api";
+import { api, apiError, assetUrl } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import AvatarCropperDialog from "../components/AvatarCropperDialog";
 
 export default function Profile() {
   const { user, refresh } = useAuth();
@@ -15,6 +16,8 @@ export default function Profile() {
   const [infoBusy, setInfoBusy] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [cropFile, setCropFile] = useState(null);
+  const [cropOpen, setCropOpen] = useState(false);
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -59,17 +62,26 @@ export default function Profile() {
     } finally { setInfoBusy(false); }
   };
 
-  const uploadAvatar = async (f) => {
+  // Picking or dropping a file just opens the crop/zoom modal — nothing is
+  // uploaded yet until the user confirms the framing there.
+  const pickAvatarFile = (f) => {
     if (!f) return;
-    if (!f.type?.startsWith("image/")) return toast.error("Please drop an image file");
+    if (!f.type?.startsWith("image/")) return toast.error("Please choose an image file");
     if (f.size > 3 * 1024 * 1024) return toast.error("Image too large (max 3 MB)");
+    setCropFile(f);
+    setCropOpen(true);
+  };
+
+  const uploadAvatar = async (blob) => {
     setAvatarBusy(true);
     try {
       const fd = new FormData();
-      fd.append("file", f);
+      fd.append("file", blob, "avatar.jpg");
       await api.post("/auth/avatar", fd);
       await refresh();
       toast.success("Profile picture updated");
+      setCropOpen(false);
+      setCropFile(null);
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
     } finally { setAvatarBusy(false); }
@@ -83,7 +95,7 @@ export default function Profile() {
     stopEvt(e);
     setIsDragging(false);
     const f = e.dataTransfer.files?.[0];
-    if (f) uploadAvatar(f);
+    if (f) pickAvatarFile(f);
   };
 
   const workingDays = (user?.working_days || []).map((d) => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d]).join(", ");
@@ -113,7 +125,7 @@ export default function Profile() {
               data-testid="avatar-dropzone"
             >
               {user?.avatar_url ? (
-                <img src={user.avatar_url} alt={user.name} data-testid="profile-avatar"
+                <img src={assetUrl(user.avatar_url)} alt={user.name} data-testid="profile-avatar"
                   className={`h-20 w-20 rounded-full border-2 object-cover shadow transition-opacity ${isDragging ? "border-brand opacity-60" : "border-white"}`} />
               ) : (
                 <div className={`grid h-20 w-20 place-items-center rounded-full bg-brand-light text-2xl font-bold text-brand transition-opacity ${isDragging ? "opacity-60" : ""}`} data-testid="profile-avatar">
@@ -136,7 +148,7 @@ export default function Profile() {
               </button>
               <input ref={fileRef} type="file" accept="image/*" className="hidden"
                 data-testid="avatar-file-input"
-                onChange={(e) => uploadAvatar(e.target.files?.[0])} />
+                onChange={(e) => { pickAvatarFile(e.target.files?.[0]); e.target.value = ""; }} />
             </div>
             <div>
               <div className="text-base font-semibold text-slate-900">{user?.name}</div>
@@ -224,6 +236,14 @@ export default function Profile() {
           </form>
         </div>
       </div>
+
+      <AvatarCropperDialog
+        file={cropFile}
+        open={cropOpen}
+        busy={avatarBusy}
+        onOpenChange={(v) => { setCropOpen(v); if (!v) setCropFile(null); }}
+        onConfirm={uploadAvatar}
+      />
     </div>
   );
 }
