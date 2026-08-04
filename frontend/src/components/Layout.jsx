@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, Users, Contact, PhoneCall, LogOut, Menu, X,
   AlarmClock, MapPin, MessagesSquare, Settings as SettingsIcon,
-  UserCog, Building2, Sun, Moon,
+  UserCog, Building2,
 } from "lucide-react";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
@@ -16,21 +16,6 @@ export const Layout = ({ children }) => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
-  const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem("upr_theme");
-    if (saved) return saved === "dark";
-    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-    localStorage.setItem("upr_theme", darkMode ? "dark" : "light");
-  }, [darkMode]);
 
   useEffect(() => {
     let alive = true;
@@ -76,13 +61,13 @@ export const Layout = ({ children }) => {
   })[user?.role] || user?.role;
 
   return (
-    <div className="flex min-h-screen bg-background dark:bg-slate-950">
+    <div className="flex min-h-screen bg-background">
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white transition-transform dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-200 bg-white transition-transform lg:static lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 px-5 dark:border-slate-800">
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200 px-5">
           <Brand />
           <button className="lg:hidden" onClick={() => setOpen(false)} data-testid="sidebar-close">
             <X className="h-5 w-5 text-slate-400" />
@@ -101,8 +86,8 @@ export const Layout = ({ children }) => {
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-lg border-l-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                   isActive
-                    ? "border-brand bg-brand-light text-brand dark:bg-slate-800"
-                    : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                    ? "border-brand bg-brand-light text-brand"
+                    : "border-transparent text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`
               }
             >
@@ -116,7 +101,7 @@ export const Layout = ({ children }) => {
             </NavLink>
           ))}
         </nav>
-        <div className="shrink-0 border-t border-slate-200 p-4 dark:border-slate-800">
+        <div className="shrink-0 border-t border-slate-200 p-4">
           <div className="mb-3 flex items-center gap-3">
             {user?.avatar_url ? (
               <img src={user.avatar_url} alt={user.name}
@@ -127,36 +112,12 @@ export const Layout = ({ children }) => {
               </div>
             )}
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{user?.name}</div>
+              <div className="truncate text-sm font-semibold text-slate-800">{user?.name}</div>
               <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 {roleLabel}
               </div>
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={() => setDarkMode((v) => !v)}
-            data-testid="dark-mode-toggle"
-            className="mb-2 flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            <span className="flex items-center gap-2">
-              {darkMode ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-              {darkMode ? "Dark mode" : "Light mode"}
-            </span>
-            <span
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                darkMode ? "bg-brand" : "bg-slate-300"
-              }`}
-            >
-              <span
-                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                  darkMode ? "translate-x-4.5" : "translate-x-1"
-                }`}
-              />
-            </span>
-          </button>
-
           <Button
             variant="outline"
             size="sm"
@@ -174,18 +135,18 @@ export const Layout = ({ children }) => {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80 lg:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md lg:px-8">
           <button className="lg:hidden" onClick={() => setOpen(true)} data-testid="sidebar-open">
-            <Menu className="h-5 w-5 text-slate-600 dark:text-slate-300" />
+            <Menu className="h-5 w-5 text-slate-600" />
           </button>
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
             {isAdmin ? "Administrator Command Center" : isTL ? "Team Leader Workspace" : "Workspace"}
           </div>
-          <div className="ml-auto hidden items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs text-slate-500 sm:flex dark:border-slate-700 dark:text-slate-400">
+          <div className="ml-auto hidden items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-xs text-slate-500 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Live
           </div>
         </header>
-        <main className="min-w-0 flex-1 p-4 lg:p-8 dark:text-slate-100">{children}</main>
+        <main className="min-w-0 flex-1 p-4 lg:p-8">{children}</main>
       </div>
       <ReminderBell />
     </div>
