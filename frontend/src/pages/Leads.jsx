@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
-  AlarmClock, Flame, Tag as TagIcon, CalendarClock,
+  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -26,6 +26,8 @@ const TAGS = [
   { v: "warm", label: "Warm", cls: "bg-amber-50 text-amber-700 border-amber-200" },
   { v: "cold", label: "Cold", cls: "bg-sky-50 text-sky-700 border-sky-200" },
   { v: "raw", label: "Raw data", cls: "bg-slate-50 text-slate-600 border-slate-200" },
+  { v: "resale", label: "Re-sale", cls: "bg-violet-50 text-violet-700 border-violet-200" },
+  { v: "rent", label: "Rent", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
 ];
 const FU_STATUSES = [
   { v: "interested", label: "Interested" },
@@ -38,7 +40,7 @@ const FU_STATUSES = [
 const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" } : null);
 
 export default function Leads() {
-  const { isManager, canViewAll } = useAuth();
+  const { isManager, canViewAll, isAdmin } = useAuth();
   const [params, setParams] = useSearchParams();
   const [leads, setLeads] = useState(null);
   const [agents, setAgents] = useState([]);
@@ -64,6 +66,9 @@ export default function Leads() {
   const [importRemark, setImportRemark] = useState("");
   const [importResult, setImportResult] = useState(null);
   const [skipDupes, setSkipDupes] = useState(true);
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupData, setDupData] = useState(null);
+  const [dupBusy, setDupBusy] = useState(false);
 
   const load = useCallback(async () => {
     const q = {};
@@ -169,6 +174,47 @@ export default function Leads() {
     }
   };
 
+  const bulkDelete = async () => {
+    if (selected.length === 0) return;
+    if (!window.confirm(`Delete ${selected.length} selected lead(s)? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post("/leads/bulk-delete", { lead_ids: selected });
+      toast.success(`${data.deleted} lead(s) deleted`);
+      setSelected([]);
+      load();
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  const openDuplicates = async () => {
+    setDupOpen(true);
+    setDupData(null);
+    try {
+      const { data } = await api.get("/leads/duplicates");
+      setDupData(data);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+      setDupData({ groups: [], total_duplicate_leads: 0 });
+    }
+  };
+
+  const clearDuplicates = async (keep) => {
+    if (!window.confirm(
+      `Clear duplicates and keep the ${keep === "newest" ? "newest" : "oldest"} lead in each group? Extra copies will be permanently deleted.`
+    )) return;
+    setDupBusy(true);
+    try {
+      const { data } = await api.post("/leads/duplicates/clear", { keep });
+      toast.success(`${data.removed} duplicate lead(s) removed`);
+      setDupOpen(false);
+      load();
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setDupBusy(false); }
+  };
+
   const setLeadTag = async (l, newTag) => {
     try {
       await api.put(`/leads/${l.id}`, { tag: newTag });
@@ -205,6 +251,11 @@ export default function Leads() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {isAdmin && (
+            <Button variant="outline" onClick={openDuplicates} data-testid="find-duplicates-btn" className="gap-2">
+              <Copy className="h-4 w-4" /> Duplicates
+            </Button>
+          )}
           {isManager && (
             <Dialog open={importOpen} onOpenChange={(v) => { if (!v) resetImport(); else setImportOpen(true); }}>
               <DialogTrigger asChild>
@@ -431,6 +482,12 @@ export default function Leads() {
             data-testid="bulk-assign-confirm" className="bg-brand hover:bg-brand-dark">
             Assign leads
           </Button>
+          {isAdmin && (
+            <Button size="sm" variant="destructive" onClick={bulkDelete} disabled={busy}
+              data-testid="bulk-delete-confirm" className="gap-1.5">
+              <Trash2 className="h-3.5 w-3.5" /> Delete selected
+            </Button>
+          )}
         </div>
       )}
 
@@ -454,7 +511,7 @@ export default function Leads() {
                 <th className="px-3 py-3 text-center">WA</th>
                 <th className="px-3 py-3 text-right">Budget</th>
                 <th className="px-3 py-3 text-right">Talk</th>
-                {isManager && <th className="w-12 px-3 py-3" />}
+                {isAdmin && <th className="w-12 px-3 py-3" />}
               </tr>
             </thead>
             <tbody>
@@ -530,7 +587,7 @@ export default function Leads() {
                     </td>
                     <td className="px-3 py-2.5 text-right text-slate-600">{fmtMoney(l.budget)}</td>
                     <td className="px-3 py-2.5 text-right font-medium text-slate-800">{fmtDuration(l.total_talk_time)}</td>
-                    {isManager && (
+                    {isAdmin && (
                       <td className="px-3 py-2.5">
                         <button onClick={() => removeLead(l.id)} data-testid={`delete-lead-${l.id}`}
                           className="text-slate-300 hover:text-rose-500">
@@ -545,6 +602,53 @@ export default function Leads() {
           </table>
         </div>
       </div>
+
+      {isAdmin && (
+        <Dialog open={dupOpen} onOpenChange={setDupOpen}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2"><Copy className="h-4 w-4" /> Duplicate leads</DialogTitle>
+            </DialogHeader>
+            {dupData === null ? (
+              <div className="grid h-32 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>
+            ) : dupData.groups.length === 0 ? (
+              <p className="py-6 text-center text-sm text-slate-400">No duplicate phone numbers found. Your data is clean 🎉</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    {dupData.groups.length} phone number(s) have duplicate leads · {dupData.total_duplicate_leads} extra lead(s) can be removed.
+                    Only admin/superadmin can clear duplicates — this permanently deletes the extra copies.
+                  </span>
+                </div>
+                <div className="max-h-64 space-y-2 overflow-y-auto">
+                  {dupData.groups.map((g) => (
+                    <div key={g.phone} className="rounded-lg border border-slate-200 p-2.5 text-xs">
+                      <div className="font-semibold text-slate-700">{g.phone} · {g.count} leads</div>
+                      <div className="mt-1 space-y-0.5 text-slate-500">
+                        {g.leads.map((ld) => (
+                          <div key={ld.id}>{ld.name} — {ld.assigned_to_name || "unassigned"} · {fmtDate(ld.created_at)}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" disabled={dupBusy} onClick={() => clearDuplicates("oldest")}
+                    data-testid="clear-duplicates-keep-oldest" className="gap-1.5 bg-brand hover:bg-brand-dark">
+                    {dupBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Clear duplicates (keep oldest)
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={dupBusy} onClick={() => clearDuplicates("newest")}
+                    data-testid="clear-duplicates-keep-newest">
+                    Clear duplicates (keep newest)
+                  </Button>
+                </div>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
