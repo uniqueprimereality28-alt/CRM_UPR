@@ -50,7 +50,6 @@ export default function Leads() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [tag, setTag] = useState("all");
-  const [dealType, setDealTypeFilter] = useState("all");
   const [fu, setFu] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -77,7 +76,6 @@ export default function Leads() {
     const q = {};
     if (status !== "all") q.status = status;
     if (tag !== "all") q.tag = tag;
-    if (dealType !== "all") q.deal_type = dealType;
     if (fu !== "all") q.follow_up_status = fu;
     if (search) q.search = search;
     if (dateFrom) q.follow_up_from = new Date(dateFrom).toISOString();
@@ -90,7 +88,7 @@ export default function Leads() {
     const { data } = await api.get("/leads", { params: q });
     setLeads(data);
     setSelected([]);
-  }, [status, tag, dealType, fu, dateFrom, dateTo, search, agentFilter, isManager]);
+  }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager]);
 
   useEffect(() => {
     const t = setTimeout(load, search ? 350 : 0);
@@ -490,13 +488,6 @@ export default function Leads() {
             {TAGS.map((t) => <SelectItem key={t.v} value={t.v}>{t.label}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={dealType} onValueChange={setDealTypeFilter}>
-          <SelectTrigger className="w-36" data-testid="filter-listing-type"><SelectValue placeholder="Listing type" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All properties</SelectItem>
-            {DEAL_TYPES.map((t) => <SelectItem key={t.v} value={t.v}>{t.label} properties</SelectItem>)}
-          </SelectContent>
-        </Select>
         <Select value={fu} onValueChange={setFu}>
           <SelectTrigger className="w-40" data-testid="filter-followup-status"><SelectValue placeholder="Follow-up" /></SelectTrigger>
           <SelectContent>
@@ -563,10 +554,7 @@ export default function Leads() {
                 <div className="text-base font-bold text-slate-900">{l.name || "(no name)"}</div>
                 <div className="mt-1 text-sm text-slate-500">{l.phone}</div>
               </Link>
-              <a href={`tel:${String(l.phone || "").replace(/\s/g, "")}`} aria-label={`Call ${l.name || l.phone}`} title="Call now"
-                className="rounded-lg bg-brand p-2.5 text-white"><PhoneCall className="h-5 w-5" /></a>
-              <a href={waLink(l.phone, l.name)} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${l.name || l.phone}`} title="Open WhatsApp"
-                className="rounded-lg bg-emerald-500 p-2.5 text-white"><MessageCircle className="h-5 w-5" /></a>
+              <Link to={`/leads/${l.id}`} aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg bg-brand p-2.5 text-white"><PhoneCall className="h-5 w-5" /></Link>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <Select value={l.tag || "none"} onValueChange={(v) => setLeadTag(l, v === "none" ? "" : v)}>
@@ -633,7 +621,7 @@ export default function Leads() {
                         <div className="font-medium text-slate-800 hover:text-brand">{l.name || "(no name)"}</div>
                         <div className="text-[11px] text-slate-400">{l.phone} · {l.source}</div>
                       </Link>
-                      <a href={`tel:${String(l.phone || "").replace(/\s/g, "")}`} title="Call now" aria-label={`Call ${l.name || l.phone}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light"><PhoneCall className="h-4 w-4" /></a>
+                      <Link to={`/leads/${l.id}`} title="Open call screen" aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light"><PhoneCall className="h-4 w-4" /></Link>
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
