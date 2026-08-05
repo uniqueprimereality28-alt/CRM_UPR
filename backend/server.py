@@ -27,6 +27,9 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 
+# --- NEW IMPORT for PDF report generation ---
+from reports_pdf import generate_daily_report_pdf
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crm")
 
@@ -1910,8 +1913,8 @@ def _fmt_dur(sec) -> str:
     return f"{sec}s"
 
 
-@api.get("/reports/daily")
-async def daily_report(admin: dict = Depends(require_admin), tz_offset: int = 0):
+# --- Reusable daily report builder (formerly the /reports/daily route) ---
+async def _build_daily_report(tz_offset: int = 0) -> dict:
     utc_now = datetime.now(timezone.utc)
     local_now = utc_now - timedelta(minutes=tz_offset)
     local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1985,6 +1988,44 @@ async def daily_report(admin: dict = Depends(require_admin), tz_offset: int = 0)
         "overdue_followups": overdue_fu,
         "whatsapp_text": "\n".join(lines),
     }
+
+
+# --- JSON daily report (keeps the original route) ---
+@api.get("/reports/daily")
+async def daily_report(admin: dict = Depends(require_admin), tz_offset: int = 0):
+    return await _build_daily_report(tz_offset)
+
+
+# --- PDF daily report (new route) ---
+@api.get("/reports/daily/pdf")
+async def daily_report_pdf(admin: dict = Depends(require_admin), tz_offset: int = 0):
+    data = await _build_daily_report(tz_offset)
+
+    # reports_pdf.py expects each agent's talk_time as a formatted string
+    # ("46m 10s") and follow-up counts as plain ints — the JSON route above
+    # returns raw seconds and full lists, so adapt the shape here.
+    pdf_report = {
+        "date": data["date"],
+        "generated_for": (datetime.now(timezone.utc) - timedelta(minutes=tz_offset)).strftime("%a, %d %b %Y"),
+        "yesterday": {
+            "new_leads": data["yesterday"]["new_leads"],
+            "per_agent": [
+                {"name": a["name"], "calls": a["calls"], "talk_time": _fmt_dur(a["talk_time"])}
+                for a in data["yesterday"]["per_agent"]
+            ] or [{"name": "No calls yet", "calls": 0, "talk_time": "0s"}],
+        },
+        "today_followups": len(data["today_followups"]),
+        "overdue_followups": len(data["overdue_followups"]),
+    }
+
+    pdf_bytes = generate_daily_report_pdf(pdf_report)
+    safe_date = pdf_report["date"].replace(" ", "-").replace(",", "")
+    filename = f"daily-report-{safe_date}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @api.get("/")
