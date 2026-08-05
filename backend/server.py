@@ -1110,14 +1110,16 @@ async def import_leads(
     inserted, skipped, dupes, missing = 0, 0, [], 0
     seen_in_file = set()
     for row in rows:
-        name = row.get("name") or row.get("full_name") or row.get("lead_name")
+        # Name is optional on import — a lead with just a phone number is still
+        # a valid lead. Phone number is the only required field.
+        name = row.get("name") or row.get("full_name") or row.get("lead_name") or ""
         phone = row.get("phone") or row.get("phone_number") or row.get("mobile") or row.get("contact")
-        if not name or not phone:
+        if not phone:
             missing += 1
             continue
         np = norm_phone(phone)
         if np and (np in existing_phones or np in seen_in_file):
-            dupes.append({"name": name, "phone": phone,
+            dupes.append({"name": name or "(no name)", "phone": phone,
                           "existing_name": existing_phones.get(np) or "duplicated in the same file"})
             if skip_dupes:
                 skipped += 1
@@ -1148,6 +1150,7 @@ async def import_leads(
         ).to_mongo()
         await db.leads.insert_one(doc)
         inserted += 1
+    # "missing" only counts rows with no phone number, since name is optional on import.
     return {"inserted": inserted, "skipped": skipped, "missing": missing,
             "duplicates": dupes[:100], "total_duplicates": len(dupes)}
 
