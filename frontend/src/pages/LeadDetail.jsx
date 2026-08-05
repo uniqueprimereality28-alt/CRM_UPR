@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft, Phone, PhoneOff, Loader2, Mail, MapPin, Wallet, Building2, Clock,
   MessageSquarePlus, CircleDot, UserCog, Mic, MicOff, PhoneForwarded,
-  AlarmClock, Check, MessageCircle,
+  AlarmClock, Check, MessageCircle, Flag,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -31,6 +31,12 @@ const ACTIVITY_ICON = {
   note: MessageSquarePlus,
   created: CircleDot,
 };
+
+const TEMPERATURES = ["hot", "warm", "cold"];
+const DEAL_TYPES = [
+  { value: "resale", label: "Resale", cls: "border-violet-200 bg-violet-50 text-violet-700" },
+  { value: "rent", label: "Rent", cls: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+];
 
 const pickMime = () => {
   if (typeof MediaRecorder === "undefined") return null;
@@ -190,6 +196,22 @@ export default function LeadDetail() {
     }
   };
 
+  const changeTemperature = async (tag) => {
+    try {
+      await api.put(`/leads/${id}`, { tag: tag === "none" ? null : tag });
+      toast.success("Lead temperature updated");
+      load();
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+  };
+
+  const toggleDealType = async (dealType) => {
+    try {
+      await api.put(`/leads/${id}`, { deal_type: lead.deal_type === dealType ? null : dealType });
+      toast.success(lead.deal_type === dealType ? "Listing flag removed" : "Listing flag updated");
+      load();
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+  };
+
   const reassign = async (agentId) => {
     try {
       await api.put(`/leads/${id}`, { assigned_to: agentId === "none" ? null : agentId });
@@ -255,6 +277,12 @@ export default function LeadDetail() {
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {DEAL_TYPES.map((type) => <Button key={type.value} size="sm" variant="outline" onClick={() => toggleDealType(type.value)}
+                    className={`h-7 gap-1 px-2 text-xs ${lead.deal_type === type.value ? type.cls : "text-slate-500"}`}>
+                    <Flag className="h-3 w-3" /> {type.label}
+                  </Button>)}
+                </div>
                 <h1 className="text-3xl font-bold text-slate-900" data-testid="lead-name">{lead.name || "(no name)"}</h1>
                 <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
                   <span className="flex items-center gap-1.5"><Phone className="h-3.5 w-3.5" />{lead.phone}</span>
@@ -387,6 +415,16 @@ export default function LeadDetail() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Lead temperature</Label>
+                <Select value={lead.tag || "none"} onValueChange={changeTemperature}>
+                  <SelectTrigger data-testid="change-temperature-select"><SelectValue placeholder="Select temperature" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No temperature</SelectItem>
+                    {TEMPERATURES.map((temperature) => <SelectItem key={temperature} value={temperature}>{temperature[0].toUpperCase() + temperature.slice(1)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
               {isAdmin && (
                 <div className="space-y-2">
                   <Label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Assigned sales person</Label>
@@ -447,6 +485,10 @@ export default function LeadDetail() {
               {lead.notes && (
                 <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600">{lead.notes}</div>
               )}
+              <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-700">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Remarks</div>
+                <div className="whitespace-pre-wrap break-words">{lead.remark || "No remarks added."}</div>
+              </div>
             </div>
           </div>
 
