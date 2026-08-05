@@ -5,21 +5,40 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle,
+  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle, Copy,
 } from "lucide-react";
-import { api, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
+import { toast } from "sonner";
+import { api, apiError, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { StatCard } from "../components/StatCard";
 import { DailyReportCard } from "../components/DailyReportCard";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 
 const PIE_COLORS = ["#1a3fbf", "#10b981", "#f59e0b", "#64748b", "#0ea5e9", "#8b5cf6", "#ef4444"];
 
 export default function AdminDashboard() {
+  const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
+  const [dupBusy, setDupBusy] = useState(false);
 
   useEffect(() => {
     api.get("/dashboard/admin").then((r) => setData(r.data)).catch(() => setData(false));
   }, []);
+
+  const removeDuplicates = async () => {
+    setDupBusy(true);
+    try {
+      const { data: res } = await api.post("/leads/duplicates/clear", { keep: "oldest" });
+      if (res.removed > 0) {
+        toast.success(`${res.removed} duplicate lead(s) removed`);
+      } else {
+        toast.success("No duplicates found — your data is clean");
+      }
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setDupBusy(false); }
+  };
 
   if (data === null)
     return <div className="grid h-64 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>;
@@ -37,13 +56,27 @@ export default function AdminDashboard() {
             Full visibility across leads, sales team performance and talk time.
           </p>
         </div>
-        <Link
-          to="/leads?unassigned=1"
-          data-testid="unassigned-shortcut"
-          className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-100"
-        >
-          <AlertCircle className="h-4 w-4" /> {k.unassigned} unassigned leads
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <Button
+              onClick={removeDuplicates}
+              disabled={dupBusy}
+              data-testid="remove-duplicates-btn"
+              variant="outline"
+              className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            >
+              {dupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+              Remove duplicates
+            </Button>
+          )}
+          <Link
+            to="/leads?unassigned=1"
+            data-testid="unassigned-shortcut"
+            className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-700 transition-colors hover:bg-amber-100"
+          >
+            <AlertCircle className="h-4 w-4" /> {k.unassigned} unassigned leads
+          </Link>
+        </div>
       </div>
 
       <DailyReportCard />
