@@ -717,6 +717,7 @@ async def list_leads(
     user: dict = Depends(get_current_user),
     status: Optional[str] = None,
     tag: Optional[str] = None,
+    deal_type: Optional[str] = None,
     follow_up_status: Optional[str] = None,
     assigned_to: Optional[str] = None,
     source: Optional[str] = None,
@@ -738,6 +739,8 @@ async def list_leads(
         query["status"] = status
     if tag:
         query["tag"] = tag
+    if deal_type in {"resale", "rent"}:
+        query["deal_type"] = deal_type
     if follow_up_status:
         query["follow_up_status"] = follow_up_status
     if source:
