@@ -1020,12 +1020,15 @@ async def import_leads(
         except ValueError:
             budget = None
         status = row.get("status", "new").lower()
+        # NOTE: header normalization lowercases and underscores the Excel/CSV
+        # header text, so a column titled "Remarks" (plural) becomes the key
+        # "remarks", not "remark". Check both so either spelling is picked up.
         doc = Lead(
             name=name, phone=phone, email=row.get("email") or None,
             source=row.get("source") or "Excel Import",
             status=status if status in LEAD_STATUSES else "new",
             tag=row.get("tag") or default_tag or None,
-            remark=row.get("remark") or default_remark or None,
+            remark=row.get("remark") or row.get("remarks") or default_remark or None,
             budget=budget,
             property_interest=row.get("property_interest") or row.get("property") or None,
             city=row.get("city") or None,
