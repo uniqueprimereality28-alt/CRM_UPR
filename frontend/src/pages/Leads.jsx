@@ -151,7 +151,7 @@ export default function Leads() {
       if (data.total_duplicates > 0) {
         toast.warning(`Imported ${data.inserted} · ${data.total_duplicates} duplicate phone(s) ${skipDupes ? "skipped" : "kept"}`);
       } else {
-        toast.success(`Imported ${data.inserted} leads (${data.missing || 0} missing name/phone)`);
+        toast.success(`Imported ${data.inserted} leads (${data.missing || 0} missing phone number)`);
       }
       load();
     } catch (err) {
@@ -284,7 +284,7 @@ export default function Leads() {
                 <div className="space-y-4">
                   <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
                     CSV headers supported: <b>name, phone, email, source, status, budget, property_interest, city, notes, tag, remark</b>.
-                    Name and phone are required. Default tag/remark below apply to every imported lead.
+                    Only <b>phone</b> is required — rows with no name are still imported. Default tag/remark below apply to every imported lead.
                   </p>
                   <Input type="file" accept=".csv" data-testid="csv-file-input"
                     onChange={(e) => { setFile(e.target.files?.[0] || null); setImportResult(null); }} />
@@ -324,7 +324,7 @@ export default function Leads() {
                     <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-xs" data-testid="import-result">
                       <div className="flex items-center justify-between font-semibold text-slate-700">
                         <span>Import summary</span>
-                        <span>{importResult.inserted} inserted · {importResult.skipped} skipped · {importResult.missing || 0} missing name/phone</span>
+                        <span>{importResult.inserted} inserted · {importResult.skipped} skipped · {importResult.missing || 0} missing phone number</span>
                       </div>
                       {importResult.total_duplicates > 0 && (
                         <div>
@@ -549,7 +549,7 @@ export default function Leads() {
                     )}
                     <td className="px-4 py-2.5">
                       <Link to={`/leads/${l.id}`} className="block" data-testid={`open-lead-${l.id}`}>
-                        <div className="font-medium text-slate-800 hover:text-brand">{l.name}</div>
+                        <div className="font-medium text-slate-800 hover:text-brand">{l.name || "(no name)"}</div>
                         <div className="text-[11px] text-slate-400">{l.phone} · {l.source}</div>
                       </Link>
                     </td>
@@ -670,7 +670,7 @@ export default function Leads() {
                         {g.leads.map((ld) => (
                           <div key={ld.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white/70 px-2 py-1.5">
                             <div className="text-slate-600">
-                              <span className="font-medium text-slate-800">{ld.name}</span>
+                              <span className="font-medium text-slate-800">{ld.name || "(no name)"}</span>
                               {" — "}{ld.assigned_to_name || "unassigned"} · {fmtDate(ld.created_at)}
                             </div>
                             <Button size="sm" variant="outline" disabled={dupBusy}
