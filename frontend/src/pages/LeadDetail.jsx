@@ -490,9 +490,12 @@ export default function LeadDetail() {
                 <SelectTrigger data-testid="call-outcome-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="connected">Connected</SelectItem>
-                  <SelectItem value="no_answer">No answer</SelectItem>
+                  <SelectItem value="interested">Interested</SelectItem>
+                  <SelectItem value="visit_scheduled">Visit scheduled</SelectItem>
                   <SelectItem value="callback">Callback requested</SelectItem>
                   <SelectItem value="not_interested">Not interested</SelectItem>
+                  <SelectItem value="converted">Converted</SelectItem>
+                  <SelectItem value="no_answer">No answer</SelectItem>
                 </SelectContent>
               </Select>
             </div>
