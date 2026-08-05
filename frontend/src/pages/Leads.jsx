@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
-  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, ShieldAlert,
+  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, ShieldAlert, Flag, PhoneCall,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -26,8 +26,10 @@ const TAGS = [
   { v: "warm", label: "Warm", cls: "bg-amber-50 text-amber-700 border-amber-200" },
   { v: "cold", label: "Cold", cls: "bg-sky-50 text-sky-700 border-sky-200" },
   { v: "raw", label: "Raw data", cls: "bg-slate-50 text-slate-600 border-slate-200" },
-  { v: "resale", label: "Re-sale", cls: "bg-violet-50 text-violet-700 border-violet-200" },
-  { v: "rent", label: "Rent", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+];
+const DEAL_TYPES = [
+  { v: "resale", label: "Resale", cls: "border-violet-200 bg-violet-50 text-violet-700" },
+  { v: "rent", label: "Rent", cls: "border-emerald-200 bg-emerald-50 text-emerald-700" },
 ];
 const FU_STATUSES = [
   { v: "interested", label: "Interested" },
@@ -57,7 +59,7 @@ export default function Leads() {
   const [assignTo, setAssignTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
-    name: "", phone: "", email: "", source: "Website", status: "new", tag: "",
+    name: "", phone: "", email: "", source: "Website", status: "new", tag: "", deal_type: "",
     budget: "", property_interest: "", city: "", notes: "", remark: "", assigned_to: "",
   });
   const [file, setFile] = useState(null);
@@ -111,11 +113,12 @@ export default function Leads() {
         assigned_to: form.assigned_to || null,
         email: form.email || null,
         tag: form.tag || null,
+        deal_type: form.deal_type || null,
       };
       await api.post("/leads", payload);
       toast.success("Lead created");
       setAddOpen(false);
-      setForm({ name: "", phone: "", email: "", source: "Website", status: "new", tag: "",
+      setForm({ name: "", phone: "", email: "", source: "Website", status: "new", tag: "", deal_type: "",
         budget: "", property_interest: "", city: "", notes: "", remark: "", assigned_to: "" });
       load();
     } catch (err) {
@@ -239,6 +242,22 @@ export default function Leads() {
       toast.error(apiError(err.response?.data?.detail));
     }
   };
+
+  const updateLead = async (l, updates, successMessage) => {
+    try {
+      await api.put(`/leads/${l.id}`, updates);
+      setLeads((prev) => prev.map((x) => (x.id === l.id ? { ...x, ...updates } : x)));
+      if (successMessage) toast.success(successMessage);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    }
+  };
+
+  const setDealType = (l, dealType) => updateLead(
+    l,
+    { deal_type: l.deal_type === dealType ? null : dealType },
+    l.deal_type === dealType ? "Listing flag removed" : `${dealType === "resale" ? "Resale" : "Rent"} flag set`
+  );
 
   const toggleBrochure = async (l) => {
     try {
@@ -398,6 +417,18 @@ export default function Leads() {
                         {TAGS.map((t) => <SelectItem key={t.v} value={t.v}>{t.label}</SelectItem>)}
                       </SelectContent>
                     </Select></div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label>Listing type</Label>
+                    <div className="flex gap-2">
+                      {DEAL_TYPES.map((type) => (
+                        <Button key={type.v} type="button" variant="outline"
+                          onClick={() => setForm({ ...form, deal_type: form.deal_type === type.v ? "" : type.v })}
+                          className={`gap-1.5 ${form.deal_type === type.v ? type.cls : ""}`}>
+                          <Flag className="h-3.5 w-3.5" /> {type.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="space-y-2"><Label>Property interest</Label>
                     <Input data-testid="lead-property-input" value={form.property_interest}
                       onChange={(e) => setForm({ ...form, property_interest: e.target.value })} placeholder="3BHK Apartment" /></div>
@@ -507,8 +538,44 @@ export default function Leads() {
         </div>
       )}
 
-      {/* Table */}
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      {/* Phone layout: information is stacked so remarks never get cut off. */}
+      <div className="space-y-3 md:hidden">
+        {leads === null && <div className="p-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></div>}
+        {leads?.length === 0 && <div className="rounded-xl border bg-white p-10 text-center text-sm text-slate-400">No leads match these filters.</div>}
+        {leads?.map((l) => {
+          const tm = tagMeta(l.tag);
+          return <article key={l.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`lead-card-${l.id}`}>
+            <div className="mb-3 flex gap-2">
+              {DEAL_TYPES.map((type) => <Button key={type.v} size="sm" variant="outline" onClick={() => setDealType(l, type.v)}
+                className={`h-7 gap-1 px-2 text-xs ${l.deal_type === type.v ? type.cls : "text-slate-500"}`}><Flag className="h-3 w-3" />{type.label}</Button>)}
+            </div>
+            <div className="flex items-start justify-between gap-3">
+              <Link to={`/leads/${l.id}`} className="min-w-0 flex-1" data-testid={`open-lead-${l.id}`}>
+                <div className="text-base font-bold text-slate-900">{l.name || "(no name)"}</div>
+                <div className="mt-1 text-sm text-slate-500">{l.phone}</div>
+              </Link>
+              <Link to={`/leads/${l.id}`} aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg bg-brand p-2.5 text-white"><PhoneCall className="h-5 w-5" /></Link>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Select value={l.tag || "none"} onValueChange={(v) => setLeadTag(l, v === "none" ? "" : v)}>
+                <SelectTrigger className={`h-9 text-xs font-semibold ${tm?.cls || ""}`}><SelectValue placeholder="Temperature" /></SelectTrigger>
+                <SelectContent><SelectItem value="none">No temperature</SelectItem>{TAGS.map((t) => <SelectItem key={t.v} value={t.v}>{t.label}</SelectItem>)}</SelectContent>
+              </Select>
+              <Select value={l.status} onValueChange={(value) => updateLead(l, { status: value }, "Stage updated")}>
+                <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{STATUS_META[s].label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+              <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Remarks</div>
+              <div className="whitespace-pre-wrap break-words">{l.remark || "No remarks added."}</div>
+            </div>
+          </article>;
+        })}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-white">
@@ -548,10 +615,14 @@ export default function Leads() {
                       </td>
                     )}
                     <td className="px-4 py-2.5">
-                      <Link to={`/leads/${l.id}`} className="block" data-testid={`open-lead-${l.id}`}>
+                      <div className="flex items-start gap-2">
+                      <Link to={`/leads/${l.id}`} className="block min-w-0 flex-1" data-testid={`open-lead-${l.id}`}>
+                        {l.deal_type && <div className={`mb-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${DEAL_TYPES.find((t) => t.v === l.deal_type)?.cls}`}><Flag className="h-3 w-3" />{DEAL_TYPES.find((t) => t.v === l.deal_type)?.label}</div>}
                         <div className="font-medium text-slate-800 hover:text-brand">{l.name || "(no name)"}</div>
                         <div className="text-[11px] text-slate-400">{l.phone} · {l.source}</div>
                       </Link>
+                      <Link to={`/leads/${l.id}`} title="Open call screen" aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light"><PhoneCall className="h-4 w-4" /></Link>
+                      </div>
                     </td>
                     <td className="px-3 py-2.5">
                       <Select value={l.tag || "none"} onValueChange={(v) => setLeadTag(l, v === "none" ? "" : v)}>
@@ -565,7 +636,10 @@ export default function Leads() {
                       </Select>
                     </td>
                     <td className="px-3 py-2.5">
-                      <Badge variant="outline" className={STATUS_META[l.status]?.cls}>{STATUS_META[l.status]?.label}</Badge>
+                      <Select value={l.status} onValueChange={(value) => updateLead(l, { status: value }, "Stage updated")}>
+                        <SelectTrigger className={`h-7 w-28 border-none px-2 text-[11px] font-semibold ${STATUS_META[l.status]?.cls}`}><SelectValue /></SelectTrigger>
+                        <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{STATUS_META[s].label}</SelectItem>)}</SelectContent>
+                      </Select>
                     </td>
                     <td className="px-3 py-2.5 text-xs">
                       {l.follow_up_at ? (
@@ -587,7 +661,7 @@ export default function Leads() {
                         <span className="text-slate-600">{l.assigned_to_name}</span>
                       ) : <span className="text-xs font-medium text-amber-600">Unassigned</span>}
                     </td>
-                    <td className="px-3 py-2.5 max-w-[180px] truncate text-slate-600" title={l.remark || ""}>
+                    <td className="max-w-xs whitespace-pre-wrap break-words px-3 py-2.5 text-slate-600">
                       {l.remark || <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-3 py-2.5">
