@@ -289,15 +289,22 @@ class TestCsvDuplicates:
         assert d["skipped"] == 0
         assert d["total_duplicates"] >= 1
 
-    def test_missing_name_or_phone_counted(self, tokens):
-        csv_text = "name,phone\n,9800012345\nOnlyName,\n"
+    def test_missing_phone_counted_name_optional(self, tokens):
+        # Name is optional on import — a row with a phone but no name should
+        # still be inserted. Only a missing phone number counts as "missing".
+        phone = self._unique_phone()
+        csv_text = f"name,phone\n,{phone}\nOnlyName,\n"
         files = {"file": ("m.csv", csv_text, "text/csv")}
         r = requests.post(f"{API}/leads/import", headers=H(tokens, "admin"), files=files)
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["missing"] == 2
+        assert d["missing"] == 1  # only the "OnlyName," row (no phone)
         assert d["total_duplicates"] == 0
-        assert d["inserted"] == 0
+        assert d["inserted"] == 1  # the no-name/phone-only row was imported
+        r2 = requests.get(f"{API}/leads?search={phone}", headers=H(tokens, "super"))
+        assert r2.status_code == 200
+        leads = r2.json()
+        assert any(l["phone"] == phone and (l["name"] == "" or l["name"] is None) for l in leads), leads
 
     def test_basic_import_still_works(self, tokens):
         csv_text = f"name,phone\nTEST Reg1,{self._unique_phone()}\nTEST Reg2,{self._unique_phone()}\n"
