@@ -40,7 +40,7 @@ db = client[os.environ['DB_NAME']]
 JWT_ALGORITHM = "HS256"
 LEAD_STATUSES = ["new", "contacted", "qualified", "site_visit", "negotiation", "won", "lost"]
 FOLLOWUP_STATUSES = ["interested", "visit_scheduled", "not_interested", "callback", "converted"]
-LEAD_TAGS = ["hot", "raw", "warm", "cold"]  # base tags; custom strings allowed too
+LEAD_TAGS = ["hot", "raw", "warm", "cold", "resale", "rent"]  # base tags; custom strings allowed too
 
 # Roles hierarchy
 ROLE_SUPER = "superadmin"
@@ -245,6 +245,14 @@ class LeadUpdate(BaseModel):
 class AssignRequest(BaseModel):
     lead_ids: List[str]
     agent_id: str
+
+
+class BulkDeleteRequest(BaseModel):
+    lead_ids: List[str]
+
+
+class ClearDuplicatesRequest(BaseModel):
+    keep: str = "oldest"  # "oldest" | "newest" — which lead in each duplicate phone group to retain
 
 
 class ActivityCreate(BaseModel):
@@ -864,6 +872,74 @@ async def assign_leads(payload: AssignRequest, user: dict = Depends(require_mana
     return {"ok": True, "assigned": len(payload.lead_ids)}
 
 
+@api.post("/leads/bulk-delete")
+async def bulk_delete_leads(payload: BulkDeleteRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — delete many leads (and their activities/calls) in one go."""
+    if not payload.lead_ids:
+        raise HTTPException(status_code=400, detail="No leads selected")
+    try:
+        ids = [ObjectId(i) for i in payload.lead_ids]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid lead id in selection")
+    result = await db.leads.delete_many({"_id": {"$in": ids}})
+    await db.activities.delete_many({"lead_id": {"$in": payload.lead_ids}})
+    await db.calls.delete_many({"lead_id": {"$in": payload.lead_ids}})
+    return {"ok": True, "deleted": result.deleted_count}
+
+
+@api.get("/leads/duplicates")
+async def find_duplicate_leads(admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — group leads by phone number and surface groups with more than one lead."""
+    pipeline = [
+        {"$match": {"phone": {"$nin": [None, ""]}}},
+        {"$group": {
+            "_id": "$phone",
+            "count": {"$sum": 1},
+            "leads": {"$push": {
+                "id": {"$toString": "$_id"},
+                "name": "$name",
+                "status": "$status",
+                "assigned_to_name": "$assigned_to_name",
+                "created_at": "$created_at",
+            }},
+        }},
+        {"$match": {"count": {"$gt": 1}}},
+        {"$sort": {"count": -1}},
+    ]
+    groups = await db.leads.aggregate(pipeline).to_list(1000)
+    for g in groups:
+        g["leads"].sort(key=lambda x: x.get("created_at") or "")
+        g["phone"] = g.pop("_id")
+    return {"groups": groups, "total_duplicate_leads": sum(g["count"] - 1 for g in groups)}
+
+
+@api.post("/leads/duplicates/clear")
+async def clear_duplicate_leads(payload: ClearDuplicatesRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — for every phone number with duplicates, keep one lead and delete the rest."""
+    pipeline = [
+        {"$match": {"phone": {"$nin": [None, ""]}}},
+        {"$group": {
+            "_id": "$phone",
+            "count": {"$sum": 1},
+            "leads": {"$push": {"id": {"$toString": "$_id"}, "created_at": "$created_at"}},
+        }},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    groups = await db.leads.aggregate(pipeline).to_list(5000)
+    to_delete: List[str] = []
+    for g in groups:
+        rows = sorted(g["leads"], key=lambda x: x.get("created_at") or "")
+        if payload.keep == "newest":
+            rows = rows[::-1]
+        to_delete.extend(r["id"] for r in rows[1:])  # keep rows[0], drop the rest
+    if to_delete:
+        ids = [ObjectId(i) for i in to_delete]
+        await db.leads.delete_many({"_id": {"$in": ids}})
+        await db.activities.delete_many({"lead_id": {"$in": to_delete}})
+        await db.calls.delete_many({"lead_id": {"$in": to_delete}})
+    return {"ok": True, "removed": len(to_delete), "groups_cleaned": len(groups)}
+
+
 @api.get("/leads/export")
 async def export_leads(
     format: str = "xlsx",
@@ -1093,10 +1169,13 @@ async def end_call(call_id: str, payload: CallEnd, user: dict = Depends(get_curr
         {"_id": ObjectId(call_id)},
         {"$set": {"status": "completed", "duration": duration, "outcome": payload.outcome,
                   "notes": payload.notes, "ended_at": now_iso()}})
+    lead_updates = {"last_contacted_at": now_iso(), "updated_at": now_iso()}
+    if payload.outcome in FOLLOWUP_STATUSES:
+        lead_updates["follow_up_status"] = payload.outcome
     await db.leads.update_one(
         {"_id": ObjectId(call["lead_id"])},
         {"$inc": {"total_talk_time": duration, "call_count": 1},
-         "$set": {"last_contacted_at": now_iso(), "updated_at": now_iso()}})
+         "$set": lead_updates})
     mins, secs = duration // 60, duration % 60
     await _log_activity(call["lead_id"], user, "call_logged",
                         f"Call {payload.outcome} · {mins}m {secs}s" + (f" · {payload.notes}" if payload.notes else ""),
