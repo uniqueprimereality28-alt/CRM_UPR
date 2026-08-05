@@ -1,12 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { CalendarDays, MessageCircle, PhoneCall, Timer, AlarmClock, UserPlus, FileText } from "lucide-react";
 import { api, fmtDuration } from "../lib/api";
 
 export const reportWaHref = (text) => `https://wa.me/?text=${encodeURIComponent(text)}`;
 
-// The backend route lives at /reports/daily/pdf on the same API base
-// api.js already uses — this builds the public URL for both the download
-// button and the link embedded in the WhatsApp text.
+// Still used to build the plain-text link we drop into the WhatsApp message
+// (wa.me can only pre-fill text, so this URL is just shown as a reference).
 const dailyReportPdfUrl = () => {
   const base = api.defaults.baseURL?.replace(/\/$/, "") || "";
   return `${base}/reports/daily/pdf?tz_offset=${new Date().getTimezoneOffset()}`;
@@ -14,16 +13,39 @@ const dailyReportPdfUrl = () => {
 
 export const DailyReportCard = () => {
   const [report, setReport] = useState(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+
   useEffect(() => {
     api.get("/reports/daily", { params: { tz_offset: new Date().getTimezoneOffset() } })
       .then((r) => setReport(r.data)).catch(() => setReport(false));
   }, []);
+
+  // The PDF button now goes through the same authenticated axios instance
+  // as the rest of the app (Bearer token from localStorage), instead of a
+  // plain <a href> link — a raw link navigation never sends the
+  // Authorization header, and cross-domain cookies aren't reliable enough
+  // to depend on alone.
+  const handleDownloadPdf = useCallback(async () => {
+    setPdfLoading(true);
+    try {
+      const res = await api.get("/reports/daily/pdf", {
+        params: { tz_offset: new Date().getTimezoneOffset() },
+        responseType: "blob",
+      });
+      const blobUrl = URL.createObjectURL(res.data);
+      window.open(blobUrl, "_blank", "noreferrer");
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (e) {
+      alert("Couldn't open the PDF report. Please make sure you're logged in and try again.");
+    } finally {
+      setPdfLoading(false);
+    }
+  }, []);
+
   if (!report) return null;
   const y = report.yesterday;
   const pdfUrl = dailyReportPdfUrl();
 
-  // WhatsApp text now includes a link to the styled PDF report, since
-  // wa.me links can only pre-fill text — they can't attach a file directly.
   const whatsappText = `${report.whatsapp_text}\n\n📄 Full report (PDF): ${pdfUrl}`;
 
   return (
@@ -35,16 +57,16 @@ export const DailyReportCard = () => {
           <div className="text-[11px] text-slate-500">Auto-prepared every morning at 9 AM</div>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <a
-            href={pdfUrl}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={handleDownloadPdf}
+            disabled={pdfLoading}
             data-testid="daily-report-pdf-btn"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-60"
           >
-            <FileText className="h-4 w-4" /> PDF
-          </a>
-          <a
+            <FileText className="h-4 w-4" /> {pdfLoading ? "Opening…" : "PDF"}
+          </button>
+          
             href={reportWaHref(whatsappText)}
             target="_blank"
             rel="noreferrer"
