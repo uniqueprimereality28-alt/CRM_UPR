@@ -137,7 +137,7 @@ export default function Leads() {
   };
 
   const doImport = async () => {
-    if (!file) return;
+    if (!file || busy) return; // guard against double-clicking the upload button
     setBusy(true);
     const fd = new FormData();
     fd.append("file", file);
@@ -175,7 +175,7 @@ export default function Leads() {
   };
 
   const bulkDelete = async () => {
-    if (selected.length === 0) return;
+    if (selected.length === 0 || busy) return;
     if (!window.confirm(`Delete ${selected.length} selected lead(s)? This cannot be undone.`)) return;
     setBusy(true);
     try {
@@ -201,6 +201,7 @@ export default function Leads() {
   };
 
   const clearDuplicates = async (keep) => {
+    if (dupBusy) return;
     if (!window.confirm(
       `Clear duplicates and keep the ${keep === "newest" ? "newest" : "oldest"} lead in each group? Extra copies will be permanently deleted.`
     )) return;
