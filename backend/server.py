@@ -187,6 +187,8 @@ class Lead(BaseDocument):
     source: str = "Website"
     status: str = "new"
     tag: Optional[str] = None
+    # Kept separate from tag so a lead can be both "Hot" and "Rent".
+    deal_type: Optional[str] = None  # resale | rent
     follow_up_status: Optional[str] = None
     budget: Optional[float] = None
     property_interest: Optional[str] = None
@@ -214,6 +216,7 @@ class LeadCreate(BaseModel):
     source: str = "Website"
     status: str = "new"
     tag: Optional[str] = None
+    deal_type: Optional[str] = None
     follow_up_status: Optional[str] = None
     budget: Optional[float] = None
     property_interest: Optional[str] = None
@@ -230,6 +233,7 @@ class LeadUpdate(BaseModel):
     source: Optional[str] = None
     status: Optional[str] = None
     tag: Optional[str] = None
+    deal_type: Optional[str] = None
     follow_up_status: Optional[str] = None
     budget: Optional[float] = None
     property_interest: Optional[str] = None
@@ -762,6 +766,8 @@ async def create_lead(payload: LeadCreate, user: dict = Depends(get_current_user
     data = payload.model_dump()
     if data.get("status") not in LEAD_STATUSES:
         data["status"] = "new"
+    if data.get("deal_type") not in {None, "resale", "rent"}:
+        raise HTTPException(status_code=400, detail="Invalid listing type")
     assigned_to = data.get("assigned_to")
     if not assigned_to and user["role"] in {ROLE_SALES, ROLE_TL}:
         assigned_to = str(user["_id"])
@@ -817,6 +823,8 @@ async def update_lead(lead_id: str, payload: LeadUpdate, user: dict = Depends(ge
     updates = payload.model_dump(exclude_unset=True)
     if "status" in updates and updates["status"] not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
+    if "deal_type" in updates and updates["deal_type"] not in {None, "resale", "rent"}:
+        raise HTTPException(status_code=400, detail="Invalid listing type")
     if "assigned_to" in updates:
         if not is_manager(user):
             updates.pop("assigned_to")
@@ -839,6 +847,8 @@ async def update_lead(lead_id: str, payload: LeadUpdate, user: dict = Depends(ge
                             f"Lead assigned to {updates['assigned_to_name']}")
     if "tag" in updates:
         await _log_activity(lead_id, user, "tag", f"Tag set to {updates['tag']}")
+    if "deal_type" in updates:
+        await _log_activity(lead_id, user, "tag", f"Listing type set to {updates['deal_type'] or 'none'}")
     if "follow_up_status" in updates:
         await _log_activity(lead_id, user, "followup",
                             f"Follow-up status: {updates['follow_up_status']}")
