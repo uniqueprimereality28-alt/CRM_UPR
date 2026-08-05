@@ -255,6 +255,11 @@ class ClearDuplicatesRequest(BaseModel):
     keep: str = "oldest"  # "oldest" | "newest" — which lead in each duplicate phone group to retain
 
 
+class ResolveDuplicateRequest(BaseModel):
+    phone: str
+    keep_lead_id: str
+
+
 class ActivityCreate(BaseModel):
     type: str = "note"
     message: str
@@ -889,7 +894,9 @@ async def bulk_delete_leads(payload: BulkDeleteRequest, admin: dict = Depends(re
 
 @api.get("/leads/duplicates")
 async def find_duplicate_leads(admin: dict = Depends(require_admin)):
-    """Admin/superadmin only — group leads by phone number and surface groups with more than one lead."""
+    """Admin/superadmin only — group leads by phone number and surface groups with more than one lead.
+    Flags groups where the duplicate copies are assigned to more than one agent, since that means
+    two different people may be calling the same buyer."""
     pipeline = [
         {"$match": {"phone": {"$nin": [None, ""]}}},
         {"$group": {
@@ -899,6 +906,7 @@ async def find_duplicate_leads(admin: dict = Depends(require_admin)):
                 "id": {"$toString": "$_id"},
                 "name": "$name",
                 "status": "$status",
+                "assigned_to": "$assigned_to",
                 "assigned_to_name": "$assigned_to_name",
                 "created_at": "$created_at",
             }},
@@ -910,7 +918,33 @@ async def find_duplicate_leads(admin: dict = Depends(require_admin)):
     for g in groups:
         g["leads"].sort(key=lambda x: x.get("created_at") or "")
         g["phone"] = g.pop("_id")
-    return {"groups": groups, "total_duplicate_leads": sum(g["count"] - 1 for g in groups)}
+        distinct_agents = {
+            (ld.get("assigned_to"), ld.get("assigned_to_name"))
+            for ld in g["leads"] if ld.get("assigned_to")
+        }
+        g["agent_names"] = sorted({name for (_id, name) in distinct_agents if name})
+        g["multi_assigned"] = len(distinct_agents) > 1
+    groups.sort(key=lambda g: (not g["multi_assigned"], -g["count"]))
+    return {
+        "groups": groups,
+        "total_duplicate_leads": sum(g["count"] - 1 for g in groups),
+        "multi_assigned_groups": sum(1 for g in groups if g["multi_assigned"]),
+    }
+
+
+@api.post("/leads/duplicates/resolve")
+async def resolve_duplicate_group(payload: ResolveDuplicateRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — for one specific phone number, keep the chosen lead and delete every
+    other lead sharing that phone number."""
+    others = await db.leads.find(
+        {"phone": payload.phone, "_id": {"$ne": ObjectId(payload.keep_lead_id)}}
+    ).to_list(1000)
+    ids_to_delete = [str(o["_id"]) for o in others]
+    if ids_to_delete:
+        await db.leads.delete_many({"_id": {"$in": [ObjectId(i) for i in ids_to_delete]}})
+        await db.activities.delete_many({"lead_id": {"$in": ids_to_delete}})
+        await db.calls.delete_many({"lead_id": {"$in": ids_to_delete}})
+    return {"ok": True, "removed": len(ids_to_delete)}
 
 
 @api.post("/leads/duplicates/clear")
