@@ -206,6 +206,7 @@ class Lead(BaseDocument):
     remark: Optional[str] = None  # custom per-lead tag/remark
     assigned_to: Optional[str] = None
     assigned_to_name: Optional[str] = None
+    assigned_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     last_contacted_at: Optional[str] = None
@@ -706,7 +707,7 @@ async def delete_user(user_id: str, actor: dict = Depends(require_admin)):
         raise HTTPException(status_code=403, detail="Only administrators can delete administrator accounts")
     await db.users.delete_one({"_id": ObjectId(user_id)})
     await db.leads.update_many({"assigned_to": user_id},
-                               {"$set": {"assigned_to": None, "assigned_to_name": None}})
+                               {"$set": {"assigned_to": None, "assigned_to_name": None, "assigned_at": None}})
     return {"ok": True}
 
 
@@ -801,11 +802,13 @@ async def create_lead(payload: LeadCreate, user: dict = Depends(get_current_user
     if not assigned_to and user["role"] in {ROLE_SALES, ROLE_TL}:
         assigned_to = str(user["_id"])
     assigned_name = None
+    assigned_at = None
     if assigned_to:
         agent = await db.users.find_one({"_id": ObjectId(assigned_to)})
         assigned_name = agent.get("name") if agent else None
+        assigned_at = now_iso()
     lead = Lead(**{**data, "assigned_to": assigned_to, "assigned_to_name": assigned_name,
-                   "created_at": now_iso(), "updated_at": now_iso()})
+                   "assigned_at": assigned_at, "created_at": now_iso(), "updated_at": now_iso()})
     doc = lead.to_mongo()
     res = await db.leads.insert_one(doc)
     doc["_id"] = res.inserted_id
@@ -860,8 +863,11 @@ async def update_lead(lead_id: str, payload: LeadUpdate, user: dict = Depends(ge
         elif updates["assigned_to"]:
             agent = await db.users.find_one({"_id": ObjectId(updates["assigned_to"])})
             updates["assigned_to_name"] = agent.get("name") if agent else None
+            if updates["assigned_to"] != doc.get("assigned_to"):
+                updates["assigned_at"] = now_iso()
         else:
             updates["assigned_to_name"] = None
+            updates["assigned_at"] = None
     if "brochure_sent" in updates:
         updates["brochure_sent_at"] = now_iso() if updates["brochure_sent"] else None
     if "follow_up_at" in updates:
@@ -910,7 +916,7 @@ async def assign_leads(payload: AssignRequest, user: dict = Depends(require_mana
     await db.leads.update_many(
         {"_id": {"$in": ids}},
         {"$set": {"assigned_to": payload.agent_id, "assigned_to_name": agent["name"],
-                  "updated_at": now_iso()}})
+                  "assigned_at": now_iso(), "updated_at": now_iso()}})
     for lead_id in payload.lead_ids:
         await _log_activity(lead_id, user, "assignment", f"Lead assigned to {agent['name']}")
     return {"ok": True, "assigned": len(payload.lead_ids)}
@@ -1185,6 +1191,7 @@ async def import_leads(
             city=row.get("city") or None,
             notes=row.get("notes") or None,
             assigned_to=assigned_to, assigned_to_name=agent_name,
+            assigned_at=now_iso() if assigned_to else None,
             created_at=now_iso(), updated_at=now_iso(),
         ).to_mongo()
         await db.leads.insert_one(doc)
@@ -2015,6 +2022,61 @@ async def create_alert(payload: AlertCreate, user: dict = Depends(get_current_us
     res = await db.alerts.insert_one(doc)
     doc["_id"] = str(res.inserted_id)
     return doc
+
+
+# ---------------- Notification bar (leads assigned + alerts + follow-ups) ----------------
+@api.get("/notifications")
+async def get_notifications(user: dict = Depends(get_current_user)):
+    uid = str(user["_id"])
+    role = user.get("role")
+
+    # 1) Leads assigned to this profile — total count + a recent list, each
+    # carrying the date/time it was assigned.
+    leads_assigned_count = await db.leads.count_documents({"assigned_to": uid})
+    recent_leads = await db.leads.find({"assigned_to": uid}).sort(
+        [("assigned_at", -1), ("updated_at", -1)]
+    ).to_list(30)
+    leads_assigned = [{
+        "id": str(d["_id"]),
+        "name": d.get("name"),
+        "phone": d.get("phone"),
+        "assigned_at": d.get("assigned_at") or d.get("updated_at"),
+    } for d in recent_leads]
+
+    # 2) Alerts broadcast by admins/team leads/others — same visibility rule
+    # used by GET /alerts.
+    now = now_iso()
+    alert_docs = await db.alerts.find(
+        {"$or": [{"target": "all"}, {"target": role}, {"target": uid}],
+         "$and": [{"$or": [{"expires_at": None}, {"expires_at": {"$gt": now}}]}]}
+    ).sort("created_at", -1).to_list(30)
+    for d in alert_docs:
+        d["_id"] = str(d["_id"])
+
+    # 3) Follow-ups due now or scheduled for later — same visibility rule
+    # used across the Leads/Follow-ups pages.
+    base_q = _lead_visibility_query(user)
+    fu_query = await _apply_visibility(base_q, user)
+    fu_query["follow_up_at"] = {"$ne": None}
+    fu_query["reminder_acked"] = {"$ne": True}
+    fu_docs = await db.leads.find(fu_query).sort("follow_up_at", 1).to_list(30)
+    followups = [{
+        "id": str(d["_id"]),
+        "name": d.get("name"),
+        "phone": d.get("phone"),
+        "follow_up_at": d.get("follow_up_at"),
+        "follow_up_note": d.get("follow_up_note"),
+    } for d in fu_docs]
+
+    total = len(leads_assigned) + len(alert_docs) + len(followups)
+
+    return {
+        "leads_assigned_count": leads_assigned_count,
+        "leads_assigned": leads_assigned,
+        "alerts": alert_docs,
+        "followups": followups,
+        "total": total,
+    }
 
 
 # ---------------- Dashboards ----------------
