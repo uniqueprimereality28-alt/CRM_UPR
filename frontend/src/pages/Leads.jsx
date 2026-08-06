@@ -246,6 +246,16 @@ export default function Leads() {
     }
   };
 
+  const setFollowUpStatus = async (l, newStatus) => {
+    try {
+      await api.put(`/leads/${l.id}`, { follow_up_status: newStatus || null });
+      setLeads((prev) => prev.map((x) => (x.id === l.id ? { ...x, follow_up_status: newStatus || null } : x)));
+      toast.success("Follow-up status updated");
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    }
+  };
+
   const updateLead = async (l, updates, successMessage) => {
     try {
       await api.put(`/leads/${l.id}`, updates);
@@ -578,6 +588,22 @@ export default function Leads() {
                 <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{STATUS_META[s].label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
+            <div className="mt-2">
+              <Select value={l.follow_up_status || "none"} onValueChange={(v) => setFollowUpStatus(l, v === "none" ? "" : v)}>
+                <SelectTrigger data-testid={`followup-select-${l.id}`} className="h-9 text-xs">
+                  <SelectValue placeholder="Follow-up status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— no follow-up —</SelectItem>
+                  {FU_STATUSES.map((s) => <SelectItem key={s.v} value={s.v}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {l.follow_up_at && (
+                <div className="mt-1.5 flex items-center gap-1 text-[11px] font-semibold text-amber-700">
+                  <AlarmClock className="h-3 w-3" /> {fmtDate(l.follow_up_at)}
+                </div>
+              )}
+            </div>
             <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
               <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Remarks</div>
               <div className="whitespace-pre-wrap break-words">{l.remark || "No remarks added."}</div>
@@ -657,19 +683,23 @@ export default function Leads() {
                       </Select>
                     </td>
                     <td className="px-3 py-2.5 text-xs">
-                      {l.follow_up_at ? (
-                        <div>
+                      <div className="space-y-1">
+                        {l.follow_up_at && (
                           <div className="flex items-center gap-1 font-semibold text-amber-700">
                             <AlarmClock className="h-3 w-3" />
                             {fmtDate(l.follow_up_at)}
                           </div>
-                          {l.follow_up_status && (
-                            <div className="mt-0.5 text-[10px] uppercase tracking-wider text-slate-500">
-                              {FU_STATUSES.find((s) => s.v === l.follow_up_status)?.label || l.follow_up_status}
-                            </div>
-                          )}
-                        </div>
-                      ) : <span className="text-slate-300">—</span>}
+                        )}
+                        <Select value={l.follow_up_status || "none"} onValueChange={(v) => setFollowUpStatus(l, v === "none" ? "" : v)}>
+                          <SelectTrigger data-testid={`row-followup-${l.id}`} className="h-7 w-32 border-none px-2 text-[11px] font-semibold text-slate-500">
+                            <SelectValue placeholder="— follow-up —" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— none —</SelectItem>
+                            {FU_STATUSES.map((s) => <SelectItem key={s.v} value={s.v}>{s.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </td>
                     <td className="px-3 py-2.5">
                       {l.assigned_to_name ? (
