@@ -6,7 +6,7 @@ import {
   AlarmClock, Check, MessageCircle, Flag,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
+import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, telHref, STATUS_META, STATUSES } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { RecordingPlayer } from "../components/RecordingPlayer";
 import { Button } from "../components/ui/button";
@@ -335,7 +335,7 @@ export default function LeadDetail() {
                       <span data-testid="call-timer">{fmtDuration(elapsed)}</span>
                     </div>
                     <a
-                      href={`tel:${lead.phone}`}
+                      href={telHref(lead.phone)}
                       data-testid="dial-on-phone-link"
                       className="inline-flex items-center gap-2 rounded-lg border border-brand/30 bg-white px-4 py-2 text-sm font-semibold text-brand hover:bg-brand-light"
                     >
