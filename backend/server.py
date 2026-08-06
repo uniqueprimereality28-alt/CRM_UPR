@@ -1929,6 +1929,23 @@ async def _agent_stats(agent_id: str) -> dict:
     }
 
 
+async def _rank_leaderboard(agents: list) -> list:
+    """Builds the sales leaderboard for a given set of agent user docs,
+    sorted the same way everywhere (deals won, then talk time), and stamps
+    each row with its live rank position so 'who's #1 right now' is
+    consistent across the admin dashboard and each agent's own dashboard."""
+    leaderboard = []
+    for a in agents:
+        s = await _agent_stats(str(a["_id"]))
+        leaderboard.append({"agent_id": str(a["_id"]), "name": a["name"], "username": a["username"],
+                            "role": a.get("role"), "team_lead_name": a.get("team_lead_name"),
+                            "active": a.get("active", True), **s})
+    leaderboard.sort(key=lambda x: (-x["won"], -x["talk_time"]))
+    for i, row in enumerate(leaderboard):
+        row["rank"] = i + 1
+    return leaderboard
+
+
 @api.get("/dashboard/admin")
 async def admin_dashboard(user: dict = Depends(get_current_user)):
     # Team leads see their own team's admin-style dashboard
@@ -1961,13 +1978,7 @@ async def admin_dashboard(user: dict = Depends(get_current_user)):
     today_total_calls = len(today_calls_list)
     today_total_talk_time = sum(c.get("duration", 0) for c in today_calls_list)
 
-    leaderboard = []
-    for a in agents:
-        s = await _agent_stats(str(a["_id"]))
-        leaderboard.append({"agent_id": str(a["_id"]), "name": a["name"], "username": a["username"],
-                            "role": a.get("role"), "team_lead_name": a.get("team_lead_name"),
-                            "active": a.get("active", True), **s})
-    leaderboard.sort(key=lambda x: (-x["won"], -x["talk_time"]))
+    leaderboard = await _rank_leaderboard(agents)
 
     trend = []
     today = datetime.now(timezone.utc).date()
@@ -2010,6 +2021,15 @@ async def admin_dashboard(user: dict = Depends(get_current_user)):
 async def agent_dashboard(user: dict = Depends(get_current_user)):
     agent_id = str(user["_id"])
     stats = await _agent_stats(agent_id)
+
+    # Live ranking against the whole sales team (not just their own team),
+    # so "where do I stand right now" always reflects the full leaderboard.
+    all_agents = await db.users.find({"role": {"$in": [ROLE_SALES, ROLE_TL]}}).to_list(2000)
+    company_leaderboard = await _rank_leaderboard(all_agents)
+    my_row = next((r for r in company_leaderboard if r["agent_id"] == agent_id), None)
+    stats["rank"] = my_row["rank"] if my_row else None
+    stats["total_agents"] = len(company_leaderboard)
+
     leads = await db.leads.find({"assigned_to": agent_id}).sort("updated_at", -1).to_list(2000)
     calls = await db.calls.find({"agent_id": agent_id, "status": "completed"}).to_list(2000)
     by_status = {s: 0 for s in LEAD_STATUSES}
