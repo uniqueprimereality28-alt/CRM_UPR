@@ -67,8 +67,23 @@ export const STATUS_META = {
 
 export const STATUSES = Object.keys(STATUS_META);
 
-export function waLink(phone, name) {
+// Normalizes any phone string to a bare digit string with the India country
+// code (91) applied. A 10-digit local number gets 91 prepended; a number
+// that's already 12 digits (i.e. already carries a country code) is left
+// as-is so we never double up the prefix. Anything else is passed through
+// untouched — it's not a shape we recognize, so we don't guess further.
+export function normalizeIndianPhone(phone) {
   const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  return digits;
+}
+
+export function telHref(phone) {
+  return `tel:+${normalizeIndianPhone(phone)}`;
+}
+
+export function waLink(phone, name) {
+  const digits = normalizeIndianPhone(phone);
   const msg = `Hello ${name || ""}, greetings from Unique Prime Reality! Sharing our property brochure and latest offerings with you. Let me know a good time to talk.`;
   return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
 }
