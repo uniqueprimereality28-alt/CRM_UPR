@@ -569,14 +569,14 @@ export default function Leads() {
                 <div className="mt-1 text-sm text-slate-500">{l.phone}</div>
               </Link>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => callLead(l)} aria-label={`Call ${l.name || l.phone}`}
-                  data-testid={`call-now-${l.id}`} className="rounded-lg bg-brand p-2.5 text-white">
-                  <PhoneCall className="h-5 w-5" />
-                </button>
                 <a href={waLink(l.phone, l.name)} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${l.name || l.phone}`}
                   data-testid={`wa-send-mobile-${l.id}`} className="rounded-lg bg-emerald-500 p-2.5 text-white">
                   <MessageCircle className="h-5 w-5" />
                 </a>
+                <button type="button" onClick={() => callLead(l)} aria-label={`Call ${l.name || l.phone}`}
+                  data-testid={`call-now-${l.id}`} className="rounded-lg bg-brand p-2.5 text-white">
+                  <PhoneCall className="h-5 w-5" />
+                </button>
               </div>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
