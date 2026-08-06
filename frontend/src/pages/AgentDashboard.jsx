@@ -43,6 +43,16 @@ export default function AgentDashboard() {
         </a>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/20 bg-brand-light/50 px-5 py-4" data-testid="agent-rank-banner">
+        <Trophy className="h-6 w-6 text-brand" />
+        <div>
+          <div className="text-lg font-bold text-slate-900">
+            {s.rank ? `Ranked #${s.rank} of ${s.total_agents}` : "Ranking unavailable"}
+          </div>
+          <div className="text-xs text-slate-500">Live company-wide leaderboard position</div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard testId="agent-kpi-today" label="Today's Talk Time" value={fmtDuration(s.today_talk_time)}
           sub={`${s.today_calls} calls today`} icon={CalendarClock} accent="amber" delay={0} />
