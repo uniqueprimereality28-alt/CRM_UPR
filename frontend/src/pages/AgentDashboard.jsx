@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import {
   Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { Contact, Trophy, Timer, PhoneCall, Wallet, Loader2, ArrowRight } from "lucide-react";
+import { Contact, Trophy, Timer, PhoneCall, Wallet, Loader2, ArrowRight, CalendarClock, MessageCircle } from "lucide-react";
 import { api, fmtDuration, fmtMoney, STATUS_META } from "../lib/api";
 import { StatCard } from "../components/StatCard";
+import { reportWaHref } from "../components/DailyReportCard";
 import { useAuth } from "../context/AuthContext";
 import { Badge } from "../components/ui/badge";
 
@@ -22,12 +23,29 @@ export default function AgentDashboard() {
   if (data === false) return <div className="text-sm text-rose-600">Could not load dashboard.</div>;
 
   const s = data.stats;
+  const shareText = `📞 My day so far — ${s.today_calls} calls · ${fmtDuration(s.today_talk_time)} talk time.\n— ${user?.name || ""}, Unique Prime Reality`;
 
   return (
     <div className="space-y-6" data-testid="agent-dashboard">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Hello, {user?.name?.split(" ")[0]}</h1>
-        <p className="mt-1.5 text-sm text-slate-500">Your leads, your calls, your numbers.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Hello, {user?.name?.split(" ")[0]}</h1>
+          <p className="mt-1.5 text-sm text-slate-500">Your leads, your calls, your numbers.</p>
+        </div>
+        <a
+          href={reportWaHref(shareText)}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="agent-share-day-wa-btn"
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-600"
+        >
+          <MessageCircle className="h-4 w-4" /> Share today's numbers
+        </a>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard testId="agent-kpi-today" label="Today's Talk Time" value={fmtDuration(s.today_talk_time)}
+          sub={`${s.today_calls} calls today`} icon={CalendarClock} accent="amber" delay={0} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
