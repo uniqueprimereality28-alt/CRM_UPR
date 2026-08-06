@@ -8,6 +8,7 @@ import {
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
 import { OfflineBanner } from "./OfflineBanner";
+import { NotificationBar } from "./NotificationBar";
 import { useAuth } from "../context/AuthContext";
 import { api, assetUrl } from "../lib/api";
 import { Button } from "./ui/button";
@@ -150,6 +151,7 @@ export const Layout = ({ children }) => {
         </header>
         <main className="min-w-0 flex-1 p-4 lg:p-8">{children}</main>
       </div>
+      <NotificationBar />
       <ReminderBell />
     </div>
   );
