@@ -1,4 +1,8 @@
 import axios from "axios";
+import {
+  cacheGetResponse, readCachedResponse, patchCachedRecord,
+  enqueueMutation, listQueue, removeQueueItem, queueLength, emitStatus,
+} from "./offline";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
@@ -19,8 +23,105 @@ export function assetUrl(path) {
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("upr_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Stash the pre-serialization body so it can be replayed later exactly as
+  // the caller passed it in (config.data gets JSON.stringify'd further down
+  // the axios pipeline, after request interceptors run).
+  config.__rawData = config.data;
   return config;
 });
+
+// ---------------- Offline support ----------------
+// GET requests are cached locally so leads/data already loaded stay visible
+// with no connection. POST/PUT/DELETE requests that fail because the device
+// is offline are queued and replayed in order the moment connectivity
+// returns — nothing the agent does offline is lost.
+
+const MUTATION_METHODS = new Set(["post", "put", "delete", "patch"]);
+// /calls/start is meaningless to queue and replay later — it only exists to
+// mint a server call ID for the immediate start/end pair. When it fails, the
+// caller (useClickToCall) already falls back to /calls/log_offline instead,
+// so we let this one endpoint fail normally rather than queuing it.
+const QUEUE_EXCLUDE_URLS = new Set(["/calls/start"]);
+let syncing = false;
+
+async function pushStatus() {
+  emitStatus({ offline: !navigator.onLine, pending: await queueLength(), syncing });
+}
+
+export async function replayQueuedMutations() {
+  if (syncing || !navigator.onLine) return;
+  const items = await listQueue();
+  if (!items.length) { pushStatus(); return; }
+  syncing = true;
+  pushStatus();
+  for (const item of items) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await api.request({
+        method: item.method,
+        url: item.url,
+        data: item.data,
+        params: item.params,
+        _isReplay: true,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await removeQueueItem(item.qid);
+    } catch (err) {
+      if (!err.response) {
+        // Still offline (or just went offline again mid-sync) — stop here,
+        // keep the remaining queue, and try again on the next "online" event.
+        break;
+      }
+      // Server actively rejected the replayed request (validation, etc.) —
+      // drop it so it doesn't block everything behind it forever.
+      // eslint-disable-next-line no-await-in-loop
+      await removeQueueItem(item.qid);
+    }
+  }
+  syncing = false;
+  pushStatus();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("online", () => replayQueuedMutations());
+  window.addEventListener("offline", () => pushStatus());
+  // Kick off an initial status broadcast + best-effort sync in case the app
+  // was reloaded while there was still a queue from a previous session.
+  setTimeout(() => { pushStatus(); replayQueuedMutations(); }, 0);
+}
+
+api.interceptors.response.use(
+  (response) => {
+    if ((response.config.method || "get").toLowerCase() === "get") {
+      cacheGetResponse(response.config.url, response.config.params, response.data);
+    }
+    return response;
+  },
+  async (error) => {
+    const config = error.config || {};
+    const method = (config.method || "get").toLowerCase();
+    const isNetworkError = !error.response; // no response at all = offline/timeout/DNS, not a server rejection
+
+    if (isNetworkError && method === "get") {
+      const cached = await readCachedResponse(config.url, config.params);
+      if (cached) {
+        return { data: cached.data, status: 200, statusText: "OK (from offline cache)", headers: {}, config, fromCache: true };
+      }
+    }
+
+    if (isNetworkError && MUTATION_METHODS.has(method) && !config._isReplay && !QUEUE_EXCLUDE_URLS.has(config.url)) {
+      const isFormData = typeof FormData !== "undefined" && config.data instanceof FormData;
+      if (!isFormData) {
+        await enqueueMutation({ method, url: config.url, data: config.__rawData, params: config.params });
+        if (method === "put" || method === "patch") patchCachedRecord(config.url, config.__rawData);
+        pushStatus();
+        return { data: { ok: true, queued: true }, status: 202, statusText: "Queued offline", headers: {}, config, queued: true };
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 export function apiError(detail) {
   if (detail == null) return "Something went wrong. Please try again.";
@@ -87,5 +188,3 @@ export function waLink(phone, name) {
   const msg = `Hello ${name || ""}, greetings from Unique Prime Reality! Sharing our property brochure and latest offerings with you. Let me know a good time to talk.`;
   return `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
 }
-
-
