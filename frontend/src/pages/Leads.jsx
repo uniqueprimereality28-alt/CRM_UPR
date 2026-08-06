@@ -38,6 +38,7 @@ const FU_STATUSES = [
   { v: "callback", label: "Callback" },
   { v: "not_interested", label: "Not interested" },
   { v: "converted", label: "Converted" },
+  { v: "no_answer", label: "Didn't Pick" },
 ];
 
 const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" } : null);
