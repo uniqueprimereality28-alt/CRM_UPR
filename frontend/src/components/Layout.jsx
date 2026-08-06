@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
+import { OfflineBanner } from "./OfflineBanner";
 import { useAuth } from "../context/AuthContext";
 import { api, assetUrl } from "../lib/api";
 import { Button } from "./ui/button";
@@ -135,6 +136,7 @@ export const Layout = ({ children }) => {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <OfflineBanner />
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/80 px-4 backdrop-blur-md lg:px-8">
           <button className="lg:hidden" onClick={() => setOpen(true)} data-testid="sidebar-open">
             <Menu className="h-5 w-5 text-slate-600" />
