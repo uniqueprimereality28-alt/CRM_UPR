@@ -1,19 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Loader2, Phone, Timer, Trash2 } from "lucide-react";
+import { Loader2, Phone, Timer, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtDate } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { StatCard } from "../components/StatCard";
 import { RecordingPlayer } from "../components/RecordingPlayer";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
+import { Label } from "../components/ui/label";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "../components/ui/alert-dialog";
 import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "../components/ui/dialog";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
+
+// Splits a total-seconds duration into minutes/seconds for the edit form,
+// and the reverse — kept local to this page since nowhere else needs it.
+function secToMinSec(totalSec) {
+  const s = Math.max(0, Math.round(totalSec || 0));
+  return { min: Math.floor(s / 60), sec: s % 60 };
+}
+function minSecToSec(min, sec) {
+  return Math.max(0, (Number(min) || 0) * 60 + (Number(sec) || 0));
+}
 
 export default function Calls() {
   const { isAdmin } = useAuth();
@@ -21,6 +38,13 @@ export default function Calls() {
   const [agents, setAgents] = useState([]);
   const [agent, setAgent] = useState("all");
   const [deletingId, setDeletingId] = useState(null);
+
+  // Talk-time edit dialog state
+  const [editCall, setEditCall] = useState(null); // the call object being corrected
+  const [editMin, setEditMin] = useState(0);
+  const [editSec, setEditSec] = useState(0);
+  const [editReason, setEditReason] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     api.get("/calls", { params: agent !== "all" ? { agent_id: agent } : {} })
@@ -46,6 +70,48 @@ export default function Calls() {
     } catch (err) {
       toast.error(apiError(err.response?.data?.detail));
     } finally { setDeletingId(null); }
+  };
+
+  const openEdit = (call) => {
+    const { min, sec } = secToMinSec(call.duration);
+    setEditCall(call);
+    setEditMin(min);
+    setEditSec(sec);
+    setEditReason("");
+  };
+
+  const closeEdit = () => {
+    if (savingEdit) return;
+    setEditCall(null);
+  };
+
+  const saveEdit = async () => {
+    if (!editCall) return;
+    const newDuration = minSecToSec(editMin, editSec);
+    if (editReason.trim().length < 5) {
+      toast.error("Please give a reason of at least 5 characters");
+      return;
+    }
+    if (newDuration === editCall.duration) {
+      toast.error("New duration is the same as the current duration");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await api.put(`/calls/${editCall._id}/duration`, {
+        new_duration: newDuration,
+        reason: editReason.trim(),
+      });
+      setCalls((prev) => (prev || []).map((c) => (
+        c._id === editCall._id ? { ...c, duration: newDuration } : c
+      )));
+      toast.success("Talk time corrected");
+      setEditCall(null);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   return (
@@ -106,7 +172,28 @@ export default function Calls() {
                   <td className="px-3 py-2.5">
                     {c.has_recording ? <RecordingPlayer callId={c._id} compact /> : <span className="text-slate-300">—</span>}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-semibold text-slate-800">{fmtDuration(c.duration)}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span className="font-semibold text-slate-800">{fmtDuration(c.duration)}</span>
+                      {c.duration_corrected && (
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-amber-500" title={`Corrected by ${c.duration_corrected_by || "admin"}`}>
+                          corrected
+                        </span>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => openEdit(c)}
+                          data-testid={`edit-duration-${c._id}`}
+                          title="Correct talk time"
+                          aria-label={`Correct talk time for ${c.lead_name}`}
+                          className="rounded p-1 text-slate-300 transition-colors hover:text-brand"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-5 py-2.5 text-right text-xs text-slate-400">{fmtDate(c.started_at)}</td>
                   {isAdmin && (
                     <td className="px-5 py-2.5 text-right">
@@ -147,6 +234,66 @@ export default function Calls() {
           </table>
         </div>
       </div>
+
+      {/* Talk-time correction dialog — admin only. Requires a reason so every
+          correction is transparent, never a silent rewrite. */}
+      <Dialog open={!!editCall} onOpenChange={(open) => !open && closeEdit()}>
+        <DialogContent data-testid="edit-duration-dialog">
+          <DialogHeader>
+            <DialogTitle>Correct talk time</DialogTitle>
+            <DialogDescription>
+              {editCall && (
+                <>Call with <b>{editCall.lead_name}</b> logged by <b>{editCall.agent_name}</b> ·
+                  currently {fmtDuration(editCall.duration)}.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Corrected duration</Label>
+              <div className="mt-1.5 flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  value={editMin}
+                  onChange={(e) => setEditMin(e.target.value)}
+                  data-testid="edit-duration-minutes"
+                  className="w-24"
+                />
+                <span className="text-sm text-slate-500">min</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={editSec}
+                  onChange={(e) => setEditSec(e.target.value)}
+                  data-testid="edit-duration-seconds"
+                  className="w-24"
+                />
+                <span className="text-sm text-slate-500">sec</span>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Reason (required, min 5 characters)</Label>
+              <Textarea
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value)}
+                data-testid="edit-duration-reason"
+                rows={3}
+                placeholder="e.g. Agent forgot to end the call after hanging up, actual talk time was much shorter."
+                className="mt-1.5"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeEdit} disabled={savingEdit}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={savingEdit} data-testid="save-duration-edit" className="gap-2 bg-brand hover:bg-brand-dark">
+              {savingEdit && <Loader2 className="h-4 w-4 animate-spin" />}
+              {savingEdit ? "Saving…" : "Save correction"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
