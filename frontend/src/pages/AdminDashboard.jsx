@@ -174,6 +174,7 @@ export default function AdminDashboard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-400">
+                  <th className="px-3 py-2.5 text-center">Rank</th>
                   <th className="px-5 py-2.5 text-left">Agent</th>
                   <th className="px-3 py-2.5 text-right">Leads</th>
                   <th className="px-3 py-2.5 text-right">Won</th>
@@ -185,10 +186,19 @@ export default function AdminDashboard() {
               </thead>
               <tbody>
                 {data.leaderboard.length === 0 && (
-                  <tr><td colSpan={7} className="px-5 py-8 text-center text-slate-400">No agents yet.</td></tr>
+                  <tr><td colSpan={8} className="px-5 py-8 text-center text-slate-400">No agents yet.</td></tr>
                 )}
                 {data.leaderboard.map((a, i) => (
                   <tr key={a.agent_id} data-testid={`leaderboard-row-${i}`} className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50">
+                    <td className="px-3 py-3 text-center" data-testid={`leaderboard-rank-${i}`}>
+                      <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${
+                        a.rank === 1 ? "bg-amber-100 text-amber-700" :
+                        a.rank === 2 ? "bg-slate-200 text-slate-600" :
+                        a.rank === 3 ? "bg-orange-100 text-orange-700" : "text-slate-400"
+                      }`}>
+                        {a.rank <= 3 ? ["🥇", "🥈", "🥉"][a.rank - 1] : `#${a.rank}`}
+                      </span>
+                    </td>
                     <td className="px-5 py-3">
                       <Link to={`/team/${a.agent_id}`} className="flex items-center gap-3">
                         <div className="grid h-8 w-8 place-items-center rounded-full bg-brand-light text-xs font-bold text-brand">
