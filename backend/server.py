@@ -1228,6 +1228,10 @@ async def end_call(call_id: str, payload: CallEnd, user: dict = Depends(get_curr
     lead_updates = {"last_contacted_at": now_iso(), "updated_at": now_iso()}
     if payload.outcome in FOLLOWUP_STATUSES:
         lead_updates["follow_up_status"] = payload.outcome
+    if payload.notes and payload.notes.strip():
+        # Show the latest agent-typed call remark at the top of the lead,
+        # instead of leaving the old imported remark displayed forever.
+        lead_updates["remark"] = payload.notes.strip()
     await db.leads.update_one(
         {"_id": ObjectId(call["lead_id"])},
         {"$inc": {"total_talk_time": duration, "call_count": 1},
