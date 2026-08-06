@@ -290,6 +290,26 @@ class CallEnd(BaseModel):
     follow_up_note: Optional[str] = None
 
 
+class CallOfflineLog(BaseModel):
+    """Logs a call that was started and/or ended while the agent's device had
+    no connection. The normal /calls/start -> /calls/end flow depends on a
+    server-generated call ID that doesn't exist yet offline, so this logs the
+    whole call in a single request instead — sent either immediately (if the
+    device is actually online) or later by the frontend's offline queue the
+    moment connectivity returns."""
+    lead_id: str
+    duration: int
+    outcome: str = "connected"
+    notes: Optional[str] = None
+    started_at: Optional[str] = None
+    client_call_id: Optional[str] = None
+
+
+class CallDurationEdit(BaseModel):
+    new_duration: int
+    reason: str
+
+
 class AttendanceCheckIn(BaseModel):
     lat: float
     lng: float
@@ -1215,6 +1235,52 @@ async def start_call(payload: CallStart, user: dict = Depends(get_current_user))
     return {"call_id": str(res.inserted_id), "provider": "manual"}
 
 
+@api.post("/calls/log_offline")
+async def log_offline_call(payload: CallOfflineLog, user: dict = Depends(get_current_user)):
+    """Offline-mode call logging. Used instead of /calls/start + /calls/{id}/end
+    when the device had no connection while the call happened — this writes the
+    finished call in one shot instead of relying on a server call ID minted
+    beforehand. Safe to call twice with the same client_call_id (e.g. if the
+    offline queue on the device replays it) — the duplicate is detected and the
+    original call is returned instead of creating a second entry."""
+    lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await _ensure_lead_access(lead, user)
+
+    if payload.client_call_id:
+        existing = await db.calls.find_one({"client_call_id": payload.client_call_id})
+        if existing:
+            return {"ok": True, "call_id": str(existing["_id"]), "duplicate": True}
+
+    duration = max(0, int(payload.duration))
+    started_at = payload.started_at or now_iso()
+    doc = {
+        "lead_id": payload.lead_id, "lead_name": lead["name"], "lead_phone": lead["phone"],
+        "agent_id": str(user["_id"]), "agent_name": user.get("name"),
+        "provider": "manual", "status": "completed", "duration": duration,
+        "outcome": payload.outcome, "notes": payload.notes,
+        "has_recording": False, "started_at": started_at, "ended_at": now_iso(),
+        "logged_offline": True, "client_call_id": payload.client_call_id,
+    }
+    res = await db.calls.insert_one(doc)
+
+    lead_updates = {"last_contacted_at": now_iso(), "updated_at": now_iso()}
+    if payload.outcome in FOLLOWUP_STATUSES:
+        lead_updates["follow_up_status"] = payload.outcome
+    if payload.notes and payload.notes.strip():
+        lead_updates["remark"] = payload.notes.strip()
+    await db.leads.update_one(
+        {"_id": ObjectId(payload.lead_id)},
+        {"$inc": {"total_talk_time": duration, "call_count": 1}, "$set": lead_updates})
+
+    await _log_activity(payload.lead_id, user, "call_logged",
+                        f"Call {payload.outcome} · {_fmt_dur(duration)} (logged offline)"
+                        + (f" · {payload.notes}" if payload.notes else ""),
+                        {"duration": duration, "offline": True})
+    return {"ok": True, "call_id": str(res.inserted_id)}
+
+
 @api.post("/calls/{call_id}/end")
 async def end_call(call_id: str, payload: CallEnd, user: dict = Depends(get_current_user)):
     call = await db.calls.find_one({"_id": ObjectId(call_id)})
@@ -1287,6 +1353,48 @@ async def delete_call(call_id: str, admin: dict = Depends(require_admin)):
             {"$inc": {"total_talk_time": -int(call.get("duration") or 0), "call_count": -1}})
     await db.calls.delete_one({"_id": ObjectId(call_id)})
     return {"ok": True}
+
+
+@api.put("/calls/{call_id}/duration")
+async def edit_call_duration(call_id: str, payload: CallDurationEdit, admin: dict = Depends(require_admin)):
+    """Admins (Sandeep or Vranda) can correct a call's logged talk time when it's
+    genuinely wrong — e.g. a missed hang-up. This is for fixing honest logging
+    errors transparently, not silent rewrites: a reason (5+ chars) is required,
+    and the correction is written to the lead's activity timeline for anyone
+    viewing that lead to see."""
+    reason = (payload.reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Please give a reason of at least 5 characters")
+    call = await db.calls.find_one({"_id": ObjectId(call_id)})
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    new_duration = max(0, int(payload.new_duration))
+    old_duration = int(call.get("duration") or 0)
+    if new_duration == old_duration:
+        raise HTTPException(status_code=400, detail="New duration is the same as the current duration")
+
+    await db.calls.update_one(
+        {"_id": ObjectId(call_id)},
+        {"$set": {"duration": new_duration, "duration_corrected": True,
+                  "duration_corrected_by": admin.get("name"), "duration_corrected_at": now_iso()},
+         "$push": {"duration_corrections": {
+             "by": admin.get("name"), "at": now_iso(),
+             "old_duration": old_duration, "new_duration": new_duration, "reason": reason}}})
+
+    # Only completed calls count toward the lead's total talk time.
+    if call.get("status") == "completed" and call.get("lead_id"):
+        delta = new_duration - old_duration
+        if delta:
+            await db.leads.update_one(
+                {"_id": ObjectId(call["lead_id"])},
+                {"$inc": {"total_talk_time": delta}})
+        await _log_activity(
+            call["lead_id"], admin, "call_duration_corrected",
+            f"Talk time corrected by {admin.get('name')}: was {_fmt_dur(old_duration)}, "
+            f"now {_fmt_dur(new_duration)} — reason: {reason}",
+            {"call_id": call_id, "old_duration": old_duration, "new_duration": new_duration, "reason": reason})
+
+    return {"ok": True, "duration": new_duration}
 
 
 @api.post("/calls/{call_id}/recording")
