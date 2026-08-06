@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle, Copy,
+  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle, Copy, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
@@ -92,7 +92,9 @@ export default function AdminDashboard() {
           sub={`${k.agents} total accounts`} icon={UserCheck} accent="slate" delay={180} />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard testId="kpi-today-talk-time" label="Today's Talk Time" value={fmtDuration(k.today_total_talk_time)}
+          sub={`${k.today_total_calls} calls today · all agents`} icon={CalendarClock} accent="amber" delay={90} />
         <StatCard testId="kpi-pipeline" label="Pipeline Value" value={fmtMoney(k.pipeline_value)}
           sub="Open opportunities" icon={Wallet} delay={200} />
         <StatCard testId="kpi-won-value" label="Closed Value" value={fmtMoney(k.won_value)}
@@ -177,12 +179,13 @@ export default function AdminDashboard() {
                   <th className="px-3 py-2.5 text-right">Won</th>
                   <th className="px-3 py-2.5 text-right">Conv.</th>
                   <th className="px-3 py-2.5 text-right">Talk time</th>
+                  <th className="px-3 py-2.5 text-right">Today</th>
                   <th className="px-5 py-2.5 text-right">Closed</th>
                 </tr>
               </thead>
               <tbody>
                 {data.leaderboard.length === 0 && (
-                  <tr><td colSpan={6} className="px-5 py-8 text-center text-slate-400">No agents yet.</td></tr>
+                  <tr><td colSpan={7} className="px-5 py-8 text-center text-slate-400">No agents yet.</td></tr>
                 )}
                 {data.leaderboard.map((a, i) => (
                   <tr key={a.agent_id} data-testid={`leaderboard-row-${i}`} className="border-b border-slate-100 transition-colors last:border-0 hover:bg-slate-50">
@@ -201,6 +204,9 @@ export default function AdminDashboard() {
                     <td className="px-3 py-3 text-right font-semibold text-emerald-600">{a.won}</td>
                     <td className="px-3 py-3 text-right text-slate-600">{a.conversion}%</td>
                     <td className="px-3 py-3 text-right font-medium text-slate-800">{fmtDuration(a.talk_time)}</td>
+                    <td className="px-3 py-3 text-right text-slate-600" data-testid={`leaderboard-today-${i}`}>
+                      {a.today_calls} calls · {fmtDuration(a.today_talk_time)}
+                    </td>
                     <td className="px-5 py-3 text-right text-slate-600">{fmtMoney(a.won_value)}</td>
                   </tr>
                 ))}
