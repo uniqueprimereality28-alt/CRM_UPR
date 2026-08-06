@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
+import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -233,6 +234,8 @@ export default function Leads() {
       toast.error(apiError(err.response?.data?.detail));
     } finally { setDupBusy(false); }
   };
+
+  const callLead = useClickToCall();
 
   const setLeadTag = async (l, newTag) => {
     try {
@@ -554,7 +557,16 @@ export default function Leads() {
                 <div className="text-base font-bold text-slate-900">{l.name || "(no name)"}</div>
                 <div className="mt-1 text-sm text-slate-500">{l.phone}</div>
               </Link>
-              <Link to={`/leads/${l.id}`} aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg bg-brand p-2.5 text-white"><PhoneCall className="h-5 w-5" /></Link>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => callLead(l)} aria-label={`Call ${l.name || l.phone}`}
+                  data-testid={`call-now-${l.id}`} className="rounded-lg bg-brand p-2.5 text-white">
+                  <PhoneCall className="h-5 w-5" />
+                </button>
+                <a href={waLink(l.phone, l.name)} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${l.name || l.phone}`}
+                  data-testid={`wa-send-mobile-${l.id}`} className="rounded-lg bg-emerald-500 p-2.5 text-white">
+                  <MessageCircle className="h-5 w-5" />
+                </a>
+              </div>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <Select value={l.tag || "none"} onValueChange={(v) => setLeadTag(l, v === "none" ? "" : v)}>
@@ -621,7 +633,10 @@ export default function Leads() {
                         <div className="font-medium text-slate-800 hover:text-brand">{l.name || "(no name)"}</div>
                         <div className="text-[11px] text-slate-400">{l.phone} · {l.source}</div>
                       </Link>
-                      <Link to={`/leads/${l.id}`} title="Open call screen" aria-label={`Open call screen for ${l.name || l.phone}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light"><PhoneCall className="h-4 w-4" /></Link>
+                      <button type="button" onClick={() => callLead(l)} title="Call now" aria-label={`Call ${l.name || l.phone}`}
+                        data-testid={`call-now-${l.id}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light">
+                        <PhoneCall className="h-4 w-4" />
+                      </button>
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
