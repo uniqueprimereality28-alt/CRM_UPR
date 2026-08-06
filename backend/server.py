@@ -103,6 +103,15 @@ def ist_today_str() -> str:
     return ist_now().strftime("%Y-%m-%d")
 
 
+def _today_bounds_utc() -> tuple:
+    """UTC ISO start/end instants for 'today' in IST — used to compute
+    daily talk-time/call-count so the dashboards reset at IST midnight."""
+    ist_midnight = ist_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_utc = ist_midnight - timedelta(minutes=330)
+    end_utc = start_utc + timedelta(days=1)
+    return start_utc.isoformat(), end_utc.isoformat()
+
+
 # ---------------- Models ----------------
 class UserPublic(BaseDocument):
     username: str
@@ -1902,6 +1911,8 @@ async def _agent_stats(agent_id: str) -> dict:
     calls = await db.calls.find({"agent_id": agent_id, "status": "completed"}).to_list(5000)
     won = len([l for l in leads if l.get("status") == "won"])
     talk = sum(c.get("duration", 0) for c in calls)
+    day_start, day_end = _today_bounds_utc()
+    today_calls = [c for c in calls if day_start <= (c.get("started_at") or "") < day_end]
     return {
         "leads": len(leads),
         "won": won,
@@ -1910,6 +1921,8 @@ async def _agent_stats(agent_id: str) -> dict:
         "calls": len(calls),
         "talk_time": talk,
         "avg_call": int(talk / len(calls)) if calls else 0,
+        "today_calls": len(today_calls),
+        "today_talk_time": sum(c.get("duration", 0) for c in today_calls),
         "conversion": round(won / len(leads) * 100, 1) if leads else 0.0,
         "pipeline_value": sum(l.get("budget") or 0 for l in leads if l.get("status") not in ("won", "lost")),
         "won_value": sum(l.get("budget") or 0 for l in leads if l.get("status") == "won"),
@@ -1943,6 +1956,11 @@ async def admin_dashboard(user: dict = Depends(get_current_user)):
     total_talk = sum(c.get("duration", 0) for c in calls)
     won = by_status.get("won", 0)
 
+    day_start, day_end = _today_bounds_utc()
+    today_calls_list = [c for c in calls if day_start <= (c.get("started_at") or "") < day_end]
+    today_total_calls = len(today_calls_list)
+    today_total_talk_time = sum(c.get("duration", 0) for c in today_calls_list)
+
     leaderboard = []
     for a in agents:
         s = await _agent_stats(str(a["_id"]))
@@ -1971,6 +1989,8 @@ async def admin_dashboard(user: dict = Depends(get_current_user)):
             "conversion": round(won / len(leads) * 100, 1) if leads else 0.0,
             "total_calls": len(calls),
             "total_talk_time": total_talk,
+            "today_total_calls": today_total_calls,
+            "today_total_talk_time": today_total_talk_time,
             "avg_call": int(total_talk / len(calls)) if calls else 0,
             "agents": len(agents),
             "active_agents": len([a for a in agents if a.get("active", True)]),
