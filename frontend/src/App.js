@@ -17,6 +17,7 @@ import Calls from "./pages/Calls";
 import Followups from "./pages/Followups";
 import Attendance from "./pages/Attendance";
 import TeamAttendance from "./pages/TeamAttendance";
+import Reports from "./pages/Reports";
 import Chat from "./pages/Chat";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
@@ -141,6 +142,15 @@ function App() {
               element={
                 <Protected roles={["superadmin", "admin", "team_lead", "hr"]}>
                   <TeamAttendance />
+                </Protected>
+              }
+            />
+
+            <Route
+              path="/reports"
+              element={
+                <Protected roles={["superadmin", "admin"]}>
+                  <Reports />
                 </Protected>
               }
             />
