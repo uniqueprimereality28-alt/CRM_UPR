@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, Users, Contact, PhoneCall, LogOut, Menu, X,
   AlarmClock, MapPin, MessagesSquare, Settings as SettingsIcon,
-  UserCog, Building2,
+  UserCog, Building2, User,
 } from "lucide-react";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
@@ -37,6 +37,7 @@ export const Layout = ({ children }) => {
 
   const nav = [
     (!isEmployee) && { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, id: "nav-dashboard" },
+    isManager && { to: "/my-leads", label: "My Leads", icon: User, id: "nav-my-leads" },
     (!isEmployee) && { to: "/leads", label: isManager ? "All Leads" : "My Leads", icon: Contact, id: "nav-leads" },
     (!isEmployee) && { to: "/followups", label: "Follow-ups", icon: AlarmClock, id: "nav-followups" },
     isManager && { to: "/team", label: "Team", icon: Users, id: "nav-team" },
