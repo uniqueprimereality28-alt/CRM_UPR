@@ -8,6 +8,11 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 
+const SUPPORT_WHATSAPP_NUMBER = "917351735035";
+const SUPPORT_WHATSAPP_MESSAGE =
+  "Hello Vrinda ma'am, I'm unable to log into the UPR CRM. Kindly assist me with this.";
+const supportWhatsappHref = `https://wa.me/${SUPPORT_WHATSAPP_NUMBER}?text=${encodeURIComponent(SUPPORT_WHATSAPP_MESSAGE)}`;
+
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
@@ -104,9 +109,20 @@ export default function Login() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Password
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Password
+                </Label>
+                <a
+                  href={supportWhatsappHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid="login-forgot-password-link"
+                  className="text-xs font-semibold text-brand hover:text-brand-dark"
+                >
+                  Forgot password?
+                </a>
+              </div>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <Input
