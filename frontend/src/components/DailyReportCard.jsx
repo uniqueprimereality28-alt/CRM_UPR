@@ -1,16 +1,8 @@
 import { useEffect, useState } from "react";
-import { CalendarDays, MessageCircle, PhoneCall, Timer, AlarmClock, UserPlus, FileText } from "lucide-react";
+import { CalendarDays, MessageCircle, PhoneCall, Timer, AlarmClock, UserPlus } from "lucide-react";
 import { api, fmtDuration } from "../lib/api";
 
 export const reportWaHref = (text) => `https://wa.me/?text=${encodeURIComponent(text)}`;
-
-// The backend route lives at /reports/daily/pdf on the same API base
-// api.js already uses — this builds the public URL for both the download
-// button and the link embedded in the WhatsApp text.
-const dailyReportPdfUrl = () => {
-  const base = api.defaults.baseURL?.replace(/\/$/, "") || "";
-  return `${base}/reports/daily/pdf?tz_offset=${new Date().getTimezoneOffset()}`;
-};
 
 export const DailyReportCard = () => {
   const [report, setReport] = useState(null);
@@ -20,11 +12,8 @@ export const DailyReportCard = () => {
   }, []);
   if (!report) return null;
   const y = report.yesterday;
-  const pdfUrl = dailyReportPdfUrl();
 
-  // WhatsApp text now includes a link to the styled PDF report, since
-  // wa.me links can only pre-fill text — they can't attach a file directly.
-  const whatsappText = `${report.whatsapp_text}\n\n📄 Full report (PDF): ${pdfUrl}`;
+  const whatsappText = report.whatsapp_text;
 
   return (
     <div data-testid="daily-report-card" className="overflow-hidden rounded-xl border border-brand/25 bg-white shadow-sm">
@@ -35,15 +24,6 @@ export const DailyReportCard = () => {
           <div className="text-[11px] text-slate-500">Auto-prepared every morning at 9 AM</div>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <a
-            href={pdfUrl}
-            target="_blank"
-            rel="noreferrer"
-            data-testid="daily-report-pdf-btn"
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-          >
-            <FileText className="h-4 w-4" /> PDF
-          </a>
           <a
             href={reportWaHref(whatsappText)}
             target="_blank"
