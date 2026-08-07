@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
 import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
-import { InlineEditField } from "../components/InlineEditField";
+import { InlineEditField, InlineBudgetField } from "../components/InlineEditField";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -594,12 +594,10 @@ export default function Leads() {
             <div className="mt-3 grid grid-cols-2 gap-2">
               <div className="rounded-lg bg-slate-50 p-2.5">
                 <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Budget</div>
-                <InlineEditField
+                <InlineBudgetField
                   value={l.budget}
-                  type="number"
                   onSave={(v) => updateLead(l, { budget: v }, "Budget updated")}
                   formatDisplay={fmtMoney}
-                  emptyLabel="Add budget"
                   testId={`lead-budget-m-${l.id}`}
                   displayClassName="text-sm font-semibold text-slate-800"
                 />
@@ -748,12 +746,10 @@ export default function Leads() {
                       </div>
                     </td>
                     <td className="px-3 py-2.5 text-right">
-                      <InlineEditField
+                      <InlineBudgetField
                         value={l.budget}
-                        type="number"
                         onSave={(v) => updateLead(l, { budget: v }, "Budget updated")}
                         formatDisplay={fmtMoney}
-                        emptyLabel="Add budget"
                         testId={`lead-budget-${l.id}`}
                         displayClassName="justify-end text-right text-slate-600"
                       />
