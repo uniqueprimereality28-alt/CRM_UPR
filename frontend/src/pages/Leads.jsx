@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
-  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, ShieldAlert, Flag, PhoneCall,
+  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -11,7 +11,6 @@ import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
-import { Badge } from "../components/ui/badge";
 import { Checkbox } from "../components/ui/checkbox";
 import { Textarea } from "../components/ui/textarea";
 import {
@@ -70,8 +69,6 @@ export default function Leads() {
   const [importRemark, setImportRemark] = useState("");
   const [importResult, setImportResult] = useState(null);
   const [skipDupes, setSkipDupes] = useState(true);
-  const [dupOpen, setDupOpen] = useState(false);
-  const [dupData, setDupData] = useState(null);
   const [dupBusy, setDupBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -193,43 +190,16 @@ export default function Leads() {
     } finally { setBusy(false); }
   };
 
-  const openDuplicates = async () => {
-    setDupOpen(true);
-    setDupData(null);
-    try {
-      const { data } = await api.get("/leads/duplicates");
-      setDupData(data);
-    } catch (err) {
-      toast.error(apiError(err.response?.data?.detail));
-      setDupData({ groups: [], total_duplicate_leads: 0 });
-    }
-  };
-
-  const clearDuplicates = async (keep) => {
+  const removeDuplicates = async () => {
     if (dupBusy) return;
-    if (!window.confirm(
-      `Clear duplicates and keep the ${keep === "newest" ? "newest" : "oldest"} lead in each group? Extra copies will be permanently deleted.`
-    )) return;
     setDupBusy(true);
     try {
-      const { data } = await api.post("/leads/duplicates/clear", { keep });
-      toast.success(`${data.removed} duplicate lead(s) removed`);
-      setDupOpen(false);
-      load();
-    } catch (err) {
-      toast.error(apiError(err.response?.data?.detail));
-    } finally { setDupBusy(false); }
-  };
-
-  const resolveDuplicateGroup = async (phone, keepLeadId, keepName) => {
-    if (dupBusy) return;
-    if (!window.confirm(`Keep "${keepName}" for ${phone} and delete every other lead with this number?`)) return;
-    setDupBusy(true);
-    try {
-      const { data } = await api.post("/leads/duplicates/resolve", { phone, keep_lead_id: keepLeadId });
-      toast.success(`${data.removed} duplicate lead(s) removed for ${phone}`);
-      const { data: fresh } = await api.get("/leads/duplicates");
-      setDupData(fresh);
+      const { data: res } = await api.post("/leads/duplicates/clear", { keep: "oldest" });
+      if (res.removed > 0) {
+        toast.success(`${res.removed} duplicate lead(s) removed`);
+      } else {
+        toast.success("No duplicates found — your data is clean");
+      }
       load();
     } catch (err) {
       toast.error(apiError(err.response?.data?.detail));
@@ -301,8 +271,15 @@ export default function Leads() {
         </div>
         <div className="flex flex-wrap gap-2">
           {isAdmin && (
-            <Button variant="outline" onClick={openDuplicates} data-testid="find-duplicates-btn" className="gap-2">
-              <Copy className="h-4 w-4" /> Duplicates
+            <Button
+              variant="outline"
+              onClick={removeDuplicates}
+              disabled={dupBusy}
+              data-testid="remove-duplicates-btn"
+              className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            >
+              {dupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
+              Remove duplicates
             </Button>
           )}
           {isManager && (
@@ -738,77 +715,6 @@ export default function Leads() {
           </table>
         </div>
       </div>
-
-      {isAdmin && (
-        <Dialog open={dupOpen} onOpenChange={setDupOpen}>
-          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2"><Copy className="h-4 w-4" /> Duplicate leads</DialogTitle>
-            </DialogHeader>
-            {dupData === null ? (
-              <div className="grid h-32 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>
-            ) : dupData.groups.length === 0 ? (
-              <p className="py-6 text-center text-sm text-slate-400">No duplicate phone numbers found. Your data is clean 🎉</p>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>
-                    Found <b>{dupData.groups.length}</b> phone number(s) with copies · <b>{dupData.total_duplicate_leads}</b> extra
-                    lead(s) can be removed.
-                    {dupData.multi_assigned_groups > 0 && (
-                      <> <b>{dupData.multi_assigned_groups}</b> of these are assigned to more than one person — two agents may be calling the same buyer.</>
-                    )}
-                    {" "}Only admin/superadmin can clear duplicates — deletions are permanent.
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-4">
-                  <Button size="sm" disabled={dupBusy} onClick={() => clearDuplicates("oldest")}
-                    data-testid="clear-duplicates-keep-oldest" className="gap-1.5 bg-brand hover:bg-brand-dark">
-                    {dupBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Clear all (keep oldest)
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={dupBusy} onClick={() => clearDuplicates("newest")}
-                    data-testid="clear-duplicates-keep-newest">
-                    Clear all (keep newest)
-                  </Button>
-                </div>
-
-                <div className="max-h-96 space-y-3 overflow-y-auto">
-                  {dupData.groups.map((g) => (
-                    <div key={g.phone} className={`rounded-lg border p-3 text-xs ${g.multi_assigned ? "border-rose-200 bg-rose-50/50" : "border-slate-200"}`}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-semibold text-slate-800">{g.phone}</span>
-                        <Badge variant="outline" className="border-slate-300 text-slate-600">{g.count} copies</Badge>
-                        {g.multi_assigned && (
-                          <Badge variant="outline" className="gap-1 border-rose-300 text-rose-700">
-                            <ShieldAlert className="h-3 w-3" /> {g.agent_names.length} people working this number: {g.agent_names.join(", ")}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="mt-2 space-y-1.5">
-                        {g.leads.map((ld) => (
-                          <div key={ld.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white/70 px-2 py-1.5">
-                            <div className="text-slate-600">
-                              <span className="font-medium text-slate-800">{ld.name || "(no name)"}</span>
-                              {" — "}{ld.assigned_to_name || "unassigned"} · {fmtDate(ld.created_at)}
-                            </div>
-                            <Button size="sm" variant="outline" disabled={dupBusy}
-                              onClick={() => resolveDuplicateGroup(g.phone, ld.id, ld.name)}
-                              data-testid={`keep-lead-${ld.id}`} className="h-7 gap-1 px-2.5 text-[11px]">
-                              Keep this, delete rest
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
     </div>
   );
 }
