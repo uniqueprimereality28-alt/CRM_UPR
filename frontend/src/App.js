@@ -9,6 +9,7 @@ import Login from "./pages/Login";
 import AdminDashboard from "./pages/AdminDashboard";
 import AgentDashboard from "./pages/AgentDashboard";
 import Leads from "./pages/Leads";
+import MyLeads from "./pages/MyLeads";
 import LeadDetail from "./pages/LeadDetail";
 import Agents from "./pages/Agents";
 import AgentDetail from "./pages/AgentDetail";
@@ -68,6 +69,15 @@ function App() {
               element={
                 <Protected roles={["superadmin", "admin", "team_lead", "sales", "hr"]}>
                   <Leads />
+                </Protected>
+              }
+            />
+
+            <Route
+              path="/my-leads"
+              element={
+                <Protected roles={["superadmin", "admin", "team_lead", "hr"]}>
+                  <MyLeads />
                 </Protected>
               }
             />
