@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, Users, Contact, PhoneCall, LogOut, Menu, X,
   AlarmClock, MapPin, MessagesSquare, Settings as SettingsIcon,
-  UserCog, Building2, User,
+  UserCog, Building2, User, FileBarChart2,
 } from "lucide-react";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
@@ -45,6 +45,7 @@ export const Layout = ({ children }) => {
     (!attendanceExempt) && { to: "/attendance", label: "Attendance", icon: MapPin, id: "nav-attendance" },
     isManager && { to: "/team-attendance", label: "Team Attendance", icon: Building2, id: "nav-team-attendance" },
     { to: "/chat", label: "Team Chat", icon: MessagesSquare, id: "nav-chat", badge: alertCount },
+    isAdmin && { to: "/reports", label: "Reports", icon: FileBarChart2, id: "nav-reports" },
     isAdmin && { to: "/settings", label: "Settings", icon: SettingsIcon, id: "nav-settings" },
     { to: "/profile", label: "Profile", icon: UserCog, id: "nav-profile" },
   ].filter(Boolean);
