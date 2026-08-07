@@ -8,6 +8,7 @@ import os
 import csv
 import io
 import math
+import re
 import asyncio
 import logging
 import uuid
@@ -28,7 +29,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 
 # --- NEW IMPORT for PDF report generation ---
-from reports_pdf import generate_daily_report_pdf
+from reports_pdf import generate_daily_report_pdf, generate_period_report_pdf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crm")
@@ -2368,6 +2369,180 @@ async def daily_report_pdf(admin: dict = Depends(require_admin), tz_offset: int 
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
+# ---------------- Admin Reports Dashboard (Today / Yesterday / Weekly / Monthly) ----------------
+# Purely additive — reads existing collections (leads, calls, activities, users),
+# no schema changes, no migrations, nothing here alters any other route's behaviour.
+PERIOD_TITLES = {
+    "today": "Today's Report",
+    "yesterday": "Yesterday's Report",
+    "weekly": "Weekly Report",
+    "monthly": "Monthly Report",
+}
+
+
+def _period_bounds(period: str, tz_offset: int = 0):
+    """Returns (start_utc_iso, end_utc_iso, date_range_label, pdf_filename)."""
+    utc_now = datetime.now(timezone.utc)
+    local_now = utc_now - timedelta(minutes=tz_offset)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = local_midnight + timedelta(minutes=tz_offset)  # UTC instant of local midnight
+
+    if period == "today":
+        start, end = today_start, utc_now
+        label = local_now.strftime("%d %b %Y")
+        filename = f"TodayReport_{local_now.strftime('%d-%m-%Y')}.pdf"
+    elif period == "yesterday":
+        start, end = today_start - timedelta(days=1), today_start
+        y_local = local_now - timedelta(days=1)
+        label = y_local.strftime("%d %b %Y")
+        filename = f"YesterdayReport_{y_local.strftime('%d-%m-%Y')}.pdf"
+    elif period == "weekly":
+        start = today_start - timedelta(days=6)
+        end = utc_now
+        start_local = local_now - timedelta(days=6)
+        label = f"{start_local.strftime('%d %b')} \u2013 {local_now.strftime('%d %b %Y')}"
+        filename = f"WeeklyReport_{start_local.strftime('%d-%m')}_to_{local_now.strftime('%d-%m')}.pdf"
+    elif period == "monthly":
+        start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=tz_offset)
+        end = utc_now
+        label = local_now.strftime("%B %Y")
+        filename = f"MonthlyReport_{local_now.strftime('%B_%Y')}.pdf"
+    else:
+        raise HTTPException(status_code=400, detail="period must be one of: today, yesterday, weekly, monthly")
+    return start.isoformat(), end.isoformat(), label, filename
+
+
+_STATUS_TO_RE = re.compile(r"to (\w+)$")
+
+
+async def _build_period_report(period: str, tz_offset: int = 0) -> dict:
+    start_iso, end_iso, label, filename = _period_bounds(period, tz_offset)
+    now = datetime.now(timezone.utc)
+
+    all_users = await db.users.find({}).to_list(3000)
+    id2name = {str(u["_id"]): u.get("name") for u in all_users}
+    roster = [u for u in all_users if u.get("role") in {ROLE_SALES, ROLE_TL, ROLE_ADMIN, ROLE_SUPER}]
+
+    def blank_row(name, role):
+        return {"name": name, "role": role, "new_leads": 0, "calls": 0, "talk_time": 0,
+                "followups_completed": 0, "site_visits": 0, "bookings": 0, "bookings_value": 0,
+                "meetings": 0, "lost": 0}
+
+    per_agent: dict = {str(u["_id"]): blank_row(u.get("name"), u.get("role")) for u in roster}
+
+    # Leads created in this period, org-wide (drives "New Leads" KPI + per-agent column)
+    leads_created = await db.leads.find({"created_at": {"$gte": start_iso, "$lt": end_iso}}).to_list(20000)
+    for l in leads_created:
+        aid = l.get("assigned_to")
+        if aid:
+            per_agent.setdefault(aid, blank_row(l.get("assigned_to_name") or id2name.get(aid) or "Unknown", "-"))
+            per_agent[aid]["new_leads"] += 1
+
+    # Completed calls in this period
+    calls = await db.calls.find({"status": "completed",
+                                 "started_at": {"$gte": start_iso, "$lt": end_iso}}).to_list(20000)
+    for c in calls:
+        aid = c.get("agent_id")
+        per_agent.setdefault(aid, blank_row(c.get("agent_name") or id2name.get(aid) or "Unknown", "-"))
+        per_agent[aid]["calls"] += 1
+        per_agent[aid]["talk_time"] += c.get("duration", 0)
+
+    # Full lead map (for looking up budget on won/booked leads below) — org-wide, current snapshot
+    all_leads = await db.leads.find({}).to_list(20000)
+    leads_by_id = {str(l["_id"]): l for l in all_leads}
+
+    # Status-change activities in this period drive Site Visits / Bookings / Lost
+    status_acts = await db.activities.find({"type": "status_change",
+                                            "created_at": {"$gte": start_iso, "$lt": end_iso}}).to_list(20000)
+    for act in status_acts:
+        m = _STATUS_TO_RE.search(act.get("message", ""))
+        if not m:
+            continue
+        to_status = m.group(1)
+        aid = act.get("actor_id")
+        if not aid:
+            continue
+        per_agent.setdefault(aid, blank_row(act.get("actor_name") or id2name.get(aid) or "Unknown", "-"))
+        if to_status == "site_visit":
+            per_agent[aid]["site_visits"] += 1
+        elif to_status == "won":
+            per_agent[aid]["bookings"] += 1
+            lead = leads_by_id.get(act.get("lead_id"))
+            per_agent[aid]["bookings_value"] += (lead.get("budget") or 0) if lead else 0
+        elif to_status == "lost":
+            per_agent[aid]["lost"] += 1
+
+    # Follow-up activities in this period drive Follow-ups Completed / Meetings (visit_scheduled)
+    fu_acts = await db.activities.find({"type": "followup",
+                                        "created_at": {"$gte": start_iso, "$lt": end_iso}}).to_list(20000)
+    for act in fu_acts:
+        aid = act.get("actor_id")
+        if not aid:
+            continue
+        msg = act.get("message", "")
+        per_agent.setdefault(aid, blank_row(act.get("actor_name") or id2name.get(aid) or "Unknown", "-"))
+        if msg == "Follow-up completed":
+            per_agent[aid]["followups_completed"] += 1
+        elif msg == "Follow-up status: visit_scheduled":
+            per_agent[aid]["meetings"] += 1
+
+    agent_rows = [{"agent_id": aid, **row} for aid, row in per_agent.items()
+                  if any(row[k] for k in ("new_leads", "calls", "followups_completed", "site_visits",
+                                          "bookings", "meetings", "lost")) or row["role"] != "-"]
+    agent_rows.sort(key=lambda r: (r["calls"], r["new_leads"]), reverse=True)
+
+    totals = {k: sum(r[k] for r in agent_rows) for k in
+              ("new_leads", "calls", "talk_time", "followups_completed", "site_visits",
+               "bookings", "bookings_value", "meetings", "lost")}
+
+    # Current full pipeline snapshot (all-time, not period-bound) — standard status-wise breakdown
+    by_status = {s: 0 for s in LEAD_STATUSES}
+    for l in all_leads:
+        by_status[l.get("status", "new")] = by_status.get(l.get("status", "new"), 0) + 1
+
+    overdue_followups = await db.leads.count_documents({"follow_up_at": {"$ne": None, "$lt": now.isoformat()}})
+
+    return {
+        "period": period,
+        "title": PERIOD_TITLES.get(period, "Report"),
+        "date_range": label,
+        "generated_at": now.isoformat(),
+        "filename": filename,
+        "summary": {
+            "new_leads": len(leads_created),
+            "calls": len(calls),
+            "talk_time": sum(c.get("duration", 0) for c in calls),
+            "followups_completed": totals["followups_completed"],
+            "site_visits": totals["site_visits"],
+            "meetings": totals["meetings"],
+            "bookings": totals["bookings"],
+            "bookings_value": totals["bookings_value"],
+            "lost": totals["lost"],
+            "overdue_followups": overdue_followups,
+        },
+        "status_breakdown": [{"status": s, "label": s.replace("_", " ").title(), "count": c}
+                             for s, c in by_status.items()],
+        "salespeople": agent_rows,
+        "totals": totals,
+    }
+
+
+@api.get("/reports/period/summary")
+async def period_report_summary(period: str, admin: dict = Depends(require_admin), tz_offset: int = 0):
+    return await _build_period_report(period, tz_offset)
+
+
+@api.get("/reports/period/pdf")
+async def period_report_pdf(period: str, admin: dict = Depends(require_admin), tz_offset: int = 0):
+    report = await _build_period_report(period, tz_offset)
+    pdf_bytes = generate_period_report_pdf(report)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{report["filename"]}"'},
     )
 
 
