@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  FileDown, Loader2, Contact, PhoneCall, Timer, AlarmClock, MapPin, Users,
+  Loader2, Contact, PhoneCall, Timer, AlarmClock, MapPin, Users,
   Trophy, XCircle, CalendarClock, ShieldAlert,
 } from "lucide-react";
 import { api, fmtDuration, fmtMoney, STATUS_META } from "../lib/api";
@@ -13,14 +13,6 @@ const PERIODS = [
   { v: "weekly", label: "Weekly" },
   { v: "monthly", label: "Monthly" },
 ];
-
-// Same base-URL pattern the Daily Report card already uses for its PDF link —
-// the browser sends the "access_token" cookie set at login, so a plain
-// download link works without wiring this through axios.
-const periodReportPdfUrl = (period) => {
-  const base = api.defaults.baseURL?.replace(/\/$/, "") || "";
-  return `${base}/reports/period/pdf?period=${period}&tz_offset=${new Date().getTimezoneOffset()}`;
-};
 
 export default function Reports() {
   const [period, setPeriod] = useState("today");
@@ -58,13 +50,6 @@ export default function Reports() {
             {p.label}
           </button>
         ))}
-        <a
-          href={periodReportPdfUrl(period)}
-          data-testid="report-download-pdf-btn"
-          className="ml-auto inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-dark"
-        >
-          <FileDown className="h-4 w-4" /> Download PDF
-        </a>
       </div>
 
       {report === null && (
