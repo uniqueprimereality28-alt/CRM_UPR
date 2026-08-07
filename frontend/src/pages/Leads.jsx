@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
 import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
+import { InlineEditField } from "../components/InlineEditField";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -541,10 +542,18 @@ export default function Leads() {
                 className={`h-7 gap-1 px-2 text-xs ${l.deal_type === type.v ? type.cls : "text-slate-500"}`}><Flag className="h-3 w-3" />{type.label}</Button>)}
             </div>
             <div className="flex items-start justify-between gap-3">
-              <Link to={`/leads/${l.id}`} className="min-w-0 flex-1" data-testid={`open-lead-${l.id}`}>
-                <div className="text-base font-bold text-slate-900">{l.name || "(no name)"}</div>
-                <div className="mt-1 text-sm text-slate-500">{l.phone}</div>
-              </Link>
+              <div className="min-w-0 flex-1">
+                <InlineEditField
+                  value={l.name}
+                  onSave={(v) => updateLead(l, { name: v }, "Name updated")}
+                  emptyLabel="(no name)"
+                  testId={`lead-name-m-${l.id}`}
+                  displayClassName="text-base font-bold text-slate-900"
+                />
+                <Link to={`/leads/${l.id}`} data-testid={`open-lead-${l.id}`} className="mt-1 block text-sm text-slate-500 hover:text-brand">
+                  {l.phone}
+                </Link>
+              </div>
               <div className="flex items-center gap-2">
                 <a href={waLink(l.phone, l.name)} target="_blank" rel="noreferrer" aria-label={`WhatsApp ${l.name || l.phone}`}
                   data-testid={`wa-send-mobile-${l.id}`} className="rounded-lg bg-emerald-500 p-2.5 text-white">
@@ -582,9 +591,34 @@ export default function Leads() {
                 </div>
               )}
             </div>
-            <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-lg bg-slate-50 p-2.5">
+                <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Budget</div>
+                <InlineEditField
+                  value={l.budget}
+                  type="number"
+                  onSave={(v) => updateLead(l, { budget: v }, "Budget updated")}
+                  formatDisplay={fmtMoney}
+                  emptyLabel="Add budget"
+                  testId={`lead-budget-m-${l.id}`}
+                  displayClassName="text-sm font-semibold text-slate-800"
+                />
+              </div>
+              <div className="rounded-lg bg-slate-50 p-2.5">
+                <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Talk time</div>
+                <div className="px-1 py-0.5 text-sm font-semibold text-slate-800">{fmtDuration(l.total_talk_time)}</div>
+              </div>
+            </div>
+            <div className="mt-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
               <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Remarks</div>
-              <div className="whitespace-pre-wrap break-words">{l.remark || "No remarks added."}</div>
+              <InlineEditField
+                value={l.remark}
+                type="textarea"
+                onSave={(v) => updateLead(l, { remark: v }, "Remark updated")}
+                emptyLabel="No remarks added."
+                testId={`lead-remark-m-${l.id}`}
+                displayClassName="whitespace-pre-wrap break-words text-sm text-slate-700"
+              />
             </div>
           </article>;
         })}
@@ -632,11 +666,19 @@ export default function Leads() {
                     )}
                     <td className="px-4 py-2.5">
                       <div className="flex items-start gap-2">
-                      <Link to={`/leads/${l.id}`} className="block min-w-0 flex-1" data-testid={`open-lead-${l.id}`}>
+                      <div className="min-w-0 flex-1">
                         {l.deal_type && <div className={`mb-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${DEAL_TYPES.find((t) => t.v === l.deal_type)?.cls}`}><Flag className="h-3 w-3" />{DEAL_TYPES.find((t) => t.v === l.deal_type)?.label}</div>}
-                        <div className="font-medium text-slate-800 hover:text-brand">{l.name || "(no name)"}</div>
-                        <div className="text-[11px] text-slate-400">{l.phone} · {l.source}</div>
-                      </Link>
+                        <InlineEditField
+                          value={l.name}
+                          onSave={(v) => updateLead(l, { name: v }, "Name updated")}
+                          emptyLabel="(no name)"
+                          testId={`lead-name-${l.id}`}
+                          displayClassName="font-medium text-slate-800"
+                        />
+                        <Link to={`/leads/${l.id}`} data-testid={`open-lead-${l.id}`} className="mt-0.5 block px-1 text-[11px] text-slate-400 hover:text-brand">
+                          {l.phone} · {l.source}
+                        </Link>
+                      </div>
                       <button type="button" onClick={() => callLead(l)} title="Call now" aria-label={`Call ${l.name || l.phone}`}
                         data-testid={`call-now-${l.id}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light">
                         <PhoneCall className="h-4 w-4" />
@@ -684,8 +726,15 @@ export default function Leads() {
                         <span className="text-slate-600">{l.assigned_to_name}</span>
                       ) : <span className="text-xs font-medium text-amber-600">Unassigned</span>}
                     </td>
-                    <td className="max-w-xs whitespace-pre-wrap break-words px-3 py-2.5 text-slate-600">
-                      {l.remark || <span className="text-slate-300">—</span>}
+                    <td className="max-w-xs px-3 py-2.5 text-slate-600">
+                      <InlineEditField
+                        value={l.remark}
+                        type="textarea"
+                        onSave={(v) => updateLead(l, { remark: v }, "Remark updated")}
+                        emptyLabel="—"
+                        testId={`lead-remark-${l.id}`}
+                        displayClassName="whitespace-pre-wrap break-words"
+                      />
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-center gap-2">
@@ -698,7 +747,17 @@ export default function Leads() {
                           data-testid={`brochure-tick-${l.id}`} title="Brochure sent" />
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-right text-slate-600">{fmtMoney(l.budget)}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <InlineEditField
+                        value={l.budget}
+                        type="number"
+                        onSave={(v) => updateLead(l, { budget: v }, "Budget updated")}
+                        formatDisplay={fmtMoney}
+                        emptyLabel="Add budget"
+                        testId={`lead-budget-${l.id}`}
+                        displayClassName="justify-end text-right text-slate-600"
+                      />
+                    </td>
                     <td className="px-3 py-2.5 text-right font-medium text-slate-800">{fmtDuration(l.total_talk_time)}</td>
                     {isAdmin && (
                       <td className="px-3 py-2.5">
