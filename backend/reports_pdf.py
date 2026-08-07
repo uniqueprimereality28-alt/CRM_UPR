@@ -52,6 +52,7 @@ ROSE = colors.HexColor("#e11d48")
 SUPER_GOLD = colors.HexColor("#b45309")
 SUPER_GOLD_BG = colors.HexColor("#fffbeb")
 SUPER_GOLD_BORDER = colors.HexColor("#fde68a")
+SLATE_800 = colors.HexColor("#1e293b")
 
 # Same fixed categorical palette as the live dashboard donut chart, so the
 # PDF and the app visually match. Cycles if there are more agents than
@@ -337,6 +338,191 @@ def generate_daily_report_pdf(report: dict) -> bytes:
     story.append(Spacer(1, 8))
     story.append(Paragraph(
         "Unique Prime Reality &middot; CRM Daily Report &middot; Generated automatically, no action needed",
+        _footer_style,
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+# ============================================================
+# Admin Reports Dashboard — Today / Yesterday / Weekly / Monthly
+# Additive only: reuses the palette/styles/helpers above, does not
+# touch generate_daily_report_pdf() or anything else in this file.
+# ============================================================
+
+def _money(n):
+    # Base-14 Helvetica has no glyph for the \u20b9 rupee sign, so the PDF
+    # uses "Rs." (matches how the CRM's other exports render currency in PDFs).
+    n = int(n or 0)
+    if n >= 10000000:
+        return f"Rs. {n / 10000000:.2f} Cr"
+    if n >= 100000:
+        return f"Rs. {n / 100000:.2f} L"
+    return f"Rs. {n:,}"
+
+
+def generate_period_report_pdf(report: dict) -> bytes:
+    """Builds the Admin Reports Dashboard PDF for a given period.
+
+    `report` is the dict returned by server.py's _build_period_report():
+    {
+        "title": "Weekly Report", "date_range": "01 Aug \u2013 07 Aug 2026",
+        "generated_at": "2026-08-07T10:15:00+00:00",
+        "summary": {...}, "status_breakdown": [...], "salespeople": [...], "totals": {...},
+    }
+    """
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=16 * mm, bottomMargin=14 * mm,
+        leftMargin=14 * mm, rightMargin=14 * mm,
+        title=f"{report['title']} - {report['date_range']}",
+    )
+    story = []
+
+    gen_at = report["generated_at"]
+    try:
+        from datetime import datetime as _dt
+        gen_label = _dt.fromisoformat(gen_at).strftime("%d %b %Y, %I:%M %p").replace(" 0", " ")
+    except (ValueError, TypeError):
+        gen_label = gen_at
+
+    # Header (logo/brand block, same as the Daily Report)
+    header_tbl = Table(
+        [[Paragraph("UNIQUE PRIME REALITY", _brand_name),
+          Paragraph(f"Generated {gen_label}",
+                    ParagraphStyle("d", parent=_body, alignment=TA_LEFT,
+                                   textColor=SLATE_400, fontSize=8.5))]],
+        colWidths=[130 * mm, 46 * mm],
+    )
+    header_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+    ]))
+    story.append(header_tbl)
+    story.append(Paragraph("PROPERTY CONSULTANTS", _brand_tag))
+    story.append(Spacer(1, 10))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#e2e8f0")))
+    story.append(Spacer(1, 14))
+
+    story.append(Paragraph(report["title"], _h1))
+    story.append(Paragraph(f"For {report['date_range']} &nbsp;\u00b7&nbsp; Admin Reports Dashboard", _sub))
+    story.append(Spacer(1, 18))
+
+    s = report["summary"]
+    kpi_row1 = Table(
+        [[
+            _kpi_card("NEW LEADS", str(s["new_leads"])),
+            _kpi_card("CALLS", str(s["calls"])),
+            _kpi_card("TALK TIME", format_duration(s["talk_time"])),
+            _kpi_card("FOLLOW-UPS DONE", str(s["followups_completed"])),
+        ]],
+        colWidths=[45.5 * mm] * 4,
+    )
+    kpi_row1.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(kpi_row1)
+    story.append(Spacer(1, 8))
+
+    kpi_row2 = Table(
+        [[
+            _kpi_card("SITE VISITS", str(s["site_visits"])),
+            _kpi_card("MEETINGS", str(s["meetings"])),
+            _kpi_card("BOOKINGS (WON)", str(s["bookings"]), accent=colors.HexColor("#059669")),
+            _kpi_card("CLOSED / LOST", str(s["lost"]), accent=ROSE if s["lost"] else SLATE_900),
+        ]],
+        colWidths=[45.5 * mm] * 4,
+    )
+    kpi_row2.setStyle(TableStyle([
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(kpi_row2)
+    story.append(Spacer(1, 6))
+
+    story.append(Paragraph(
+        f'Booking value this period: <b>{_money(s["bookings_value"])}</b>'
+        f'{"  &middot;  <font color=\'#e11d48\'><b>" + str(s["overdue_followups"]) + " overdue</b></font> follow-up(s) need attention" if s["overdue_followups"] else ""}',
+        _body,
+    ))
+    story.append(Spacer(1, 16))
+
+    # Status-wise pipeline snapshot (current, all-time — not period-bound)
+    story.append(Paragraph("Status-wise Lead Distribution &nbsp;<font color='#94a3b8' size='9'>(current full pipeline)</font>",
+                           _section_h))
+    sb = report["status_breakdown"]
+    status_row = [[Paragraph(row["label"], ParagraphStyle("sl", parent=_body, fontSize=8.5, textColor=SLATE_400, alignment=TA_CENTER))
+                   for row in sb]]
+    status_row.append([Paragraph(str(row["count"]), ParagraphStyle("sv", parent=_body, fontSize=13, fontName="Helvetica-Bold",
+                                                                    textColor=SLATE_900, alignment=TA_CENTER))
+                       for row in sb])
+    status_tbl = Table(status_row, colWidths=[178 * mm / len(sb)] * len(sb))
+    status_tbl.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#e2e8f0")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("BACKGROUND", (0, 0), (-1, 0), SLATE_100),
+    ]))
+    story.append(status_tbl)
+    story.append(Spacer(1, 18))
+
+    # Salesperson-wise table — names come straight from the CRM user database
+    people = report["salespeople"]
+    story.append(Paragraph(
+        f"Salesperson-wise Performance &nbsp;<font color='#94a3b8' size='9'>({len(people)} people)</font>",
+        _section_h))
+
+    header = ["Salesperson", "New\nLeads", "Calls", "Talk time", "Follow-\nups", "Site\nVisits",
+               "Meet-\nings", "Book-\nings", "Booking value", "Lost"]
+    rows = [header]
+    for p in people:
+        rows.append([
+            p["name"] or "Unknown", str(p["new_leads"]), str(p["calls"]), format_duration(p["talk_time"]),
+            str(p["followups_completed"]), str(p["site_visits"]), str(p["meetings"]), str(p["bookings"]),
+            _money(p["bookings_value"]), str(p["lost"]),
+        ])
+    t = report["totals"]
+    rows.append(["Total", str(t["new_leads"]), str(t["calls"]), format_duration(t["talk_time"]),
+                str(t["followups_completed"]), str(t["site_visits"]), str(t["meetings"]), str(t["bookings"]),
+                _money(t["bookings_value"]), str(t["lost"])])
+
+    if len(people) == 0:
+        rows = [header, ["No activity in this period", "0", "0", "0s", "0", "0", "0", "0", _money(0), "0"]]
+
+    col_widths = [34 * mm, 14 * mm, 12 * mm, 20 * mm, 14 * mm, 13 * mm, 14 * mm, 13 * mm, 24 * mm, 12 * mm]
+    tbl = Table(rows, colWidths=col_widths, repeatRows=1)
+    n = len(rows) - 2
+    style_cmds = [
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7),
+        ("TEXTCOLOR", (0, 0), (-1, 0), SLATE_400),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8), ("TOPPADDING", (0, 0), (-1, 0), 4),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor("#e2e8f0")),
+        ("FONTNAME", (0, 1), (-1, -2), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -2), 8.5),
+        ("TEXTCOLOR", (0, 1), (0, -2), SLATE_800),
+        ("TEXTCOLOR", (1, 1), (-1, -2), SLATE_600),
+        ("TOPPADDING", (0, 1), (-1, -2), 6), ("BOTTOMPADDING", (0, 1), (-1, -2), 6),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, -1), (-1, -1), 8.5),
+        ("TEXTCOLOR", (0, -1), (-1, -1), SLATE_900),
+        ("TOPPADDING", (0, -1), (-1, -1), 8), ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+        ("LINEABOVE", (0, -1), (-1, -1), 0.75, colors.HexColor("#e2e8f0")),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+    ]
+    for i in range(1, max(n, 0) + 1):
+        if i % 2 == 0:
+            style_cmds.append(("BACKGROUND", (0, i), (-1, i), SLATE_100))
+    tbl.setStyle(TableStyle(style_cmds))
+    story.append(tbl)
+
+    story.append(Spacer(1, 24))
+    story.append(HRFlowable(width="100%", thickness=0.75, color=colors.HexColor("#e2e8f0")))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        f"Unique Prime Reality &middot; CRM {report['title']} &middot; Generated by the Admin Reports Dashboard",
         _footer_style,
     ))
 
