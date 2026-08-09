@@ -2710,6 +2710,14 @@ async def root():
 
 app.include_router(api)
 
+# --- AI Voice Calling agent (real outbound calls) — Vranda-only feature.
+# Imported down here (not at the top of the file) because ai_calling.py
+# does `from server import db, get_current_user, ...`, which needs those
+# names to already exist in this module by the time it's imported.
+from ai_calling import ai_router, ai_public_router
+app.include_router(ai_router)
+app.include_router(ai_public_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
