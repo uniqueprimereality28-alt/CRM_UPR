@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Bell, X, Users, Megaphone, AlarmClock, Inbox,
+  Bell, X, Users, Megaphone, AlarmClock, Inbox, MessageCircle,
 } from "lucide-react";
 import { api, fmtDate } from "../lib/api";
 
@@ -12,7 +12,7 @@ const SEEN_KEY = "upr_notif_seen";
 // touches the layout underneath it — same pattern as ReminderBell/OfflineBanner.
 export const NotificationBar = () => {
   const [open, setOpen] = useState(false);
-  const [data, setData] = useState({ leads_assigned_count: 0, leads_assigned: [], alerts: [], followups: [] });
+  const [data, setData] = useState({ leads_assigned_count: 0, leads_assigned: [], alerts: [], followups: [], messages: [] });
   const [loaded, setLoaded] = useState(false);
   const navigate = useNavigate();
   const lastSeenRef = useRef(Number(localStorage.getItem(SEEN_KEY) || 0));
@@ -40,9 +40,10 @@ export const NotificationBar = () => {
   const unseenLeads = data.leads_assigned.filter((l) => isNew(l.assigned_at)).length;
   const unseenAlerts = data.alerts.filter((a) => isNew(a.created_at)).length;
   const dueFollowups = data.followups.filter((f) => isDue(f.follow_up_at)).length;
-  const badgeCount = unseenLeads + unseenAlerts + dueFollowups;
+  const unseenMessages = (data.messages || []).filter((m) => isNew(m.created_at)).length;
+  const badgeCount = unseenLeads + unseenAlerts + dueFollowups + unseenMessages;
 
-  const hasAny = data.leads_assigned.length > 0 || data.alerts.length > 0 || data.followups.length > 0;
+  const hasAny = data.leads_assigned.length > 0 || data.alerts.length > 0 || data.followups.length > 0 || (data.messages || []).length > 0;
 
   const togglePanel = () => {
     const next = !open;
@@ -57,6 +58,11 @@ export const NotificationBar = () => {
   const openLead = (id) => {
     setOpen(false);
     navigate(`/leads/${id}`);
+  };
+
+  const openChat = (groupId) => {
+    setOpen(false);
+    navigate(`/chat?open=${groupId}`);
   };
 
   return (
@@ -108,6 +114,37 @@ export const NotificationBar = () => {
 
           {loaded && hasAny && (
             <>
+              {/* Chat messages */}
+              <section>
+                <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
+                  <MessageCircle className="h-3.5 w-3.5" /> Messages
+                </div>
+                {(data.messages || []).length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-xs text-slate-400">
+                    No new messages.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {data.messages.map((m) => (
+                      <button
+                        key={m.group_id}
+                        onClick={() => openChat(m.group_id)}
+                        data-testid={`notif-message-${m.group_id}`}
+                        className="flex w-full flex-col gap-0.5 rounded-lg border border-slate-100 px-3 py-2 text-left text-xs hover:bg-slate-50"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate font-medium text-slate-700">
+                            {m.is_dm ? `${m.from_name} has a new message for you` : `New message in ${m.thread_label} from ${m.from_name}`}
+                          </span>
+                          <span className="shrink-0 text-slate-400">{fmtDate(m.created_at)}</span>
+                        </div>
+                        {m.text && <span className="truncate text-slate-400">{m.text}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+
               {/* Leads assigned */}
               <section>
                 <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500">
