@@ -364,6 +364,11 @@ class MessageCreate(BaseModel):
     text: str
 
 
+def _dm_key(id_a: str, id_b: str) -> str:
+    """Order-independent key for a 1:1 direct-message thread between two user ids."""
+    return "|".join(sorted([str(id_a), str(id_b)]))
+
+
 class AlertCreate(BaseModel):
     message: str
     target: str = "all"  # "all" | role | user_id
@@ -373,7 +378,12 @@ class AlertCreate(BaseModel):
 
 # ---------------- Storage (local disk) ----------------
 STORAGE_APP_PREFIX = "upr-crm"
-STORAGE_ROOT = Path(__file__).parent / "storage"
+# Defaults to the same "backend/storage" folder as before — local dev and any
+# existing deployment that hasn't set STORAGE_DIR keep working exactly as-is.
+# On Railway, attach a Volume and set STORAGE_DIR to its mount path (e.g.
+# "/data/storage") so avatars and call recordings survive redeploys instead
+# of living on the container's ephemeral disk.
+STORAGE_ROOT = Path(os.environ.get("STORAGE_DIR") or (Path(__file__).parent / "storage"))
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -607,6 +617,25 @@ async def list_users(user: dict = Depends(get_current_user), role: Optional[str]
         query["_id"] = user["_id"]
     docs = await db.users.find(query).sort("created_at", -1).to_list(2000)
     return [UserPublic.from_mongo(d) for d in docs]
+
+
+@api.get("/users/directory")
+async def users_directory(user: dict = Depends(get_current_user)):
+    """Every active profile in the company, regardless of role hierarchy —
+    used to pick who to start a direct message with. Chat is intentionally
+    open across the whole org (unlike lead/attendance visibility), so this
+    endpoint does NOT apply the team/role scoping that GET /users does."""
+    docs = await db.users.find({"active": True}).sort("name", 1).to_list(2000)
+    return [
+        {
+            "id": str(d["_id"]),
+            "name": d.get("name"),
+            "username": d.get("username"),
+            "role": d.get("role"),
+            "avatar_url": d.get("avatar_url"),
+        }
+        for d in docs if str(d["_id"]) != str(user["_id"])
+    ]
 
 
 def _validate_role_creation(creator_role: str, target_role: str):
@@ -1927,16 +1956,78 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
     }
 
 
-# ---------------- Team chat / groups ----------------
+# ---------------- Team chat / groups / direct messages ----------------
 @api.get("/groups")
 async def list_groups(user: dict = Depends(get_current_user)):
-    docs = await db.groups.find({"member_ids": str(user["_id"])}).sort("created_at", -1).to_list(200)
+    uid = str(user["_id"])
+    docs = await db.groups.find({"member_ids": uid}).sort("created_at", -1).to_list(200)
+    # For DM threads, look up the other member's live profile so the name/avatar/role
+    # shown in the sidebar always reflects their current profile, not a stale snapshot.
+    other_ids = set()
+    for d in docs:
+        if d.get("is_dm"):
+            for m in d.get("member_ids", []):
+                if m != uid:
+                    other_ids.add(m)
+    other_users = {}
+    if other_ids:
+        other_docs = await db.users.find({"_id": {"$in": [ObjectId(i) for i in other_ids]}}).to_list(500)
+        other_users = {str(u["_id"]): u for u in other_docs}
+
     for d in docs:
         d["_id"] = str(d["_id"])
         last = await db.messages.find_one({"group_id": str(d["_id"])}, sort=[("created_at", -1)])
         d["last_message"] = last.get("text") if last else None
         d["last_at"] = last.get("created_at") if last else d.get("created_at")
+        if d.get("is_dm"):
+            other_id = next((m for m in d.get("member_ids", []) if m != uid), None)
+            other = other_users.get(other_id) if other_id else None
+            if other:
+                d["name"] = other.get("name")
+                d["dm_user_id"] = str(other["_id"])
+                d["dm_username"] = other.get("username")
+                d["dm_role"] = other.get("role")
+                d["dm_avatar_url"] = other.get("avatar_url")
     return docs
+
+
+@api.post("/dm/{other_user_id}")
+async def start_dm(other_user_id: str, user: dict = Depends(get_current_user)):
+    """Find-or-create the 1:1 direct-message thread between the caller and
+    another profile. Any active profile can DM any other active profile —
+    chat is deliberately not restricted by role/team hierarchy."""
+    uid = str(user["_id"])
+    if other_user_id == uid:
+        raise HTTPException(status_code=400, detail="You can't message yourself")
+    other = await db.users.find_one({"_id": ObjectId(other_user_id)})
+    if not other or not other.get("active", True):
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    key = _dm_key(uid, other_user_id)
+    existing = await db.groups.find_one({"dm_key": key})
+    if existing:
+        existing["_id"] = str(existing["_id"])
+        existing["name"] = other.get("name")
+        existing["dm_user_id"] = str(other["_id"])
+        existing["dm_username"] = other.get("username")
+        existing["dm_role"] = other.get("role")
+        existing["dm_avatar_url"] = other.get("avatar_url")
+        return existing
+
+    doc = {
+        "name": other.get("name"), "member_ids": [uid, other_user_id],
+        "member_names": [user.get("name"), other.get("name")],
+        "is_dm": True, "dm_key": key,
+        "created_by": uid, "created_by_name": user.get("name"),
+        "created_at": now_iso(),
+    }
+    res = await db.groups.insert_one(doc)
+    doc["_id"] = str(res.inserted_id)
+    doc["dm_user_id"] = str(other["_id"])
+    doc["dm_username"] = other.get("username")
+    doc["dm_role"] = other.get("role")
+    doc["dm_avatar_url"] = other.get("avatar_url")
+    return doc
 
 
 @api.post("/groups")
@@ -2001,6 +2092,22 @@ async def post_message(group_id: str, payload: MessageCreate, user: dict = Depen
     res = await db.messages.insert_one(doc)
     doc["_id"] = str(res.inserted_id)
     return doc
+
+
+@api.delete("/groups/{group_id}")
+async def delete_dm(group_id: str, user: dict = Depends(get_current_user)):
+    """Delete a direct-message thread for both people in it. Group chats are
+    intentionally not deletable here — only 1:1 DMs."""
+    g = await db.groups.find_one({"_id": ObjectId(group_id)})
+    if not g:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if str(user["_id"]) not in g.get("member_ids", []):
+        raise HTTPException(status_code=403, detail="Not a member of this chat")
+    if not g.get("is_dm"):
+        raise HTTPException(status_code=403, detail="Group chats can't be deleted")
+    await db.messages.delete_many({"group_id": group_id})
+    await db.groups.delete_one({"_id": ObjectId(group_id)})
+    return {"ok": True}
 
 
 # ---------------- Alerts (broadcast) ----------------
@@ -2078,11 +2185,54 @@ async def get_notifications(user: dict = Depends(get_current_user)):
 
     total = len(leads_assigned) + len(alert_docs) + len(followups)
 
+    # 4) New chat messages sent to this profile — one entry per thread
+    # (the latest message someone else sent you), so the bell shows
+    # "<name> has a new message for you" the same way it surfaces alerts.
+    my_groups = await db.groups.find({"member_ids": uid}).to_list(200)
+    other_ids = set()
+    for g in my_groups:
+        if g.get("is_dm"):
+            for m in g.get("member_ids", []):
+                if m != uid:
+                    other_ids.add(m)
+    other_users = {}
+    if other_ids:
+        other_docs = await db.users.find({"_id": {"$in": [ObjectId(i) for i in other_ids]}}).to_list(500)
+        other_users = {str(u["_id"]): u for u in other_docs}
+
+    message_notifs = []
+    for g in my_groups:
+        gid = str(g["_id"])
+        last = await db.messages.find_one({"group_id": gid, "sender_id": {"$ne": uid}}, sort=[("created_at", -1)])
+        if not last:
+            continue
+        if g.get("is_dm"):
+            other_id = next((m for m in g.get("member_ids", []) if m != uid), None)
+            other = other_users.get(other_id) if other_id else None
+            from_name = other.get("name") if other else last.get("sender_name")
+            thread_label = from_name
+        else:
+            from_name = last.get("sender_name")
+            thread_label = g.get("name")
+        message_notifs.append({
+            "group_id": gid,
+            "is_dm": bool(g.get("is_dm")),
+            "from_name": from_name,
+            "thread_label": thread_label,
+            "text": last.get("text"),
+            "created_at": last.get("created_at"),
+        })
+    message_notifs.sort(key=lambda m: m["created_at"] or "", reverse=True)
+    message_notifs = message_notifs[:30]
+
+    total += len(message_notifs)
+
     return {
         "leads_assigned_count": leads_assigned_count,
         "leads_assigned": leads_assigned,
         "alerts": alert_docs,
         "followups": followups,
+        "messages": message_notifs,
         "total": total,
     }
 
@@ -2582,6 +2732,7 @@ async def startup():
     await db.attendance.create_index([("user_id", 1), ("date", 1)], unique=True)
     await db.attendance.create_index("date")
     await db.messages.create_index([("group_id", 1), ("created_at", 1)])
+    await db.groups.create_index("dm_key", unique=True, sparse=True)
     await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
 
     # ONE-TIME PURGE — delete all demo/seed data on first boot of this release.
