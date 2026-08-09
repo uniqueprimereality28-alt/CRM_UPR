@@ -39,6 +39,12 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 JWT_ALGORITHM = "HS256"
+# How long a login session lasts before the user must enter their password
+# again. Defaults to 30 days (720 hours) so sales/field staff stay logged in
+# on their phones like a normal app, instead of being kicked out daily.
+# Override with the JWT_EXPIRE_HOURS env var on Render if you want it shorter
+# (e.g. "168" for 7 days) or longer.
+JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "720"))
 LEAD_STATUSES = ["new", "contacted", "qualified", "site_visit", "negotiation", "won", "lost"]
 FOLLOWUP_STATUSES = ["interested", "visit_scheduled", "not_interested", "callback", "converted"]
 LEAD_TAGS = ["hot", "raw", "warm", "cold", "resale", "rent"]  # base tags; custom strings allowed too
@@ -403,7 +409,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_access_token(user_id: str, username: str, role: str) -> str:
     payload = {
         "sub": user_id, "username": username, "role": role, "type": "access",
-        "exp": datetime.now(timezone.utc) + timedelta(hours=12),
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
     }
     return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm=JWT_ALGORITHM)
 
@@ -496,7 +502,8 @@ async def login(payload: LoginRequest, response: Response):
     token = create_access_token(str(user["_id"]), user["username"], user["role"])
     secure = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
     response.set_cookie("access_token", token, httponly=True, secure=secure,
-                        samesite="none" if secure else "lax", max_age=43200, path="/")
+                        samesite="none" if secure else "lax",
+                        max_age=JWT_EXPIRE_HOURS * 3600, path="/")
     await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login": now_iso()}})
     return {"access_token": token, "user": UserPublic.from_mongo(user)}
 
