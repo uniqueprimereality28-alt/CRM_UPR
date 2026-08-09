@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MapPin, Save, Loader2, Building2, ShieldCheck, AlertTriangle, RotateCcw } from "lucide-react";
+import { MapPin, Save, Loader2, Building2, ShieldCheck, AlertTriangle, RotateCcw, Bot, Link2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDate } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -12,7 +12,7 @@ import {
 } from "../components/ui/alert-dialog";
 
 export default function Settings() {
-  const { user } = useAuth();
+  const { user, isVranda } = useAuth();
   const isSuperadmin = user?.role === "superadmin";
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -20,9 +20,40 @@ export default function Settings() {
   const [resetBusy, setResetBusy] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
 
+  // Voice-agent (real AI calling) connection — Vranda-only, stored in the
+  // CRM's own database via /api/ai/calls/real/settings, so it can be set
+  // straight from this page with no backend code edits or redeploy.
+  const [vaForm, setVaForm] = useState(null);
+  const [vaBusy, setVaBusy] = useState(false);
+  const [vaSecret, setVaSecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+
   useEffect(() => {
     api.get("/settings").then((r) => setForm(r.data)).catch(() => setForm(false));
-  }, []);
+    if (isVranda) {
+      api.get("/ai/calls/real/settings")
+        .then((r) => setVaForm(r.data))
+        .catch(() => setVaForm(false));
+    }
+  }, [isVranda]);
+
+  const saveVoiceAgent = async (e) => {
+    e.preventDefault();
+    if (!vaForm?.voice_agent_url) return toast.error("Enter the voice-agent URL first");
+    setVaBusy(true);
+    try {
+      await api.post("/ai/calls/real/settings", {
+        voice_agent_url: vaForm.voice_agent_url,
+        voice_agent_shared_secret: vaSecret || undefined,
+      });
+      toast.success("Voice-agent connection saved");
+      const { data } = await api.get("/ai/calls/real/settings");
+      setVaForm(data);
+      setVaSecret("");
+    } catch (e2) {
+      toast.error(apiError(e2.response?.data?.detail));
+    } finally { setVaBusy(false); }
+  };
   const save = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -204,6 +235,69 @@ export default function Settings() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+      </div>
+      )}
+
+      {/* Real AI voice-calling agent connection — Vranda-only */}
+      {isVranda && (
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-6 shadow-sm">
+        <div className="flex items-center gap-2 text-lg font-semibold text-emerald-800">
+          <Bot className="h-5 w-5" /> AI Voice Calling Agent
+        </div>
+        <p className="mt-2 max-w-2xl text-sm text-emerald-800/80">
+          This connects the CRM to your separately-deployed voice-agent service (the one that
+          actually places phone calls). Paste its URL and shared secret here — no code edits or
+          backend redeploy needed. This section and the "Call now (real)" button are visible only
+          on your account.
+        </p>
+
+        {vaForm === null ? (
+          <div className="mt-4"><Loader2 className="h-4 w-4 animate-spin text-emerald-700" /></div>
+        ) : vaForm === false ? (
+          <p className="mt-4 text-sm text-rose-600">Could not load voice-agent settings.</p>
+        ) : (
+          <form onSubmit={saveVoiceAgent} className="mt-4 max-w-xl space-y-3">
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5" /> Voice-agent URL</Label>
+              <Input
+                data-testid="voice-agent-url"
+                placeholder="https://your-voice-agent.onrender.com"
+                value={vaForm.voice_agent_url || ""}
+                onChange={(e) => setVaForm({ ...vaForm, voice_agent_url: e.target.value })}
+              />
+              <div className="text-[11px] text-emerald-700/70">
+                Currently: {vaForm.voice_agent_url ? <code>{vaForm.voice_agent_url}</code> : "not set"}
+                {" "}({vaForm.source === "database" ? "set from this page" : vaForm.source === "env" ? "set via backend env var" : "unset"})
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Shared secret</Label>
+              <div className="relative">
+                <Input
+                  data-testid="voice-agent-secret"
+                  type={showSecret ? "text" : "password"}
+                  placeholder={vaForm.secret_configured ? "•••••••• (already set — leave blank to keep it)" : "paste the same secret you set on the voice-agent"}
+                  value={vaSecret}
+                  onChange={(e) => setVaSecret(e.target.value)}
+                  className="pr-9"
+                />
+                <button type="button" onClick={() => setShowSecret((s) => !s)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-700/60 hover:text-emerald-700">
+                  {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <div className="text-[11px] text-emerald-700/70">
+                {vaForm.secret_configured ? "A secret is currently set." : "No secret set yet — real calling won't work until one is."}
+                {" "}Must exactly match VOICE_AGENT_SHARED_SECRET on the voice-agent service.
+              </div>
+            </div>
+            <Button type="submit" disabled={vaBusy} data-testid="save-voice-agent-btn"
+              className="gap-2 bg-emerald-700 hover:bg-emerald-800">
+              {vaBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Save connection
+            </Button>
+          </form>
+        )}
       </div>
       )}
     </div>
