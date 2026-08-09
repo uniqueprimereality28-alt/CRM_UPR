@@ -30,10 +30,6 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
         run: python backend/scripts/backup_db.py
 
-      - name: Remove backups older than 30 days
-        run: |
-          find backups -maxdepth 1 -type d -name "20*" -mtime +30 -exec rm -rf {} \;
-
       - name: Commit and push backup
         run: |
           git config user.name "crm-backup-bot"
