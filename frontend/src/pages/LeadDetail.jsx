@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft, Phone, PhoneOff, Loader2, Mail, MapPin, Wallet, Building2, Clock,
-  MessageSquarePlus, CircleDot, UserCog, Mic, MicOff, PhoneForwarded,
-  AlarmClock, Check, MessageCircle, Flag,
+  MessageSquarePlus, CircleDot, UserCog, Mic, MicOff, PhoneForwarded, PhoneCall,
+  AlarmClock, Check, MessageCircle, Flag, Bot, Sparkles, Eye, Loader2 as Spin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, telHref, STATUS_META, STATUSES } from "../lib/api";
+import { tempMeta } from "../lib/ai";
+import { TranscriptDialog } from "../components/ai/TranscriptDialog";
 import { useAuth } from "../context/AuthContext";
 import { RecordingPlayer } from "../components/RecordingPlayer";
 import { Button } from "../components/ui/button";
@@ -49,7 +51,7 @@ const pickMime = () => {
 
 export default function LeadDetail() {
   const { id } = useParams();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isVranda } = useAuth();
   const [data, setData] = useState(null);
   const [agents, setAgents] = useState([]);
   const [note, setNote] = useState("");
@@ -64,6 +66,9 @@ export default function LeadDetail() {
   const [followUpAt, setFollowUpAt] = useState("");
   const [followUpNote, setFollowUpNote] = useState("");
   const [panelFu, setPanelFu] = useState("");
+  const [aiOpen, setAiOpen] = useState(null);
+  const [aiRunning, setAiRunning] = useState(false);
+  const [realCallRunning, setRealCallRunning] = useState(false);
   const timer = useRef(null);
   const mediaRef = useRef(null);
   const chunksRef = useRef([]);
@@ -262,6 +267,35 @@ export default function LeadDetail() {
       load();
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
+    }
+  };
+
+  const runAiCall = async () => {
+    setAiRunning(true);
+    try {
+      const { data } = await api.post("/ai/calls/run", { lead_id: id });
+      toast.success(`AI call done · ${data.temperature?.toUpperCase()} (${data.intent_score} pts)`);
+      load();
+      setAiOpen(data.call_id);
+    } catch (e) {
+      toast.error(apiError(e.response?.data?.detail));
+    } finally {
+      setAiRunning(false);
+    }
+  };
+
+  // Places a REAL phone call via the voice-agent microservice. The result
+  // is not immediate — the call happens live, and the CRM updates once the
+  // voice-agent posts the finished transcript back to /ai/calls/ingest.
+  const runRealCall = async () => {
+    setRealCallRunning(true);
+    try {
+      const { data } = await api.post("/ai/calls/real/trigger", { lead_id: id });
+      toast.success(`Dialing ${lead.name || "lead"} now — call is live (uuid: ${data.call_uuid || "pending"})`);
+    } catch (e) {
+      toast.error(apiError(e.response?.data?.detail));
+    } finally {
+      setRealCallRunning(false);
     }
   };
 
@@ -492,6 +526,93 @@ export default function LeadDetail() {
             </div>
           </div>
 
+          {/* AI Calling insights — Vranda-only feature, hidden entirely for everyone else */}
+          {isVranda && (
+          <div className="rounded-xl border border-brand/20 bg-white shadow-sm" data-testid="ai-insights-card">
+            <div className="flex items-center justify-between border-b border-slate-200 p-5">
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+                <Bot className="h-5 w-5 text-brand" /> AI Calling
+              </h3>
+              {lead.ai_temperature && (() => {
+                const m = tempMeta(lead.ai_temperature);
+                return (
+                  <Badge variant="outline" className={`${m.cls} px-2.5 py-0.5`} data-testid="ai-temp-badge">
+                    <span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${m.dot}`} />{m.label} · {lead.ai_intent_score} pts
+                  </Badge>
+                );
+              })()}
+            </div>
+            <div className="space-y-4 p-5">
+              {lead.ai_summary ? (
+                <>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-sm text-slate-700">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Last call summary</div>
+                    {lead.ai_summary}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    {[["BHK", lead.ai_bhk], ["Budget", lead.ai_bhk && fmtMoney(lead.budget)], ["Location", lead.ai_location_preference], ["Possession", lead.ai_possession_timeline], ["Parking", lead.ai_parking], ["Urgency", lead.ai_urgency_score ? `${lead.ai_urgency_score}/10` : null]].map(([k, v]) => (
+                      <div key={k} className="rounded-lg border border-slate-100 bg-white p-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{k}</div>
+                        <div className="mt-0.5 font-medium text-slate-800">{v || "—"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {lead.ai_human_transfer_required && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700">
+                        <PhoneForwarded className="h-3 w-3" /> Transfer to Vranda · {lead.ai_transfer_target_number}
+                      </span>
+                    )}
+                    {lead.ai_whatsapp_status === "sent" && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                        <MessageCircle className="h-3 w-3" /> WhatsApp sent
+                      </span>
+                    )}
+                    {lead.ai_next_followup_at && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+                        <AlarmClock className="h-3 w-3" /> Follow-up {fmtDate(lead.ai_next_followup_at)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {lead.ai_transcript_ref && (
+                      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setAiOpen(lead.ai_transcript_ref)} data-testid="view-ai-transcript-btn">
+                        <Eye className="h-3.5 w-3.5" /> View transcript
+                      </Button>
+                    )}
+                    {isVranda && (
+                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={aiRunning} onClick={runAiCall} data-testid="run-ai-call-btn">
+                        {aiRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Re-run AI call (simulated)
+                      </Button>
+                    )}
+                    {isVranda && (
+                      <Button size="sm" variant="outline" className="gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
+                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now (real)
+                      </Button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="text-center">
+                  <p className="text-sm text-slate-500">No AI call yet for this lead.</p>
+                  <div className="mt-3 flex flex-wrap justify-center gap-2">
+                    {isVranda && (
+                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={aiRunning} onClick={runAiCall} data-testid="run-ai-call-btn">
+                        {aiRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Run AI call now (simulated)
+                      </Button>
+                    )}
+                    {isVranda && (
+                      <Button size="sm" variant="outline" className="gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
+                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now (real)
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          )}
+
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 p-5">
               <h3 className="text-lg font-semibold text-slate-900">Call history</h3>
@@ -575,6 +696,8 @@ export default function LeadDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TranscriptDialog callId={aiOpen} open={!!aiOpen} onOpenChange={(v) => !v && setAiOpen(null)} />
     </div>
   );
 }
