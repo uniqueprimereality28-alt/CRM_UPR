@@ -1,0 +1,11 @@
+fastapi==0.110.1
+uvicorn[standard]==0.25.0
+websockets==12.0
+httpx==0.27.0
+pydantic==2.13.4
+python-multipart==0.0.32
+plivo==4.62.0
+faster-whisper==1.2.1
+edge-tts==7.2.8
+webrtcvad==2.0.10
+pydub==0.25.1
