@@ -22,9 +22,9 @@
     "attendance_exempt": true,
     "joining_date": "2020-04-01",
     "wfh": false,
-    "last_login": "2026-08-08T10:20:03.246768+00:00",
+    "last_login": "2026-08-09T13:03:15.428997+00:00",
     "date_of_birth": "1986-10-27",
-    "avatar_url": "/api/avatars/6a708520d17689b86fe37834-8db72f17.jpg",
+    "avatar_url": "/api/avatars/6a708520d17689b86fe37834-096a3255.jpg",
     "password_changed_at": "2026-08-05T06:59:50.357473+00:00"
   },
   {
@@ -53,8 +53,8 @@
     "password_hash": "$2b$12$mOsmiZE50jD7hr1V92PRD.3g0qgCs3Hb73A6AJf00VD6frgYYCZtK",
     "created_at": "2026-08-04T09:54:06.722757+00:00",
     "created_by": "6a708520d17689b86fe37834",
-    "last_login": "2026-08-09T06:24:19.958179+00:00",
-    "avatar_url": "/api/avatars/6a71b6be0ec2a6851431a347-27e86ed8.jpg",
+    "last_login": "2026-08-09T18:37:02.219424+00:00",
+    "avatar_url": "/api/avatars/6a71b6be0ec2a6851431a347-d8e49680.jpg",
     "joining_date_edits": 1,
     "password_changed_at": "2026-08-05T04:53:07.021653+00:00"
   },
@@ -85,7 +85,7 @@
     "password_hash": "$2b$12$fO/BBFUMqQc8F76R.bdKXeRmelrV2yUyksHJkR5Xpq280zymcEHX6",
     "created_at": "2026-08-04T12:16:44.790747+00:00",
     "created_by": "6a71b6be0ec2a6851431a347",
-    "last_login": "2026-08-09T05:38:17.665869+00:00"
+    "last_login": "2026-08-09T10:26:44.339667+00:00"
   },
   {
     "_id": "6a71d8838b1be7c94028289f",
@@ -143,7 +143,7 @@
     "password_hash": "$2b$12$UugsfOIBg9BpxpBLvyQL.ubvKvkkTNmrYjBmBMgLUrgfL0LXFglPO",
     "created_at": "2026-08-04T12:29:11.795084+00:00",
     "created_by": "6a71b6be0ec2a6851431a347",
-    "last_login": "2026-08-09T06:10:28.757902+00:00",
+    "last_login": "2026-08-09T16:32:50.647653+00:00",
     "avatar_url": "/api/avatars/6a71db178b1be7c9402828a0-90796093.jpg"
   },
   {
@@ -349,7 +349,7 @@
     "password_hash": "$2b$12$lynCagQ0956CRTdGctfBheH45HcscdHYEcB3JnKONYJBMuElKfFiS",
     "created_at": "2026-08-06T06:16:50.481237+00:00",
     "created_by": "6a71b6be0ec2a6851431a347",
-    "last_login": "2026-08-08T15:47:14.083450+00:00",
+    "last_login": "2026-08-09T14:10:31.428538+00:00",
     "avatar_url": "/api/avatars/6a7426d2c22e7551cb8cb23a-f6b84e2a.jpg"
   }
 ]

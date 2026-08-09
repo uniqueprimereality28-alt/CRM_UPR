@@ -681,7 +681,13 @@
     "expected_end_at": "2026-08-09T12:30:00+00:00",
     "late_seconds": 2317,
     "status": "present",
-    "created_at": "2026-08-09T05:38:37.674241+00:00"
+    "created_at": "2026-08-09T05:38:37.674241+00:00",
+    "check_out_at": "2026-08-09T12:43:44.417916+00:00",
+    "check_out_distance_m": 64,
+    "check_out_lat": 28.5044013,
+    "check_out_lng": 77.0058019,
+    "overtime_seconds": 824,
+    "worked_seconds": 25506
   },
   {
     "_id": "6a78132437f081aa0b317df4",
@@ -726,6 +732,37 @@
     "expected_end_at": "2026-08-09T12:30:00+00:00",
     "late_seconds": 2442,
     "status": "present",
-    "created_at": "2026-08-09T06:10:42.678919+00:00"
+    "created_at": "2026-08-09T06:10:42.678919+00:00",
+    "check_out_at": "2026-08-09T13:02:50.403768+00:00",
+    "check_out_distance_m": 60,
+    "check_out_lat": 28.50439052815242,
+    "check_out_lng": 77.00575490750943,
+    "overtime_seconds": 1970,
+    "worked_seconds": 24727
+  },
+  {
+    "_id": "6a788a5dcbd429759443407c",
+    "user_id": "6a7426d2c22e7551cb8cb23a",
+    "user_name": "Amit Nindaniya",
+    "user_role": "sales",
+    "team_lead_id": null,
+    "date": "2026-08-09",
+    "check_in_at": "2026-08-09T14:10:37.763389+00:00",
+    "check_in_lat": 28.5044263,
+    "check_in_lng": 77.0057912,
+    "check_in_distance_m": 66,
+    "check_in_accuracy_m": 17.983999252319336,
+    "check_in_wfh": false,
+    "expected_start_at": "2026-08-09T05:00:00+00:00",
+    "expected_end_at": "2026-08-09T13:30:00+00:00",
+    "late_seconds": 33037,
+    "status": "present",
+    "created_at": "2026-08-09T14:10:37.763389+00:00",
+    "check_out_at": "2026-08-09T14:10:56.821841+00:00",
+    "check_out_distance_m": 66,
+    "check_out_lat": 28.5044305,
+    "check_out_lng": 77.0057942,
+    "overtime_seconds": 2456,
+    "worked_seconds": 19
   }
 ]
