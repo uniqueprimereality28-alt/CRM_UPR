@@ -1,0 +1,15 @@
+{
+  "backed_up_at": "2026-08-09T07:09:29.694487Z",
+  "collections": {
+    "activities": 2895,
+    "notifications": 0,
+    "attendance": 36,
+    "calls": 936,
+    "settings": 3,
+    "leads": 976,
+    "messages": 2,
+    "groups": 1,
+    "login_attempts": 6,
+    "users": 12
+  }
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "_id": "6a708521d17689b86fe37835",
+    "name": "All Hands",
+    "member_ids": [
+      "6a708520d17689b86fe37834",
+      "6a70851ed17689b86fe37833"
+    ],
+    "member_names": [
+      "Sandeep Chauhan",
+      "Vranda Aggarwal"
+    ],
+    "created_by": "6a708520d17689b86fe37834",
+    "created_by_name": "Sandeep Chauhan",
+    "created_at": "2026-08-03T12:10:09.743717+00:00"
+  }
+]
