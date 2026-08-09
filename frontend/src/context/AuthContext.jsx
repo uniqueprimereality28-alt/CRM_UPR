@@ -53,12 +53,15 @@ export function AuthProvider({ children }) {
   const attendanceExempt = !!user?.attendance_exempt;
   const isWFH = !!user?.wfh;
   const mustMarkAttendance = user && !attendanceExempt;
+  // The AI voice-calling agent is exclusive to Vranda's account specifically
+  // (not just anyone with the "superadmin" role) — gate any AI-agent UI on this.
+  const isVranda = user?.username === "vranda.aggarwal";
 
   return (
     <AuthContext.Provider value={{
       user, loading, login, logout, refresh,
       isAdmin, isTL, isSales, isEmployee, isHR, isManager,
-      canViewAll, canEditAll, mustMarkAttendance, attendanceExempt, isWFH,
+      canViewAll, canEditAll, mustMarkAttendance, attendanceExempt, isWFH, isVranda,
     }}>
       {children}
     </AuthContext.Provider>
