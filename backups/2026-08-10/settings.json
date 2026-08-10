@@ -1,0 +1,20 @@
+[
+  {
+    "_id": "seed_purged_v2",
+    "at": "2026-08-03T12:10:04.634367+00:00"
+  },
+  {
+    "_id": "office",
+    "office_lat": 28.50394377569241,
+    "office_lng": 77.00539390675101,
+    "office_radius_m": 100,
+    "office_start": "11:00",
+    "office_end": "18:00",
+    "office_label": "Unique Prime Reality"
+  },
+  {
+    "_id": "operational_reset",
+    "reset_at": "2026-08-04T11:08:59.028025+00:00",
+    "reset_by": "Vranda Aggarwal"
+  }
+]
