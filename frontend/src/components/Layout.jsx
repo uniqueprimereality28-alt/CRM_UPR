@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import {
   LayoutDashboard, Users, Contact, PhoneCall, LogOut, Menu, X,
   AlarmClock, MapPin, MessagesSquare, Settings as SettingsIcon,
-  UserCog, Building2, User, FileBarChart2,
+  UserCog, Building2, User, FileBarChart2, Bot,
 } from "lucide-react";
 import { Brand } from "./Brand";
 import { ReminderBell } from "./ReminderBell";
@@ -14,7 +14,7 @@ import { api, assetUrl } from "../lib/api";
 import { Button } from "./ui/button";
 
 export const Layout = ({ children }) => {
-  const { user, logout, isAdmin, isTL, isEmployee, isManager, attendanceExempt } = useAuth();
+  const { user, logout, isAdmin, isTL, isEmployee, isManager, attendanceExempt, isVranda } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
@@ -46,6 +46,7 @@ export const Layout = ({ children }) => {
     isManager && { to: "/team-attendance", label: "Team Attendance", icon: Building2, id: "nav-team-attendance" },
     { to: "/chat", label: "Team Chat", icon: MessagesSquare, id: "nav-chat", badge: alertCount },
     isAdmin && { to: "/reports", label: "Reports", icon: FileBarChart2, id: "nav-reports" },
+    isVranda && { to: "/ai-calling", label: "AI Calling", icon: Bot, id: "nav-ai-calling" },
     isAdmin && { to: "/settings", label: "Settings", icon: SettingsIcon, id: "nav-settings" },
     { to: "/profile", label: "Profile", icon: UserCog, id: "nav-profile" },
   ].filter(Boolean);
