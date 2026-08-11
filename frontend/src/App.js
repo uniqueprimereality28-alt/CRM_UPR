@@ -21,6 +21,7 @@ import Reports from "./pages/Reports";
 import Chat from "./pages/Chat";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
+import AICalling from "./pages/AICalling";
 
 const Splash = () => (
   <div className="grid min-h-screen place-items-center">
@@ -28,11 +29,13 @@ const Splash = () => (
   </div>
 );
 
-const Protected = ({ children, roles }) => {
+const Protected = ({ children, roles, usernames }) => {
   const { user, loading } = useAuth();
   if (loading) return <Splash />;
   if (!user) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(user.role))
+    return <Navigate to="/dashboard" replace />;
+  if (usernames && !usernames.includes(user.username))
     return <Navigate to="/dashboard" replace />;
   return <Layout>{children}</Layout>;
 };
@@ -178,6 +181,15 @@ function App() {
               element={
                 <Protected roles={["superadmin", "admin"]}>
                   <Settings />
+                </Protected>
+              }
+            />
+
+            <Route
+              path="/ai-calling"
+              element={
+                <Protected usernames={["vranda.aggarwal"]}>
+                  <AICalling />
                 </Protected>
               }
             />
