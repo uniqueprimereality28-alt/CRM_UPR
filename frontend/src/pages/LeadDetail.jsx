@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft, Phone, PhoneOff, Loader2, Mail, MapPin, Wallet, Building2, Clock,
   MessageSquarePlus, CircleDot, UserCog, Mic, MicOff, PhoneForwarded, PhoneCall,
-  AlarmClock, Check, MessageCircle, Flag, Bot, Sparkles, Eye, Loader2 as Spin,
+  AlarmClock, Check, MessageCircle, Flag, Bot, Eye, Loader2 as Spin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, telHref, STATUS_META, STATUSES } from "../lib/api";
@@ -67,7 +67,6 @@ export default function LeadDetail() {
   const [followUpNote, setFollowUpNote] = useState("");
   const [panelFu, setPanelFu] = useState("");
   const [aiOpen, setAiOpen] = useState(null);
-  const [aiRunning, setAiRunning] = useState(false);
   const [realCallRunning, setRealCallRunning] = useState(false);
   const timer = useRef(null);
   const mediaRef = useRef(null);
@@ -267,20 +266,6 @@ export default function LeadDetail() {
       load();
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
-    }
-  };
-
-  const runAiCall = async () => {
-    setAiRunning(true);
-    try {
-      const { data } = await api.post("/ai/calls/run", { lead_id: id });
-      toast.success(`AI call done · ${data.temperature?.toUpperCase()} (${data.intent_score} pts)`);
-      load();
-      setAiOpen(data.call_id);
-    } catch (e) {
-      toast.error(apiError(e.response?.data?.detail));
-    } finally {
-      setAiRunning(false);
     }
   };
 
@@ -581,13 +566,8 @@ export default function LeadDetail() {
                       </Button>
                     )}
                     {isVranda && (
-                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={aiRunning} onClick={runAiCall} data-testid="run-ai-call-btn">
-                        {aiRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Re-run AI call (simulated)
-                      </Button>
-                    )}
-                    {isVranda && (
-                      <Button size="sm" variant="outline" className="gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
-                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now (real)
+                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
+                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now
                       </Button>
                     )}
                   </div>
@@ -597,13 +577,8 @@ export default function LeadDetail() {
                   <p className="text-sm text-slate-500">No AI call yet for this lead.</p>
                   <div className="mt-3 flex flex-wrap justify-center gap-2">
                     {isVranda && (
-                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={aiRunning} onClick={runAiCall} data-testid="run-ai-call-btn">
-                        {aiRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Run AI call now (simulated)
-                      </Button>
-                    )}
-                    {isVranda && (
-                      <Button size="sm" variant="outline" className="gap-1.5 border-emerald-300 text-emerald-700 hover:bg-emerald-50" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
-                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now (real)
+                      <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={realCallRunning} onClick={runRealCall} data-testid="run-real-call-btn">
+                        {realCallRunning ? <Spin className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />} Call now
                       </Button>
                     )}
                   </div>
