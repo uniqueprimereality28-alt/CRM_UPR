@@ -31,6 +31,7 @@ class CallSession:
         self.lead = call_context.get("lead", {})
         self.agent = call_context.get("agent", {})
         self.inventory = call_context.get("inventory", [])
+        self.prior_summary = call_context.get("prior_summary")
         self.on_finished_callback = call_context.get("on_finished")
 
         self.vad = webrtcvad.Vad(2)  # 0-3, higher = more aggressive filtering
@@ -103,7 +104,7 @@ class CallSession:
     async def _respond(self, ws, customer_text: str):
         self.turn_count += 1
         reply = await llm.live_turn(self.agent, self.lead, self.inventory,
-                                    self.history[:-1], customer_text)
+                                    self.history[:-1], customer_text, self.prior_summary)
         self.history.append({"speaker": "agent", "text": reply})
         logger.info(f"[{self.stream_id}] agent: {reply}")
         await self._send_tts(ws, reply)
