@@ -666,34 +666,72 @@ async def assign_leads(campaign_id: str, payload: AssignLeadsIn, user: dict = De
 
 
 @ai_router.post("/campaigns/{campaign_id}/run")
-async def run_campaign(campaign_id: str, payload: RunIn, user: dict = Depends(require_admin)):
+async def run_campaign(campaign_id: str, payload: RunIn, user: dict = Depends(require_vranda_only)):
+    """Places REAL outbound calls (via the voice-agent microservice) for the
+    next N queued leads in this campaign. This is asynchronous — a call
+    takes minutes to actually happen, so this endpoint only STARTS the
+    dials and marks each queue item 'calling'. Each queue item is moved to
+    'done' later, automatically, when that lead's real call finishes and
+    the voice-agent reports back via /calls/ingest (see _finalize_call)."""
+    voice_agent_url, voice_agent_secret = await _get_voice_agent_config()
+    if not voice_agent_url or not voice_agent_secret:
+        raise HTTPException(
+            500,
+            "Real calling is not configured yet. Go to Settings and paste the "
+            "voice-agent URL + shared secret first.",
+        )
     c = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
     if not c:
         raise HTTPException(404, "Campaign not found")
     agent = await _get_agent(c.get("agent_id"))
-    rules = await _get_scoring_rules()
     inventory = await db.ai_inventory.find().to_list(500)
     if not inventory:
         inventory = DEFAULT_INVENTORY
 
     limit = max(1, min(payload.limit, 20))
     queued = await db.ai_queue.find({"campaign_id": campaign_id, "status": "queued"}).limit(limit).to_list(limit)
-    results = []
-    for q in queued:
-        lead = await db.leads.find_one({"_id": ObjectId(q["lead_id"])})
-        if not lead:
-            await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {"status": "skipped"}})
-            continue
-        res = await _run_single_call(lead, agent, rules, inventory, None, c, user)
-        await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {
-            "status": "done", "disposition": res["disposition"], "temperature": res["temperature"],
-            "intent_score": res["intent_score"], "done_at": now_iso(),
-        }, "$inc": {"attempts": 1}})
-        results.append({"lead_name": q.get("lead_name"), "disposition": res["disposition"],
-                        "temperature": res["temperature"], "intent_score": res["intent_score"],
-                        "call_id": res["call_id"]})
+
+    import httpx
+    dialing, failed = [], []
+    async with httpx.AsyncClient(timeout=20) as client:
+        for q in queued:
+            lead = await db.leads.find_one({"_id": ObjectId(q["lead_id"])})
+            if not lead or not lead.get("phone"):
+                await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {"status": "skipped"}})
+                continue
+            body = {
+                "lead_id": str(lead["_id"]), "lead_name": lead.get("name"), "phone": lead.get("phone"),
+                "city": lead.get("city"), "property_interest": lead.get("property_interest"),
+                "budget": lead.get("budget"), "remark": lead.get("remark"), "campaign_id": campaign_id,
+                "agent": {
+                    "name": agent.get("name"), "voice_gender": agent.get("voice_gender", "female"),
+                    "voice_accent": agent.get("voice_accent"), "language_style": agent.get("language_style", "formal_hinglish"),
+                    "personality": agent.get("personality"), "intro_line": agent.get("intro_line"),
+                    "guardrails": agent.get("guardrails"),
+                },
+                "inventory": inventory,
+            }
+            try:
+                resp = await client.post(f"{voice_agent_url}/trigger", json=body,
+                                         headers={"X-Voice-Agent-Secret": voice_agent_secret})
+                resp.raise_for_status()
+                data = resp.json()
+                await db.ai_queue.update_one({"_id": q["_id"]}, {
+                    "$set": {"status": "calling", "call_uuid": data.get("call_uuid"), "dialed_at": now_iso()},
+                    "$inc": {"attempts": 1},
+                })
+                await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
+                    "assigned_agent_type": "ai", "ai_call_status": "dialing",
+                    "ai_call_uuid": data.get("call_uuid"), "updated_at": now_iso(),
+                }})
+                dialing.append({"lead_name": q.get("lead_name"), "call_uuid": data.get("call_uuid")})
+            except httpx.HTTPError as e:
+                logger.error(f"campaign dial failed for lead {q.get('lead_id')}: {e}")
+                failed.append({"lead_name": q.get("lead_name"), "error": str(e)})
+
     remaining = await db.ai_queue.count_documents({"campaign_id": campaign_id, "status": "queued"})
-    return {"processed": len(results), "remaining": remaining, "results": results}
+    return {"dialing": len(dialing), "failed": len(failed), "remaining": remaining,
+            "results": dialing, "failures": failed}
 
 
 # ---------------- Single call / recall (SIMULATED) ----------------
@@ -906,6 +944,16 @@ async def ingest_real_call(payload: CallIngestIn,
                       "call_uuid": payload.call_uuid}},
         )
     await db.leads.update_one({"_id": lead["_id"]}, {"$set": {"ai_call_status": "called"}})
+
+    # If this call came from a campaign queue, close the loop on that queue
+    # item now that we actually know the outcome (real calls are async, so
+    # /campaigns/{id}/run couldn't know this at dial time).
+    if payload.campaign_id:
+        await db.ai_queue.update_one(
+            {"campaign_id": payload.campaign_id, "lead_id": payload.lead_id, "status": "calling"},
+            {"$set": {"status": "done", "disposition": res["disposition"], "temperature": res["temperature"],
+                      "intent_score": res["intent_score"], "done_at": now_iso()}},
+        )
     return res
 
 
@@ -948,21 +996,60 @@ async def list_followups(status: Optional[str] = None, user: dict = Depends(get_
 
 
 @ai_router.post("/followups/{fu_id}/recall")
-async def recall_followup(fu_id: str, user: dict = Depends(require_admin)):
+async def recall_followup(fu_id: str, user: dict = Depends(require_vranda_only)):
+    """Places a REAL call back to a lead whose follow-up came due, carrying
+    forward the prior call's summary as context for the voice-agent."""
     fu = await db.ai_followups.find_one({"_id": ObjectId(fu_id)})
     if not fu:
         raise HTTPException(404, "Follow-up not found")
     lead = await db.leads.find_one({"_id": ObjectId(fu["lead_id"])})
     if not lead:
         raise HTTPException(404, "Lead not found")
+    if not lead.get("phone"):
+        raise HTTPException(400, "Lead has no phone number")
+    voice_agent_url, voice_agent_secret = await _get_voice_agent_config()
+    if not voice_agent_url or not voice_agent_secret:
+        raise HTTPException(
+            500,
+            "Real calling is not configured yet. Go to Settings and paste the "
+            "voice-agent URL + shared secret first.",
+        )
     agent = await _get_agent(None)
-    rules = await _get_scoring_rules()
     inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
-    res = await _run_single_call(lead, agent, rules, inventory, None, None, user,
-                                 prior_context=fu.get("prior_summary"))
-    await db.ai_followups.update_one({"_id": ObjectId(fu_id)},
-                                     {"$set": {"status": "done", "done_at": now_iso()}})
-    return res
+
+    import httpx
+    body = {
+        "lead_id": str(lead["_id"]), "lead_name": lead.get("name"), "phone": lead.get("phone"),
+        "city": lead.get("city"), "property_interest": lead.get("property_interest"),
+        "budget": lead.get("budget"), "remark": lead.get("remark"),
+        "prior_summary": fu.get("prior_summary"),
+        "agent": {
+            "name": agent.get("name"), "voice_gender": agent.get("voice_gender", "female"),
+            "voice_accent": agent.get("voice_accent"), "language_style": agent.get("language_style", "formal_hinglish"),
+            "personality": agent.get("personality"), "intro_line": agent.get("intro_line"),
+            "guardrails": agent.get("guardrails"),
+        },
+        "inventory": inventory,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(f"{voice_agent_url}/trigger", json=body,
+                                     headers={"X-Voice-Agent-Secret": voice_agent_secret})
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as e:
+        logger.error(f"followup recall dial failed: {e}")
+        raise HTTPException(502, f"Could not reach voice-agent service: {e}")
+
+    await db.ai_followups.update_one(
+        {"_id": ObjectId(fu_id)},
+        {"$set": {"status": "calling", "dialed_at": now_iso(), "call_uuid": data.get("call_uuid")}},
+    )
+    await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
+        "assigned_agent_type": "ai", "ai_call_status": "dialing",
+        "ai_call_uuid": data.get("call_uuid"), "updated_at": now_iso(),
+    }})
+    return {"ok": True, "call_uuid": data.get("call_uuid"), "status": "dialing"}
 
 
 @ai_router.post("/followups/{fu_id}/done")
