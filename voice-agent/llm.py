@@ -24,12 +24,19 @@ import config
 logger = logging.getLogger("voice-agent.llm")
 
 
-def _system_prompt(agent: dict, lead: dict, inventory: list[dict]) -> str:
+def _system_prompt(agent: dict, lead: dict, inventory: list[dict], prior_summary: str | None = None) -> str:
     inv_txt = "\n".join(
         f"- {p.get('project')} | {p.get('location')} | {p.get('config')} | "
         f"{p.get('price_range')} | possession {p.get('possession')} | {p.get('highlights', '')}"
         for p in inventory
     ) or "- (no inventory uploaded)"
+
+    prior_txt = (
+        f"\nCONTEXT FROM A PREVIOUS CALL WITH THIS LEAD: {prior_summary}\n"
+        f"This is a FOLLOW-UP call — acknowledge you spoke before, don't re-introduce "
+        f"yourself as if this is the first contact, and pick up from where things were left.\n"
+        if prior_summary else ""
+    )
 
     return (
         f"You are {agent.get('name', 'Simran')}, a female AI tele-calling assistant for "
@@ -43,7 +50,8 @@ def _system_prompt(agent: dict, lead: dict, inventory: list[dict]) -> str:
         f"Goals: greet politely, confirm availability, gauge buying intent, capture requirements "
         f"(property type, BHK, budget, location, parking, possession timeline, callback "
         f"preference), offer to share details on WhatsApp, and offer human transfer to "
-        f"{config.TRANSFER_TARGET_NAME} if the customer is a serious buyer or asks for a person.\n\n"
+        f"{config.TRANSFER_TARGET_NAME} if the customer is a serious buyer or asks for a person.\n"
+        f"{prior_txt}\n"
         f"AVAILABLE INVENTORY:\n{inv_txt}\n\n"
         f"Respond with PLAIN SPOKEN TEXT ONLY — no markdown, no stage directions, no JSON. "
         f"If the customer says goodbye / hangs up intent / clearly ends the call, reply with a "
@@ -81,10 +89,11 @@ async def opening_line(agent: dict) -> str:
 
 
 async def live_turn(agent: dict, lead: dict, inventory: list[dict],
-                    history: list[dict], customer_utterance: str) -> str:
+                    history: list[dict], customer_utterance: str,
+                    prior_summary: str | None = None) -> str:
     """One conversational turn. `history` is a list of {"speaker","text"} dicts
     (the running transcript so far). Returns the agent's next spoken reply."""
-    system = _system_prompt(agent, lead, inventory)
+    system = _system_prompt(agent, lead, inventory, prior_summary)
     messages = [{"role": "system", "content": system}]
     for turn in history:
         role = "assistant" if turn["speaker"] == "agent" else "user"
