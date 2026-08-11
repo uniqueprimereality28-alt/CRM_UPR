@@ -224,6 +224,17 @@ class Lead(BaseDocument):
     reminder_acked: bool = False
     brochure_sent: bool = False
     brochure_sent_at: Optional[str] = None
+    # --- AI voice-calling fields (written by ai_calling.py after a real or
+    # simulated AI call). Without these declared here, FastAPI's response_model
+    # would silently strip them from every /leads API response even though
+    # they're correctly saved in MongoDB — so the frontend would never see
+    # a call summary or temperature, no matter how well the call itself went. ---
+    ai_summary: Optional[str] = None
+    ai_intent_score: Optional[int] = None
+    ai_temperature: Optional[str] = None
+    ai_call_status: Optional[str] = None
+    ai_call_uuid: Optional[str] = None
+    assigned_agent_type: Optional[str] = None
 
 
 class LeadCreate(BaseModel):
