@@ -75,6 +75,7 @@ class TriggerIn(BaseModel):
     budget: Optional[float] = None
     remark: Optional[str] = None
     campaign_id: Optional[str] = None
+    prior_summary: Optional[str] = None  # set on follow-up recalls — gives the LLM context from the last call
     agent: AgentPersona = Field(default_factory=AgentPersona)
     inventory: list[dict] = Field(default_factory=list)
 
@@ -97,6 +98,7 @@ async def trigger_call(payload: TriggerIn, x_voice_agent_secret: Optional[str] =
         "agent": payload.agent.model_dump(),
         "inventory": payload.inventory,
         "campaign_id": payload.campaign_id,
+        "prior_summary": payload.prior_summary,
         "created_at": time.time(),
         "status": "dialing",
     }
