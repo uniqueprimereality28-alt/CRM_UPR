@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
-  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall,
+  AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall, Bot,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
+import { tempMeta } from "../lib/ai";
 import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
 import { InlineEditField, InlineBudgetField } from "../components/InlineEditField";
@@ -44,7 +45,7 @@ const FU_STATUSES = [
 const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" } : null);
 
 export default function Leads() {
-  const { isManager, canViewAll, isAdmin } = useAuth();
+  const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
   const [params, setParams] = useSearchParams();
   const [leads, setLeads] = useState(null);
   const [agents, setAgents] = useState([]);
@@ -676,6 +677,20 @@ export default function Leads() {
                         <Link to={`/leads/${l.id}`} data-testid={`open-lead-${l.id}`} className="mt-0.5 block px-1 text-[11px] text-slate-400 hover:text-brand">
                           {l.phone} · {l.source}
                         </Link>
+                        {isVranda && l.ai_temperature && (
+                          <Link to={`/leads/${l.id}`} title={l.ai_summary || "AI call completed"}
+                            data-testid={`ai-badge-${l.id}`}
+                            className={`mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tempMeta(l.ai_temperature).cls}`}>
+                            <Bot className="h-3 w-3" />
+                            AI: {tempMeta(l.ai_temperature).label}
+                            {typeof l.ai_intent_score === "number" && <span className="opacity-70">· {l.ai_intent_score}pts</span>}
+                          </Link>
+                        )}
+                        {isVranda && !l.ai_temperature && l.ai_call_status === "dialing" && (
+                          <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                            <Bot className="h-3 w-3" /> AI calling…
+                          </span>
+                        )}
                       </div>
                       <button type="button" onClick={() => callLead(l)} title="Call now" aria-label={`Call ${l.name || l.phone}`}
                         data-testid={`call-now-${l.id}`} className="rounded-lg p-1.5 text-brand hover:bg-brand-light">
