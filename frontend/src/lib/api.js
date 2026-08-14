@@ -179,6 +179,13 @@ export function normalizeIndianPhone(phone) {
   return digits;
 }
 
+// A usable number has at least 10 digits once non-digit characters are
+// stripped. Anything shorter (blank, missing, or a data-entry mistake)
+// isn't dialable — callers should check this before building a tel: link.
+export function isCallablePhone(phone) {
+  return normalizeIndianPhone(phone).length >= 10;
+}
+
 export function telHref(phone) {
   return `tel:+${normalizeIndianPhone(phone)}`;
 }
