@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { api, apiError, fmtDuration, telHref } from "../lib/api";
+import { api, apiError, fmtDuration, telHref, isCallablePhone } from "../lib/api";
 
 // One-tap calling: tapping the call icon jumps straight to the phone's
 // dialer — no "start call" screen, no confirmation dialog. The call is
@@ -67,6 +67,15 @@ export function useClickToCall() {
   }, [finishActiveCall]);
 
   const callLead = useCallback(async (lead) => {
+    // Guard against leads with a missing/malformed phone number. Without
+    // this check, the dialer still opens but with nothing after the "+" —
+    // that's the "just a + sign" symptom, and it's a bad-data issue, not a
+    // device issue, which is why only some leads/agents ever hit it.
+    if (!isCallablePhone(lead?.phone)) {
+      toast.error("This lead has no valid phone number saved — please add one before calling.");
+      return;
+    }
+
     if (activeRef.current) await finishActiveCall(); // close out a stale in-progress call, just in case
 
     const startedAt = Date.now();
