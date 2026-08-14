@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import "./App.css";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -5,23 +6,30 @@ import { Layout } from "./components/Layout";
 import { Toaster } from "./components/ui/sonner";
 import { Loader2 } from "lucide-react";
 
+// Loaded eagerly: Login is the very first screen for anyone not signed in,
+// so there's no benefit to splitting it out.
 import Login from "./pages/Login";
-import AdminDashboard from "./pages/AdminDashboard";
-import AgentDashboard from "./pages/AgentDashboard";
-import Leads from "./pages/Leads";
-import MyLeads from "./pages/MyLeads";
-import LeadDetail from "./pages/LeadDetail";
-import Agents from "./pages/Agents";
-import AgentDetail from "./pages/AgentDetail";
-import Calls from "./pages/Calls";
-import Followups from "./pages/Followups";
-import Attendance from "./pages/Attendance";
-import TeamAttendance from "./pages/TeamAttendance";
-import Reports from "./pages/Reports";
-import Chat from "./pages/Chat";
-import Profile from "./pages/Profile";
-import Settings from "./pages/Settings";
-import AICalling from "./pages/AICalling";
+
+// Every other page is loaded lazily, one JS chunk per page instead of one
+// giant bundle. Nothing about how these pages work changes — only when
+// their code is downloaded (on first visit to that route instead of on
+// app load), which is what was making first load slow on mobile.
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+const AgentDashboard = lazy(() => import("./pages/AgentDashboard"));
+const Leads = lazy(() => import("./pages/Leads"));
+const MyLeads = lazy(() => import("./pages/MyLeads"));
+const LeadDetail = lazy(() => import("./pages/LeadDetail"));
+const Agents = lazy(() => import("./pages/Agents"));
+const AgentDetail = lazy(() => import("./pages/AgentDetail"));
+const Calls = lazy(() => import("./pages/Calls"));
+const Followups = lazy(() => import("./pages/Followups"));
+const Attendance = lazy(() => import("./pages/Attendance"));
+const TeamAttendance = lazy(() => import("./pages/TeamAttendance"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Chat = lazy(() => import("./pages/Chat"));
+const Profile = lazy(() => import("./pages/Profile"));
+const Settings = lazy(() => import("./pages/Settings"));
+const AICalling = lazy(() => import("./pages/AICalling"));
 
 const Splash = () => (
   <div className="grid min-h-screen place-items-center">
@@ -55,6 +63,7 @@ function App() {
     <div className="App">
       <BrowserRouter>
         <AuthProvider>
+          <Suspense fallback={<Splash />}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -196,6 +205,7 @@ function App() {
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
+          </Suspense>
 
           <Toaster position="top-right" richColors />
         </AuthProvider>
