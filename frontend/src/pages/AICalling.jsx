@@ -167,12 +167,19 @@ const CallRow = ({ c, onOpen }) => {
 const CallsTab = ({ onOpenCall }) => {
   const [calls, setCalls] = useState(null);
   const [temp, setTemp] = useState("all");
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
 
   const load = useCallback(() => {
     const params = temp === "all" ? {} : { temperature: temp };
     api.get("/ai/calls", { params }).then((r) => setCalls(r.data)).catch(() => setCalls([]));
+    setPage(1);
   }, [temp]);
   useEffect(() => { load(); }, [load]);
+
+  const totalPages = Math.max(1, Math.ceil((calls?.length || 0) / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const visibleCalls = calls?.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return (
     <div className="space-y-4">
@@ -193,7 +200,7 @@ const CallsTab = ({ onOpenCall }) => {
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="divide-y divide-slate-100">
             {calls.length === 0 && <div className="p-6 text-sm text-slate-400">No AI calls in this view.</div>}
-            {calls.map((c) => {
+            {visibleCalls?.map((c) => {
               const meta = tempMeta(c.temperature);
               return (
                 <div key={c.id} className="flex flex-wrap items-center gap-3 px-5 py-3" data-testid={`ai-call-${c.id}`}>
@@ -214,6 +221,21 @@ const CallsTab = ({ onOpenCall }) => {
               );
             })}
           </div>
+          {calls.length > PAGE_SIZE && (
+            <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-slate-100 py-3">
+              <button type="button" disabled={safePage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
+                data-testid="ai-calls-page-prev"
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+                Prev
+              </button>
+              <span className="text-xs text-slate-400">Page {safePage} of {totalPages} · {calls.length} calls</span>
+              <button type="button" disabled={safePage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                data-testid="ai-calls-page-next"
+                className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
