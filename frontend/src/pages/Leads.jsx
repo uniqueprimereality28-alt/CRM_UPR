@@ -49,8 +49,8 @@ export default function Leads() {
   const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
   const [params, setParams] = useSearchParams();
   const [leads, setLeads] = useState(null);
-  const PAGE_SIZE = 30;
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
@@ -92,7 +92,7 @@ export default function Leads() {
     const { data } = await api.get("/leads", { params: q });
     setLeads(data);
     setSelected([]);
-    setVisibleCount(PAGE_SIZE); // reset paging whenever the underlying result set changes
+    setPage(1); // reset to page 1 whenever the underlying result set changes
   }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager]);
 
   useEffect(() => {
@@ -110,11 +110,47 @@ export default function Leads() {
   // Only the DOM-mount cost of the leads actually on screen — this is what was
   // making the list heavy on Android (every lead was rendered twice: once for
   // the mobile card layout, once for the desktop table, both mounted at once
-  // and just hidden with CSS). Rendering is capped to a page at a time; "Load
-  // more" reveals additional pages, and everything above (filters, search,
-  // select-all, export, etc.) keeps working against the full `leads` list.
-  const visibleLeads = useMemo(() => leads?.slice(0, visibleCount), [leads, visibleCount]);
-  const hasMore = (leads?.length || 0) > visibleCount;
+  // and just hidden with CSS). Rendering is capped to one page of 10 at a
+  // time; everything above (filters, search, select-all, export, etc.) keeps
+  // working against the full `leads` list.
+  const totalPages = Math.max(1, Math.ceil((leads?.length || 0) / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const visibleLeads = useMemo(
+    () => leads?.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [leads, safePage]
+  );
+  // Windowed page numbers, e.g. for page 7 of 20: 5 6 7 8 9
+  const pageNumbers = useMemo(() => {
+    const end = Math.min(totalPages, Math.max(5, safePage + 2));
+    const start = Math.max(1, end - 4);
+    const nums = [];
+    for (let i = start; i <= end; i++) nums.push(i);
+    return nums;
+  }, [safePage, totalPages]);
+
+  const pager = leads && leads.length > PAGE_SIZE && (
+    <div className="flex flex-wrap items-center justify-center gap-1.5 py-3">
+      <button type="button" disabled={safePage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
+        data-testid="leads-page-prev"
+        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+        Prev
+      </button>
+      {pageNumbers[0] > 1 && <span className="px-1 text-xs text-slate-400">…</span>}
+      {pageNumbers.map((n) => (
+        <button key={n} type="button" onClick={() => setPage(n)} data-testid={`leads-page-${n}`}
+          className={`h-7 min-w-[1.75rem] rounded-lg px-2 text-xs font-semibold ${n === safePage ? "bg-brand text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+          {n}
+        </button>
+      ))}
+      {pageNumbers[pageNumbers.length - 1] < totalPages && <span className="px-1 text-xs text-slate-400">…</span>}
+      <button type="button" disabled={safePage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        data-testid="leads-page-next"
+        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+        Next
+      </button>
+      <span className="ml-2 text-xs text-slate-400">Page {safePage} of {totalPages} · {leads.length} leads</span>
+    </div>
+  );
   const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
   const createLead = async (e) => {
@@ -634,13 +670,7 @@ export default function Leads() {
             </div>
           </article>;
         })}
-        {hasMore && (
-          <button type="button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-            data-testid="load-more-leads-mobile"
-            className="w-full rounded-xl border border-dashed border-slate-300 bg-white py-3 text-sm font-medium text-slate-500 hover:bg-slate-50">
-            Load more ({visibleLeads.length} of {leads.length})
-          </button>
-        )}
+        {pager}
       </div>
 
       {/* Desktop table */}
@@ -803,13 +833,7 @@ export default function Leads() {
               })}
             </tbody>
           </table>
-          {hasMore && (
-            <button type="button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
-              data-testid="load-more-leads-desktop"
-              className="w-full border-t border-dashed border-slate-200 py-3 text-sm font-medium text-slate-500 hover:bg-slate-50">
-              Load more ({visibleLeads.length} of {leads.length})
-            </button>
-          )}
+          {leads && leads.length > PAGE_SIZE && <div className="border-t border-slate-200">{pager}</div>}
         </div>
       </div>
     </div>
