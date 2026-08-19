@@ -1,0 +1,52 @@
+[
+  {
+    "_id": "6a708521d17689b86fe37835",
+    "name": "All Hands",
+    "member_ids": [
+      "6a708520d17689b86fe37834",
+      "6a70851ed17689b86fe37833"
+    ],
+    "member_names": [
+      "Sandeep Chauhan",
+      "Vranda Aggarwal"
+    ],
+    "created_by": "6a708520d17689b86fe37834",
+    "created_by_name": "Sandeep Chauhan",
+    "created_at": "2026-08-03T12:10:09.743717+00:00"
+  },
+  {
+    "_id": "6a7c76e61dcdf4f1b8976c27",
+    "name": "Unique Prime Reality ",
+    "member_ids": [
+      "6a708520d17689b86fe37834",
+      "6a71b6be0ec2a6851431a347",
+      "6a71d82c8b1be7c94028289e",
+      "6a71d8838b1be7c94028289f",
+      "6a71db178b1be7c9402828a0",
+      "6a72d0de78971e51aeb5cd8f",
+      "6a72d25678971e51aeb5cd91",
+      "6a72e0ad5df930393651f27b",
+      "6a72e8385df930393651f290",
+      "6a72ea715df930393651f291",
+      "6a74224ac22e7551cb8cb1fb",
+      "6a7426d2c22e7551cb8cb23a"
+    ],
+    "member_names": [
+      "Sandeep Chauhan",
+      "Vranda Aggarwal",
+      "Kashish Aggarwal",
+      "Paviter Dahiya",
+      "Aarav Tomar ",
+      "Mohit Yadav",
+      "Amit Kumar",
+      "Rakesh Shanwal",
+      "Dev Sharma",
+      "Manish Singh ",
+      "Raj Prakash",
+      "Amit Nindaniya"
+    ],
+    "created_by": "6a71b6be0ec2a6851431a347",
+    "created_by_name": "Vranda Aggarwal",
+    "created_at": "2026-08-12T13:36:38.170928+00:00"
+  }
+]
