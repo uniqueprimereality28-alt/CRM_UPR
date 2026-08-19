@@ -76,6 +76,12 @@ export default function Leads() {
   const [skipDupes, setSkipDupes] = useState(true);
   const [dupBusy, setDupBusy] = useState(false);
 
+  // Tracks in-flight refetches (filter/search changes) separately from the
+  // very first load, since `leads` stays populated with the old results
+  // while a new request is out -- without this, changing a filter looked
+  // like nothing was happening until the new page suddenly swapped in.
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = useCallback(async () => {
     const q = {};
     if (status !== "all") q.status = status;
@@ -89,10 +95,15 @@ export default function Leads() {
     }
     if (isManager && agentFilter === "unassigned") q.unassigned = true;
     else if (isManager && agentFilter !== "all") q.assigned_to = agentFilter;
-    const { data } = await api.get("/leads", { params: q });
-    setLeads(data);
-    setSelected([]);
-    setPage(1); // reset to page 1 whenever the underlying result set changes
+    setRefreshing(true);
+    try {
+      const { data } = await api.get("/leads", { params: q });
+      setLeads(data);
+      setSelected([]);
+      setPage(1); // reset to page 1 whenever the underlying result set changes
+    } finally {
+      setRefreshing(false);
+    }
   }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager]);
 
   useEffect(() => {
@@ -316,8 +327,9 @@ export default function Leads() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">{isManager ? "All Leads" : "My Leads"}</h1>
-          <p className="mt-1.5 text-sm text-slate-500">
+          <p className="mt-1.5 flex items-center gap-1.5 text-sm text-slate-500">
             {leads ? `${leads.length} leads · ${fmtDuration(totals.talk)} talk time · ${fmtMoney(totals.value)} value` : "Loading…"}
+            {refreshing && leads && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" data-testid="leads-refreshing" />}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
