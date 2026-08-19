@@ -1812,7 +1812,7 @@ async def attendance_user(user_id: str, days: int = 30, actor: dict = Depends(ge
 
 
 @api.put("/attendance/{att_id}")
-async def edit_attendance(att_id: str, payload: AttendanceEdit, actor: dict = Depends(require_super)):
+async def edit_attendance(att_id: str, payload: AttendanceEdit, actor: dict = Depends(require_superadmin_only)):
     row = await db.attendance.find_one({"_id": ObjectId(att_id)})
     if not row:
         raise HTTPException(status_code=404, detail="Attendance record not found")
