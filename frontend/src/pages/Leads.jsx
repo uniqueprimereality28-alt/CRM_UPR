@@ -49,6 +49,8 @@ export default function Leads() {
   const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
   const [params, setParams] = useSearchParams();
   const [leads, setLeads] = useState(null);
+  const PAGE_SIZE = 30;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
@@ -90,6 +92,7 @@ export default function Leads() {
     const { data } = await api.get("/leads", { params: q });
     setLeads(data);
     setSelected([]);
+    setVisibleCount(PAGE_SIZE); // reset paging whenever the underlying result set changes
   }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager]);
 
   useEffect(() => {
@@ -103,6 +106,15 @@ export default function Leads() {
 
   const allSelected = leads?.length > 0 && selected.length === leads.length;
   const toggleAll = () => setSelected(allSelected ? [] : leads.map((l) => l.id));
+
+  // Only the DOM-mount cost of the leads actually on screen — this is what was
+  // making the list heavy on Android (every lead was rendered twice: once for
+  // the mobile card layout, once for the desktop table, both mounted at once
+  // and just hidden with CSS). Rendering is capped to a page at a time; "Load
+  // more" reveals additional pages, and everything above (filters, search,
+  // select-all, export, etc.) keeps working against the full `leads` list.
+  const visibleLeads = useMemo(() => leads?.slice(0, visibleCount), [leads, visibleCount]);
+  const hasMore = (leads?.length || 0) > visibleCount;
   const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
   const createLead = async (e) => {
@@ -536,7 +548,7 @@ export default function Leads() {
       <div className="space-y-3 md:hidden">
         {leads === null && <div className="p-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></div>}
         {leads?.length === 0 && <div className="rounded-xl border bg-white p-10 text-center text-sm text-slate-400">No leads match these filters.</div>}
-        {leads?.map((l) => {
+        {visibleLeads?.map((l) => {
           const tm = tagMeta(l.tag);
           return <article key={l.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`lead-card-${l.id}`}>
             <div className="mb-3 flex gap-2">
@@ -622,6 +634,13 @@ export default function Leads() {
             </div>
           </article>;
         })}
+        {hasMore && (
+          <button type="button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+            data-testid="load-more-leads-mobile"
+            className="w-full rounded-xl border border-dashed border-slate-300 bg-white py-3 text-sm font-medium text-slate-500 hover:bg-slate-50">
+            Load more ({visibleLeads.length} of {leads.length})
+          </button>
+        )}
       </div>
 
       {/* Desktop table */}
@@ -654,7 +673,7 @@ export default function Leads() {
               {leads?.length === 0 && (
                 <tr><td colSpan={11} className="p-10 text-center text-slate-400">No leads match these filters.</td></tr>
               )}
-              {leads?.map((l) => {
+              {visibleLeads?.map((l) => {
                 const tm = tagMeta(l.tag);
                 return (
                   <tr key={l.id} data-testid={`lead-row-${l.id}`} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
@@ -784,6 +803,13 @@ export default function Leads() {
               })}
             </tbody>
           </table>
+          {hasMore && (
+            <button type="button" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+              data-testid="load-more-leads-desktop"
+              className="w-full border-t border-dashed border-slate-200 py-3 text-sm font-medium text-slate-500 hover:bg-slate-50">
+              Load more ({visibleLeads.length} of {leads.length})
+            </button>
+          )}
         </div>
       </div>
     </div>
