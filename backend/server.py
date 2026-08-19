@@ -828,13 +828,21 @@ async def list_leads(
             rng["$lte"] = follow_up_to
         query["follow_up_at"] = rng
     if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"phone": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"city": {"$regex": search, "$options": "i"}},
-            {"remark": {"$regex": search, "$options": "i"}},
-        ]
+        # Phone numbers and partial names are usually typed as substrings
+        # (e.g. last 4 digits), which $text can't match -- keep the regex
+        # fallback for short/numeric-looking queries, but use the indexed
+        # text search for normal name/word searches so typing in the box
+        # doesn't trigger a full collection scan on every keystroke.
+        if len(search) >= 3 and not search.isdigit():
+            query["$text"] = {"$search": search}
+        else:
+            query["$or"] = [
+                {"name": {"$regex": search, "$options": "i"}},
+                {"phone": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+                {"city": {"$regex": search, "$options": "i"}},
+                {"remark": {"$regex": search, "$options": "i"}},
+            ]
     docs = await db.leads.find(query).sort("created_at", -1).to_list(limit)
     return [Lead.from_mongo(d) for d in docs]
 
@@ -2249,27 +2257,71 @@ async def get_notifications(user: dict = Depends(get_current_user)):
 
 
 # ---------------- Dashboards ----------------
-async def _agent_stats(agent_id: str) -> dict:
-    leads = await db.leads.find({"assigned_to": agent_id}).to_list(5000)
-    calls = await db.calls.find({"agent_id": agent_id, "status": "completed"}).to_list(5000)
-    won = len([l for l in leads if l.get("status") == "won"])
-    talk = sum(c.get("duration", 0) for c in calls)
+async def _batch_agent_stats(agent_ids: list[str]) -> dict[str, dict]:
+    """Computes per-agent lead/call stats for MANY agents in two aggregation
+    queries total (one on leads, one on calls), instead of the old approach
+    of two `find()` round trips PER agent. That turned a 50-agent leaderboard
+    into 100+ sequential DB calls; this makes it 2 regardless of agent count.
+    """
     day_start, day_end = _today_bounds_utc()
-    today_calls = [c for c in calls if day_start <= (c.get("started_at") or "") < day_end]
-    return {
-        "leads": len(leads),
-        "won": won,
-        "lost": len([l for l in leads if l.get("status") == "lost"]),
-        "active": len([l for l in leads if l.get("status") not in ("won", "lost")]),
-        "calls": len(calls),
-        "talk_time": talk,
-        "avg_call": int(talk / len(calls)) if calls else 0,
-        "today_calls": len(today_calls),
-        "today_talk_time": sum(c.get("duration", 0) for c in today_calls),
-        "conversion": round(won / len(leads) * 100, 1) if leads else 0.0,
-        "pipeline_value": sum(l.get("budget") or 0 for l in leads if l.get("status") not in ("won", "lost")),
-        "won_value": sum(l.get("budget") or 0 for l in leads if l.get("status") == "won"),
-    }
+    stats = {aid: {"leads": 0, "won": 0, "lost": 0, "active": 0, "calls": 0,
+                   "talk_time": 0, "avg_call": 0, "today_calls": 0,
+                   "today_talk_time": 0, "conversion": 0.0,
+                   "pipeline_value": 0, "won_value": 0} for aid in agent_ids}
+
+    lead_pipeline = [
+        {"$match": {"assigned_to": {"$in": agent_ids}}},
+        {"$group": {
+            "_id": "$assigned_to",
+            "leads": {"$sum": 1},
+            "won": {"$sum": {"$cond": [{"$eq": ["$status", "won"]}, 1, 0]}},
+            "lost": {"$sum": {"$cond": [{"$eq": ["$status", "lost"]}, 1, 0]}},
+            "pipeline_value": {"$sum": {"$cond": [
+                {"$in": ["$status", ["won", "lost"]]}, 0, {"$ifNull": ["$budget", 0]}]}},
+            "won_value": {"$sum": {"$cond": [
+                {"$eq": ["$status", "won"]}, {"$ifNull": ["$budget", 0]}, 0]}},
+        }},
+    ]
+    async for row in db.leads.aggregate(lead_pipeline):
+        aid = row["_id"]
+        if aid not in stats:
+            continue
+        leads, won = row["leads"], row["won"]
+        stats[aid].update({
+            "leads": leads, "won": won, "lost": row["lost"],
+            "active": leads - row["won"] - row["lost"],
+            "pipeline_value": row["pipeline_value"], "won_value": row["won_value"],
+            "conversion": round(won / leads * 100, 1) if leads else 0.0,
+        })
+
+    call_pipeline = [
+        {"$match": {"agent_id": {"$in": agent_ids}, "status": "completed"}},
+        {"$group": {
+            "_id": "$agent_id",
+            "calls": {"$sum": 1},
+            "talk_time": {"$sum": {"$ifNull": ["$duration", 0]}},
+            "today_calls": {"$sum": {"$cond": [
+                {"$and": [{"$gte": ["$started_at", day_start]}, {"$lt": ["$started_at", day_end]}]}, 1, 0]}},
+            "today_talk_time": {"$sum": {"$cond": [
+                {"$and": [{"$gte": ["$started_at", day_start]}, {"$lt": ["$started_at", day_end]}]},
+                {"$ifNull": ["$duration", 0]}, 0]}},
+        }},
+    ]
+    async for row in db.calls.aggregate(call_pipeline):
+        aid = row["_id"]
+        if aid not in stats:
+            continue
+        calls, talk = row["calls"], row["talk_time"]
+        stats[aid].update({
+            "calls": calls, "talk_time": talk,
+            "avg_call": int(talk / calls) if calls else 0,
+            "today_calls": row["today_calls"], "today_talk_time": row["today_talk_time"],
+        })
+    return stats
+
+
+async def _agent_stats(agent_id: str) -> dict:
+    return (await _batch_agent_stats([agent_id]))[agent_id]
 
 
 async def _rank_leaderboard(agents: list) -> list:
@@ -2277,9 +2329,11 @@ async def _rank_leaderboard(agents: list) -> list:
     sorted the same way everywhere (deals won, then talk time), and stamps
     each row with its live rank position so 'who's #1 right now' is
     consistent across the admin dashboard and each agent's own dashboard."""
+    agent_ids = [str(a["_id"]) for a in agents]
+    all_stats = await _batch_agent_stats(agent_ids)
     leaderboard = []
     for a in agents:
-        s = await _agent_stats(str(a["_id"]))
+        s = all_stats[str(a["_id"])]
         leaderboard.append({"agent_id": str(a["_id"]), "name": a["name"], "username": a["username"],
                             "role": a.get("role"), "team_lead_name": a.get("team_lead_name"),
                             "active": a.get("active", True), **s})
@@ -2746,7 +2800,27 @@ async def startup():
     await db.users.create_index("username", unique=True)
     await db.leads.create_index("assigned_to")
     await db.leads.create_index("status")
+    # NEW: created_at is sorted on in almost every /leads query -- without
+    # this index Mongo does an in-memory sort of the whole result set once
+    # the leads collection grows past its 32MB sort buffer.
+    await db.leads.create_index("created_at")
+    # NEW: matches the common "my leads / team leads, newest first" shape
+    # (visibility filter on assigned_to + sort on created_at) in one index.
+    await db.leads.create_index([("assigned_to", 1), ("created_at", -1)])
+    # NEW: follow-up queries filter+sort on this field in several endpoints
+    # (Followups page, today's follow-ups on the dashboard, etc).
+    await db.leads.create_index("follow_up_at")
+    # NEW: text index so search uses an index scan instead of an unanchored
+    # regex $or across 5 fields on every keystroke.
+    await db.leads.create_index(
+        [("name", "text"), ("phone", "text"), ("email", "text"),
+         ("city", "text"), ("remark", "text")],
+        name="leads_search_text",
+    )
     await db.calls.create_index("agent_id")
+    # NEW: calls listings sort on started_at.
+    await db.calls.create_index("started_at")
+    await db.calls.create_index([("agent_id", 1), ("started_at", -1)])
     await db.activities.create_index("lead_id")
     await db.attendance.create_index([("user_id", 1), ("date", 1)], unique=True)
     await db.attendance.create_index("date")
