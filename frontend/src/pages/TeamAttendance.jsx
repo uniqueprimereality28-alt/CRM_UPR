@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Users, UserX, Timer, Award, ClipboardEdit } from "lucide-react";
+import { Loader2, Users, UserX, Timer, Award, ClipboardEdit, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDate, fmtDuration } from "../lib/api";
 import { StatCard } from "../components/StatCard";
@@ -23,8 +23,17 @@ const statusLabel = {
 
 const emptyMarkForm = { user_id: "", date_str: new Date().toISOString().slice(0, 10), status: "present", note: "" };
 
+// ISO timestamp -> value a <input type="datetime-local"> can show, in the
+// browser's local time (IST for this team) rather than UTC.
+function toLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function TeamAttendance() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isVranda } = useAuth();
   const [period, setPeriod] = useState("week");
   const [stats, setStats] = useState(null);
   const [today, setToday] = useState(null);
@@ -32,6 +41,13 @@ export default function TeamAttendance() {
   const [markOpen, setMarkOpen] = useState(false);
   const [markForm, setMarkForm] = useState(emptyMarkForm);
   const [markBusy, setMarkBusy] = useState(false);
+  // In/out time correction — restricted to vranda.aggarwal only (see
+  // require_superadmin_only on PUT /attendance/{id} in the backend).
+  const [editRow, setEditRow] = useState(null);
+  const [editCheckIn, setEditCheckIn] = useState("");
+  const [editCheckOut, setEditCheckOut] = useState("");
+  const [editNote, setEditNote] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   const loadStats = (p) => api.get("/attendance/stats", { params: { period: p } })
     .then((r) => setStats(r.data)).catch(() => setStats(false));
@@ -64,6 +80,37 @@ export default function TeamAttendance() {
     } catch (err) {
       toast.error(apiError(err.response?.data?.detail));
     } finally { setMarkBusy(false); }
+  };
+
+  const openEdit = (r) => {
+    setEditRow(r);
+    setEditCheckIn(toLocalInput(r.check_in_at));
+    setEditCheckOut(toLocalInput(r.check_out_at));
+    setEditNote("");
+  };
+
+  const closeEdit = () => {
+    if (editBusy) return;
+    setEditRow(null);
+  };
+
+  const saveEditTimes = async (e) => {
+    e.preventDefault();
+    if (!editRow?.attendance_id) return;
+    setEditBusy(true);
+    try {
+      await api.put(`/attendance/${editRow.attendance_id}`, {
+        check_in_at: editCheckIn ? new Date(editCheckIn).toISOString() : null,
+        check_out_at: editCheckOut ? new Date(editCheckOut).toISOString() : null,
+        note: editNote || undefined,
+      });
+      toast.success("Attendance time updated");
+      setEditRow(null);
+      loadToday();
+      loadStats(period);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setEditBusy(false); }
   };
 
   const perUser = stats?.per_user || [];
@@ -294,14 +341,15 @@ export default function TeamAttendance() {
                 <th className="px-3 py-2 text-left">Check-in</th>
                 <th className="px-3 py-2 text-left">Check-out</th>
                 <th className="px-4 py-2 text-right">Worked</th>
+                {isVranda && <th className="w-10 px-3 py-2" />}
               </tr>
             </thead>
             <tbody>
               {today === null && (
-                <tr><td colSpan={6} className="p-8 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></td></tr>
+                <tr><td colSpan={isVranda ? 7 : 6} className="p-8 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></td></tr>
               )}
               {today?.rows?.length === 0 && (
-                <tr><td colSpan={6} className="p-8 text-center text-slate-400">No one to show yet.</td></tr>
+                <tr><td colSpan={isVranda ? 7 : 6} className="p-8 text-center text-slate-400">No one to show yet.</td></tr>
               )}
               {today?.rows?.map((r) => {
                 const sl = statusLabel[r.status] || statusLabel.absent;
@@ -315,6 +363,15 @@ export default function TeamAttendance() {
                     <td className="px-3 py-2 text-slate-600">{r.check_in_at ? fmtDate(r.check_in_at) : "—"}</td>
                     <td className="px-3 py-2 text-slate-600">{r.check_out_at ? fmtDate(r.check_out_at) : "—"}</td>
                     <td className="px-4 py-2 text-right font-medium text-slate-800">{r.worked_seconds ? fmtDuration(r.worked_seconds) : "—"}</td>
+                    {isVranda && (
+                      <td className="px-3 py-2 text-right">
+                        <button type="button" onClick={() => openEdit(r)} disabled={!r.attendance_id}
+                          data-testid={`edit-attendance-${r.user_id}`} title={r.attendance_id ? "Correct check-in/out time" : "No attendance record yet today"}
+                          className="rounded p-1 text-slate-300 transition-colors hover:text-brand disabled:cursor-not-allowed disabled:opacity-30">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -322,6 +379,47 @@ export default function TeamAttendance() {
           </table>
         </div>
       </div>
+
+      {/* In/out time correction — vranda.aggarwal only */}
+      <Dialog open={!!editRow} onOpenChange={(open) => !open && closeEdit()}>
+        <DialogContent className="sm:max-w-md" data-testid="edit-attendance-dialog">
+          <DialogHeader>
+            <DialogTitle>Correct check-in / check-out time</DialogTitle>
+          </DialogHeader>
+          {editRow && (
+            <p className="-mt-2 text-sm text-slate-500">
+              {editRow.user_name} · {today?.date}
+            </p>
+          )}
+          <form onSubmit={saveEditTimes} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Check-in</Label>
+                <Input type="datetime-local" data-testid="edit-attendance-checkin"
+                  value={editCheckIn} onChange={(e) => setEditCheckIn(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Check-out</Label>
+                <Input type="datetime-local" data-testid="edit-attendance-checkout"
+                  value={editCheckOut} onChange={(e) => setEditCheckOut(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Reason (optional)</Label>
+              <Textarea data-testid="edit-attendance-note" value={editNote} rows={2}
+                placeholder="e.g. Phone GPS lagged, actual check-in was earlier"
+                onChange={(e) => setEditNote(e.target.value)} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeEdit} disabled={editBusy}>Cancel</Button>
+              <Button type="submit" disabled={editBusy} data-testid="save-attendance-edit" className="bg-brand hover:bg-brand-dark">
+                {editBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save correction"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
