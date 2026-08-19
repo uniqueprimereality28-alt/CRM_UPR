@@ -73,6 +73,12 @@ export default function MyLeads() {
     budget: "", property_interest: "", city: "", notes: "", remark: "",
   });
 
+  // Tracks in-flight refetches separately from the very first load, since
+  // `leads` stays populated with the old results while a new request is
+  // out -- without this, changing a filter looked like nothing was
+  // happening until the new page suddenly swapped in.
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = useCallback(async () => {
     if (!myId) return;
     const q = { assigned_to: myId };
@@ -85,10 +91,15 @@ export default function MyLeads() {
       const d = new Date(dateTo); d.setHours(23, 59, 59, 999);
       q.follow_up_to = d.toISOString();
     }
-    const { data } = await api.get("/leads", { params: q });
-    setLeads(data);
-    setSelected([]);
-    setPage(1);
+    setRefreshing(true);
+    try {
+      const { data } = await api.get("/leads", { params: q });
+      setLeads(data);
+      setSelected([]);
+      setPage(1);
+    } finally {
+      setRefreshing(false);
+    }
   }, [status, tag, fu, dateFrom, dateTo, search, myId]);
 
   useEffect(() => {
@@ -250,9 +261,12 @@ export default function MyLeads() {
             <User className="h-6 w-6 text-brand" />
             <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">My Leads</h1>
           </div>
-          <p className="mt-1.5 text-sm text-slate-500">
-            Your own working queue — leads assigned to you.{" "}
-            {leads ? `${leads.length} leads · ${fmtDuration(totals.talk)} talk time · ${fmtMoney(totals.value)} value` : "Loading…"}
+          <p className="mt-1.5 flex items-center gap-1.5 text-sm text-slate-500">
+            <span>
+              Your own working queue — leads assigned to you.{" "}
+              {leads ? `${leads.length} leads · ${fmtDuration(totals.talk)} talk time · ${fmtMoney(totals.value)} value` : "Loading…"}
+            </span>
+            {refreshing && leads && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" data-testid="leads-refreshing" />}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
