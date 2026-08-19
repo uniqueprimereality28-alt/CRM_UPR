@@ -802,7 +802,7 @@ async def list_leads(
     unassigned: Optional[bool] = None,
     follow_up_from: Optional[str] = None,
     follow_up_to: Optional[str] = None,
-    limit: int = 500,
+    limit: Optional[int] = None,
 ):
     base_q = _lead_visibility_query(user)
     query = await _apply_visibility(base_q, user)
@@ -1374,7 +1374,7 @@ async def end_call(call_id: str, payload: CallEnd, user: dict = Depends(get_curr
 
 
 @api.get("/calls")
-async def list_calls(user: dict = Depends(get_current_user), agent_id: Optional[str] = None, limit: int = 300):
+async def list_calls(user: dict = Depends(get_current_user), agent_id: Optional[str] = None, limit: Optional[int] = None):
     query: dict = {}
     if not can_view_all(user):
         if user.get("role") == ROLE_TL:
@@ -1527,7 +1527,7 @@ async def list_followups(user: dict = Depends(get_current_user),
         if date_from: rng["$gte"] = date_from
         if date_to: rng["$lte"] = date_to
         query["follow_up_at"] = rng
-    docs = await db.leads.find(query).sort("follow_up_at", 1).to_list(1000)
+    docs = await db.leads.find(query).sort("follow_up_at", 1).to_list(None)
     return [Lead.from_mongo(d) for d in docs]
 
 
