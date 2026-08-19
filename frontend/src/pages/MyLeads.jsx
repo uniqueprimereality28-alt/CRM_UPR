@@ -55,6 +55,8 @@ export default function MyLeads() {
   const { user, isAdmin, isVranda } = useAuth();
   const myId = user?.id;
   const [leads, setLeads] = useState(null);
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
@@ -86,6 +88,7 @@ export default function MyLeads() {
     const { data } = await api.get("/leads", { params: q });
     setLeads(data);
     setSelected([]);
+    setPage(1);
   }, [status, tag, fu, dateFrom, dateTo, search, myId]);
 
   useEffect(() => {
@@ -100,6 +103,44 @@ export default function MyLeads() {
   const allSelected = leads?.length > 0 && selected.length === leads.length;
   const toggleAll = () => setSelected(allSelected ? [] : leads.map((l) => l.id));
   const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
+  const totalPages = Math.max(1, Math.ceil((leads?.length || 0) / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const visibleLeads = useMemo(
+    () => leads?.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [leads, safePage]
+  );
+  const pageNumbers = useMemo(() => {
+    const end = Math.min(totalPages, Math.max(5, safePage + 2));
+    const start = Math.max(1, end - 4);
+    const nums = [];
+    for (let i = start; i <= end; i++) nums.push(i);
+    return nums;
+  }, [safePage, totalPages]);
+
+  const pager = leads && leads.length > PAGE_SIZE && (
+    <div className="flex flex-wrap items-center justify-center gap-1.5 py-3">
+      <button type="button" disabled={safePage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
+        data-testid="myleads-page-prev"
+        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+        Prev
+      </button>
+      {pageNumbers[0] > 1 && <span className="px-1 text-xs text-slate-400">…</span>}
+      {pageNumbers.map((n) => (
+        <button key={n} type="button" onClick={() => setPage(n)} data-testid={`myleads-page-${n}`}
+          className={`h-7 min-w-[1.75rem] rounded-lg px-2 text-xs font-semibold ${n === safePage ? "bg-brand text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+          {n}
+        </button>
+      ))}
+      {pageNumbers[pageNumbers.length - 1] < totalPages && <span className="px-1 text-xs text-slate-400">…</span>}
+      <button type="button" disabled={safePage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+        data-testid="myleads-page-next"
+        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
+        Next
+      </button>
+      <span className="ml-2 text-xs text-slate-400">Page {safePage} of {totalPages} · {leads.length} leads</span>
+    </div>
+  );
 
   const createLead = async (e) => {
     e.preventDefault();
@@ -355,7 +396,7 @@ export default function MyLeads() {
       <div className="space-y-3 md:hidden">
         {leads === null && <div className="p-10 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-brand" /></div>}
         {leads?.length === 0 && <div className="rounded-xl border bg-white p-10 text-center text-sm text-slate-400">No leads in your queue yet.</div>}
-        {leads?.map((l) => {
+        {visibleLeads?.map((l) => {
           const tm = tagMeta(l.tag);
           return <article key={l.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`my-lead-card-${l.id}`}>
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -444,6 +485,7 @@ export default function MyLeads() {
             </div>
           </article>;
         })}
+        {pager}
       </div>
 
       {/* Desktop table */}
@@ -473,7 +515,7 @@ export default function MyLeads() {
               {leads?.length === 0 && (
                 <tr><td colSpan={10} className="p-10 text-center text-slate-400">No leads in your queue yet.</td></tr>
               )}
-              {leads?.map((l) => {
+              {visibleLeads?.map((l) => {
                 const tm = tagMeta(l.tag);
                 return (
                   <tr key={l.id} data-testid={`my-lead-row-${l.id}`} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
@@ -596,6 +638,7 @@ export default function MyLeads() {
               })}
             </tbody>
           </table>
+          {leads && leads.length > PAGE_SIZE && <div className="border-t border-slate-200">{pager}</div>}
         </div>
       </div>
     </div>
