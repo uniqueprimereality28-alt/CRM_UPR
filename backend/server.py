@@ -46,7 +46,7 @@ JWT_ALGORITHM = "HS256"
 # (e.g. "168" for 7 days) or longer.
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "720"))
 LEAD_STATUSES = ["new", "contacted", "qualified", "site_visit", "negotiation", "won", "lost"]
-FOLLOWUP_STATUSES = ["interested", "visit_scheduled", "not_interested", "callback", "converted"]
+FOLLOWUP_STATUSES = ["interested", "visit_scheduled", "not_interested", "callback", "converted", "invalid", "no_answer", "switched_off"]
 LEAD_TAGS = ["hot", "raw", "warm", "cold", "resale", "rent"]  # base tags; custom strings allowed too
 
 # Roles hierarchy
