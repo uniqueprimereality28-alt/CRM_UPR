@@ -41,6 +41,7 @@ const FU_STATUSES = [
   { v: "converted", label: "Converted" },
   { v: "no_answer", label: "Didn't Pick" },
   { v: "switched_off", label: "Switched off" },
+  { v: "invalid", label: "Invalid" },
 ];
 
 const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" } : null);
