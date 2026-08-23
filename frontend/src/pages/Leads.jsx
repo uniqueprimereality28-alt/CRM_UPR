@@ -76,6 +76,11 @@ export default function Leads() {
   const [importResult, setImportResult] = useState(null);
   const [skipDupes, setSkipDupes] = useState(true);
   const [dupBusy, setDupBusy] = useState(false);
+  const [dupPreviewOpen, setDupPreviewOpen] = useState(false);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [dupData, setDupData] = useState(null); // { groups, total_duplicate_leads, multi_assigned_groups }
+  const [dupKeep, setDupKeep] = useState("oldest");
+  const [dupConfirmed, setDupConfirmed] = useState(false);
 
   // Tracks in-flight refetches (filter/search changes) separately from the
   // very first load, since `leads` stays populated with the old results
@@ -253,16 +258,33 @@ export default function Leads() {
     } finally { setBusy(false); }
   };
 
-  const removeDuplicates = async () => {
-    if (dupBusy) return;
+  const openDuplicatePreview = async () => {
+    setDupPreviewOpen(true);
+    setDupLoading(true);
+    setDupConfirmed(false);
+    setDupKeep("oldest");
+    try {
+      const { data: res } = await api.get("/leads/duplicates");
+      setDupData(res);
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+      setDupPreviewOpen(false);
+    } finally {
+      setDupLoading(false);
+    }
+  };
+
+  const confirmRemoveDuplicates = async () => {
+    if (dupBusy || !dupConfirmed) return;
     setDupBusy(true);
     try {
-      const { data: res } = await api.post("/leads/duplicates/clear", { keep: "oldest" });
+      const { data: res } = await api.post("/leads/duplicates/clear", { keep: dupKeep });
       if (res.removed > 0) {
         toast.success(`${res.removed} duplicate lead(s) removed`);
       } else {
         toast.success("No duplicates found — your data is clean");
       }
+      setDupPreviewOpen(false);
       load();
     } catch (err) {
       toast.error(apiError(err.response?.data?.detail));
@@ -337,7 +359,7 @@ export default function Leads() {
           {isAdmin && (
             <Button
               variant="outline"
-              onClick={removeDuplicates}
+              onClick={openDuplicatePreview}
               disabled={dupBusy}
               data-testid="remove-duplicates-btn"
               className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
@@ -430,7 +452,119 @@ export default function Leads() {
             </Dialog>
           )}
 
-          <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          {isAdmin && (
+            <Dialog open={dupPreviewOpen} onOpenChange={(v) => { if (!dupBusy) setDupPreviewOpen(v); }}>
+              <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Remove duplicate leads — review first</DialogTitle>
+                </DialogHeader>
+
+                {dupLoading && (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="h-5 w-5 animate-spin text-brand" />
+                  </div>
+                )}
+
+                {!dupLoading && dupData && dupData.groups.length === 0 && (
+                  <div className="py-8 text-center text-sm text-slate-500">
+                    No duplicate phone numbers found — your data is already clean.
+                  </div>
+                )}
+
+                {!dupLoading && dupData && dupData.groups.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-2xl font-bold text-slate-900">{dupData.total_duplicate_leads}</div>
+                        <div className="text-xs text-slate-500">lead(s) will be deleted, across {dupData.groups.length} phone number(s)</div>
+                      </div>
+                      <div className={`rounded-lg border p-3 ${dupData.multi_assigned_groups > 0 ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
+                        <div className={`text-2xl font-bold ${dupData.multi_assigned_groups > 0 ? "text-amber-700" : "text-slate-900"}`}>
+                          {dupData.multi_assigned_groups}
+                        </div>
+                        <div className={`text-xs ${dupData.multi_assigned_groups > 0 ? "text-amber-700" : "text-slate-500"}`}>
+                          group(s) shared across more than one agent — check these carefully
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <Label className="mb-1.5 block text-xs uppercase tracking-wide text-slate-500">Which copy to keep, per phone number</Label>
+                      <Select value={dupKeep} onValueChange={setDupKeep}>
+                        <SelectTrigger data-testid="dup-keep-select"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="oldest">Keep the oldest lead</SelectItem>
+                          <SelectItem value="newest">Keep the newest lead</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label className="mb-1.5 block text-xs uppercase tracking-wide text-slate-500">
+                        Groups to be cleaned ({dupData.groups.length})
+                      </Label>
+                      <div className="max-h-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                        {dupData.groups.slice(0, 100).map((g) => (
+                          <div
+                            key={g.phone}
+                            className={`rounded-md border p-2.5 text-xs ${g.multi_assigned ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-slate-800">{g.phone}</span>
+                              <span className="text-slate-500">{g.count} copies</span>
+                            </div>
+                            {g.leads?.[0]?.name && (
+                              <div className="mt-0.5 text-slate-500">{g.leads.map((l) => l.name).join(", ")}</div>
+                            )}
+                            {g.agent_names?.length > 0 && (
+                              <div className={`mt-1 ${g.multi_assigned ? "font-medium text-amber-700" : "text-slate-400"}`}>
+                                Assigned to: {g.agent_names.join(", ")}
+                                {g.multi_assigned && " — shared across multiple agents"}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        {dupData.groups.length > 100 && (
+                          <div className="py-1 text-center text-[11px] text-slate-400">
+                            …and {dupData.groups.length - 100} more group(s)
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                      <Checkbox
+                        checked={dupConfirmed}
+                        onCheckedChange={setDupConfirmed}
+                        data-testid="confirm-remove-duplicates-checkbox"
+                        className="mt-0.5"
+                      />
+                      <span>
+                        I've reviewed the groups above — including any shared across multiple agents — and confirm I want
+                        to permanently delete the {dupData.total_duplicate_leads} extra lead(s) along with their calls
+                        and activity history. This cannot be undone.
+                      </span>
+                    </label>
+                  </div>
+                )}
+
+                {!dupLoading && dupData && dupData.groups.length > 0 && (
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setDupPreviewOpen(false)} disabled={dupBusy}>Cancel</Button>
+                    <Button
+                      onClick={confirmRemoveDuplicates}
+                      disabled={!dupConfirmed || dupBusy}
+                      data-testid="confirm-remove-duplicates-btn"
+                      className="bg-rose-600 hover:bg-rose-700"
+                    >
+                      {dupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : `Delete ${dupData.total_duplicate_leads} duplicate(s)`}
+                    </Button>
+                  </DialogFooter>
+                )}
+              </DialogContent>
+            </Dialog>
+          )}
+
             <DialogTrigger asChild>
               <Button data-testid="add-lead-btn" className="gap-2 bg-brand hover:bg-brand-dark">
                 <Plus className="h-4 w-4" /> New Lead
