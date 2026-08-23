@@ -1,0 +1,47 @@
+name: Add manual talk-time adjustment (admin)
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_name:
+        description: 'Exact agent name, e.g. Kashish Aggarwal'
+        required: true
+      minutes:
+        description: 'Minutes to add (e.g. 35)'
+        required: true
+      reason:
+        description: 'Why (required, min 5 chars) — e.g. "System outage during restore, 2026-08-23"'
+        required: true
+      adjustment_date:
+        description: 'Date this adjustment is for, YYYY-MM-DD'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  add-adjustment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pymongo
+
+      - name: Add adjustment
+        env:
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: |
+          python add_manual_talk_time.py \
+            --agent-name "${{ github.event.inputs.agent_name }}" \
+            --minutes "${{ github.event.inputs.minutes }}" \
+            --reason "${{ github.event.inputs.reason }}" \
+            --date "${{ github.event.inputs.adjustment_date }}" \
+            --added-by "${{ github.actor }}"
