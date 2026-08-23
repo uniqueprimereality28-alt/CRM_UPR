@@ -5,7 +5,7 @@ import {
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import {
-  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle, Copy, CalendarClock,
+  Contact, Trophy, PhoneCall, Timer, UserCheck, Wallet, TrendingUp, Loader2, AlertCircle, Copy, CalendarClock, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
@@ -14,31 +14,19 @@ import { StatCard } from "../components/StatCard";
 import { DailyReportCard } from "../components/DailyReportCard";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { ManualTalkTimeDialog } from "../components/ManualTalkTimeDialog";
 
 const PIE_COLORS = ["#1a3fbf", "#10b981", "#f59e0b", "#64748b", "#0ea5e9", "#8b5cf6", "#ef4444"];
 
 export default function AdminDashboard() {
   const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
-  const [dupBusy, setDupBusy] = useState(false);
+  const [adjustAgent, setAdjustAgent] = useState(null); // { agent_id, name } or null
 
-  useEffect(() => {
-    api.get("/dashboard/admin").then((r) => setData(r.data)).catch(() => setData(false));
-  }, []);
+  const load = () => api.get("/dashboard/admin").then((r) => setData(r.data)).catch(() => setData(false));
 
-  const removeDuplicates = async () => {
-    setDupBusy(true);
-    try {
-      const { data: res } = await api.post("/leads/duplicates/clear", { keep: "oldest" });
-      if (res.removed > 0) {
-        toast.success(`${res.removed} duplicate lead(s) removed`);
-      } else {
-        toast.success("No duplicates found — your data is clean");
-      }
-    } catch (err) {
-      toast.error(apiError(err.response?.data?.detail));
-    } finally { setDupBusy(false); }
-  };
+  useEffect(() => { load(); }, []);
+
 
   if (data === null)
     return <div className="grid h-64 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>;
@@ -58,16 +46,13 @@ export default function AdminDashboard() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin && (
-            <Button
-              onClick={removeDuplicates}
-              disabled={dupBusy}
-              data-testid="remove-duplicates-btn"
-              variant="outline"
-              className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+            <Link
+              to="/leads"
+              data-testid="remove-duplicates-link"
+              className="flex items-center gap-2 rounded-lg border border-rose-200 px-3.5 py-2 text-sm font-medium text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700"
             >
-              {dupBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-              Remove duplicates
-            </Button>
+              <Copy className="h-4 w-4" /> Review duplicate leads
+            </Link>
           )}
           <Link
             to="/leads?unassigned=1"
@@ -213,7 +198,21 @@ export default function AdminDashboard() {
                     <td className="px-3 py-3 text-right text-slate-600">{a.leads}</td>
                     <td className="px-3 py-3 text-right font-semibold text-emerald-600">{a.won}</td>
                     <td className="px-3 py-3 text-right text-slate-600">{a.conversion}%</td>
-                    <td className="px-3 py-3 text-right font-medium text-slate-800">{fmtDuration(a.talk_time)}</td>
+                    <td className="px-3 py-3 text-right font-medium text-slate-800">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {fmtDuration(a.talk_time)}
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            title="Add manual talk-time adjustment"
+                            onClick={() => setAdjustAgent({ agent_id: a.agent_id, name: a.name })}
+                            className="rounded p-0.5 text-slate-300 hover:bg-slate-100 hover:text-brand"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-3 py-3 text-right text-slate-600" data-testid={`leaderboard-today-${i}`}>
                       {a.today_calls} calls · {fmtDuration(a.today_talk_time)}
                     </td>
@@ -246,6 +245,15 @@ export default function AdminDashboard() {
           ))}
         </div>
       </div>
+      {isAdmin && adjustAgent && (
+        <ManualTalkTimeDialog
+          open={!!adjustAgent}
+          onOpenChange={(v) => { if (!v) setAdjustAgent(null); }}
+          agentId={adjustAgent.agent_id}
+          agentName={adjustAgent.name}
+          onSaved={load}
+        />
+      )}
     </div>
   );
 }
