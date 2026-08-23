@@ -329,6 +329,17 @@ class CallDurationEdit(BaseModel):
     reason: str
 
 
+class ManualTalkTimeAdjustment(BaseModel):
+    """A lump-sum talk-time correction for an agent, used when the system
+    itself failed to log real work (e.g. an outage) rather than any single
+    call's duration being wrong. This never creates fake call or lead
+    records — it's a separate, clearly-labeled adjustment that shows up
+    alongside an agent's real logged calls, not disguised as one of them."""
+    minutes: float
+    reason: str
+    adjustment_date: Optional[str] = None  # defaults to today (UTC) if omitted
+
+
 class AttendanceCheckIn(BaseModel):
     lat: float
     lng: float
@@ -1480,6 +1491,104 @@ async def edit_call_duration(call_id: str, payload: CallDurationEdit, admin: dic
     return {"ok": True, "duration": new_duration}
 
 
+@api.post("/agents/{agent_id}/talk-time-adjustments")
+async def add_manual_talk_time(agent_id: str, payload: ManualTalkTimeAdjustment,
+                                admin: dict = Depends(require_admin)):
+    """Admin-only. Adds a manual talk-time correction for an agent — e.g. to
+    account for logged time lost to a system/outage problem. This is
+    intentionally NOT the same as editing a call: it does not create or
+    touch any call or lead record. It's stored in its own collection,
+    always visible as a distinct, labeled adjustment (never blended
+    invisibly into "real" call history), and requires a reason so there's
+    a permanent audit trail of who added it, when, and why."""
+    reason = (payload.reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Please give a reason of at least 5 characters")
+    if payload.minutes <= 0:
+        raise HTTPException(status_code=400, detail="Minutes must be greater than 0")
+    if payload.minutes > 240:
+        raise HTTPException(status_code=400, detail="Single adjustment can't exceed 240 minutes — "
+                                                      "split larger corrections across dates or flag to a superadmin")
+
+    agent = await db.users.find_one({"_id": ObjectId(agent_id)})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    adjustment_date = payload.adjustment_date or now_iso()[:10]
+    doc = {
+        "agent_id": agent_id,
+        "agent_name": agent.get("name"),
+        "minutes": payload.minutes,
+        "seconds": int(round(payload.minutes * 60)),
+        "reason": reason,
+        "adjustment_date": adjustment_date,
+        "added_by": admin.get("name"),
+        "added_by_id": str(admin.get("_id")),
+        "created_at": now_iso(),
+        "reversed": False,
+        "reversed_by": None,
+        "reversed_at": None,
+    }
+    result = await db.manual_adjustments.insert_one(doc)
+
+    await _log_activity(
+        None, admin, "manual_talk_time_added",
+        f"{admin.get('name')} manually added {payload.minutes:.0f} min talk time for "
+        f"{agent.get('name')} on {adjustment_date} — reason: {reason}",
+        {"agent_id": agent_id, "minutes": payload.minutes, "reason": reason,
+         "adjustment_date": adjustment_date})
+
+    doc["_id"] = str(result.inserted_id)
+    return {"ok": True, "adjustment": doc}
+
+
+@api.get("/agents/{agent_id}/talk-time-adjustments")
+async def list_manual_talk_time(agent_id: str, user: dict = Depends(require_manager)):
+    """Admin/manager only — full audit trail of manual adjustments for one
+    agent, including any that were later reversed, newest first."""
+    docs = await db.manual_adjustments.find({"agent_id": agent_id}).sort("created_at", -1).to_list(500)
+    for d in docs:
+        d["_id"] = str(d["_id"])
+    active_seconds = sum(d["seconds"] for d in docs if not d.get("reversed"))
+    return {"adjustments": docs, "active_total_seconds": active_seconds}
+
+
+@api.post("/talk-time-adjustments/{adjustment_id}/reverse")
+async def reverse_manual_talk_time(adjustment_id: str, admin: dict = Depends(require_admin)):
+    """Admin-only. Reverses a manual adjustment that was added by mistake.
+    This does NOT delete the record — it flags it as reversed so the
+    original entry (who added it, why, how much) stays visible forever in
+    the audit trail; a reversed adjustment simply stops counting toward
+    the agent's talk time."""
+    adj = await db.manual_adjustments.find_one({"_id": ObjectId(adjustment_id)})
+    if not adj:
+        raise HTTPException(status_code=404, detail="Adjustment not found")
+    if adj.get("reversed"):
+        raise HTTPException(status_code=400, detail="Already reversed")
+    await db.manual_adjustments.update_one(
+        {"_id": ObjectId(adjustment_id)},
+        {"$set": {"reversed": True, "reversed_by": admin.get("name"), "reversed_at": now_iso()}})
+    return {"ok": True}
+
+
+async def _manual_adjustment_totals(agent_ids: list[str], date_filter: Optional[str] = None) -> dict[str, int]:
+    """Sums active (non-reversed) manual talk-time adjustments per agent, in
+    seconds. Pass date_filter='YYYY-MM-DD' to total only that day's
+    adjustments (used for "today" figures); omit it for all-time totals."""
+    match: dict = {"agent_id": {"$in": agent_ids}, "reversed": {"$ne": True}}
+    if date_filter:
+        match["adjustment_date"] = date_filter
+    totals: dict[str, int] = {aid: 0 for aid in agent_ids}
+    pipeline = [
+        {"$match": match},
+        {"$group": {"_id": "$agent_id", "seconds": {"$sum": "$seconds"}}},
+    ]
+    async for row in db.manual_adjustments.aggregate(pipeline):
+        if row["_id"] in totals:
+            totals[row["_id"]] = row["seconds"]
+    return totals
+
+
 @api.post("/calls/{call_id}/recording")
 async def upload_recording(call_id: str, file: UploadFile = File(...),
                            user: dict = Depends(get_current_user)):
@@ -2287,7 +2396,9 @@ async def _batch_agent_stats(agent_ids: list[str]) -> dict[str, dict]:
     stats = {aid: {"leads": 0, "won": 0, "lost": 0, "active": 0, "calls": 0,
                    "talk_time": 0, "avg_call": 0, "today_calls": 0,
                    "today_talk_time": 0, "conversion": 0.0,
-                   "pipeline_value": 0, "won_value": 0} for aid in agent_ids}
+                   "pipeline_value": 0, "won_value": 0,
+                   "manual_adjustment_seconds": 0,
+                   "today_manual_adjustment_seconds": 0} for aid in agent_ids}
 
     lead_pipeline = [
         {"$match": {"assigned_to": {"$in": agent_ids}}},
@@ -2337,6 +2448,19 @@ async def _batch_agent_stats(agent_ids: list[str]) -> dict[str, dict]:
             "avg_call": int(talk / calls) if calls else 0,
             "today_calls": row["today_calls"], "today_talk_time": row["today_talk_time"],
         })
+
+    # Manual adjustments are added on top, but tracked separately so this
+    # never gets confused with, or hidden inside, real logged call time.
+    today_str = _today_bounds_utc()[0][:10]
+    all_time_adj = await _manual_adjustment_totals(agent_ids)
+    today_adj = await _manual_adjustment_totals(agent_ids, date_filter=today_str)
+    for aid in agent_ids:
+        adj_secs = all_time_adj.get(aid, 0)
+        today_adj_secs = today_adj.get(aid, 0)
+        stats[aid]["manual_adjustment_seconds"] = adj_secs
+        stats[aid]["today_manual_adjustment_seconds"] = today_adj_secs
+        stats[aid]["talk_time"] += adj_secs
+        stats[aid]["today_talk_time"] += today_adj_secs
     return stats
 
 
