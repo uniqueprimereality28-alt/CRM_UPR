@@ -216,7 +216,7 @@ export default function Leads() {
       if (data.total_duplicates > 0) {
         toast.warning(`Imported ${data.inserted} · ${data.total_duplicates} duplicate phone(s) ${skipDupes ? "skipped" : "kept"}`);
       } else {
-        toast.success(`Imported ${data.inserted} leads (${data.missing || 0} missing phone number)`);
+        toast.success(`Imported ${data.inserted} leads (${data.missing || 0} missing phone, ${data.invalid || 0} invalid phone)`);
       }
       load();
     } catch (err) {
@@ -398,7 +398,7 @@ export default function Leads() {
                     <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-xs" data-testid="import-result">
                       <div className="flex items-center justify-between font-semibold text-slate-700">
                         <span>Import summary</span>
-                        <span>{importResult.inserted} inserted · {importResult.skipped} skipped · {importResult.missing || 0} missing phone number</span>
+                        <span>{importResult.inserted} inserted · {importResult.skipped} skipped · {importResult.missing || 0} missing phone · {importResult.invalid || 0} invalid phone</span>
                       </div>
                       {importResult.total_duplicates > 0 && (
                         <div>
