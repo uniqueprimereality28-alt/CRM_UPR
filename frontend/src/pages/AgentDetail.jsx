@@ -1,17 +1,35 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Phone, Contact, Trophy, Timer, Wallet } from "lucide-react";
-import { api, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
+import { ArrowLeft, Loader2, Phone, Contact, Trophy, Timer, Wallet, Pencil, History } from "lucide-react";
+import { toast } from "sonner";
+import { api, apiError, fmtDuration, fmtMoney, fmtDate, STATUS_META } from "../lib/api";
 import { StatCard } from "../components/StatCard";
 import { Badge } from "../components/ui/badge";
+import { useAuth } from "../context/AuthContext";
+import { ManualTalkTimeDialog } from "../components/ManualTalkTimeDialog";
+import { AdjustmentHistoryDialog } from "../components/AdjustmentHistoryDialog";
 
 export default function AgentDetail() {
   const { id } = useParams();
+  const { isAdmin } = useAuth();
   const [data, setData] = useState(null);
+  const [showAdjustDialog, setShowAdjustDialog] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState(null);
 
-  useEffect(() => {
-    api.get(`/dashboard/agent/${id}`).then((r) => setData(r.data)).catch(() => setData(false));
-  }, [id]);
+  const load = () => api.get(`/dashboard/agent/${id}`).then((r) => setData(r.data)).catch(() => setData(false));
+
+  useEffect(() => { load(); }, [id]);
+
+  const openHistory = async () => {
+    setShowHistory(true);
+    try {
+      const { data: res } = await api.get(`/agents/${id}/talk-time-adjustments`);
+      setHistory(res.adjustments);
+    } catch (e) {
+      toast.error(apiError(e.response?.data?.detail));
+    }
+  };
 
   if (data === null)
     return <div className="grid h-64 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>;
@@ -43,10 +61,58 @@ export default function AgentDetail() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Leads" value={stats.leads} sub={`${stats.active} active`} icon={Contact} />
         <StatCard label="Won" value={stats.won} sub={`${stats.conversion}% conversion`} icon={Trophy} accent="emerald" delay={60} />
-        <StatCard label="Talk time" value={fmtDuration(stats.talk_time)} sub={`${stats.calls} calls`} icon={Timer} accent="amber" delay={120} />
+        <div className="relative">
+          <StatCard
+            label="Talk time"
+            value={fmtDuration(stats.talk_time)}
+            sub={
+              stats.manual_adjustment_seconds > 0
+                ? `${stats.calls} calls · incl. ${fmtDuration(stats.manual_adjustment_seconds)} manual`
+                : `${stats.calls} calls`
+            }
+            icon={Timer} accent="amber" delay={120}
+          />
+          {isAdmin && (
+            <div className="absolute right-3 top-3 flex gap-1">
+              <button
+                type="button" title="View adjustment history" onClick={openHistory}
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <History className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button" title="Add manual talk-time adjustment"
+                onClick={() => setShowAdjustDialog(true)}
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-brand"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
         <StatCard label="Avg call" value={fmtDuration(stats.avg_call)} sub="Per connected call" icon={Phone} accent="slate" delay={180} />
         <StatCard label="Pipeline" value={fmtMoney(stats.pipeline_value)} sub={`Closed ${fmtMoney(stats.won_value)}`} icon={Wallet} delay={240} />
       </div>
+
+      {isAdmin && (
+        <ManualTalkTimeDialog
+          open={showAdjustDialog}
+          onOpenChange={setShowAdjustDialog}
+          agentId={id}
+          agentName={agent.name}
+          onSaved={load}
+        />
+      )}
+
+      {isAdmin && (
+        <AdjustmentHistoryDialog
+          open={showHistory}
+          onOpenChange={setShowHistory}
+          agentName={agent.name}
+          history={history}
+          onReversed={() => { openHistory(); load(); }}
+        />
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
