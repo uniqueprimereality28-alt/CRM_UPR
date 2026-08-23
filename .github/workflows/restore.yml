@@ -1,0 +1,48 @@
+name: Restore missing leads/calls (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_date:
+        description: 'Backup folder to restore from (e.g. 2026-08-22)'
+        required: true
+        default: '2026-08-22'
+      mode:
+        description: 'Choose dry-run to preview, or apply to actually restore'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pymongo
+
+      - name: Run restore (dry-run)
+        if: ${{ github.event.inputs.mode == 'dry-run' }}
+        env:
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python restore_missing_only.py "backups/${{ github.event.inputs.backup_date }}" --dry-run
+
+      - name: Run restore (apply)
+        if: ${{ github.event.inputs.mode == 'apply' }}
+        env:
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+        run: python restore_missing_only.py "backups/${{ github.event.inputs.backup_date }}" --apply
