@@ -1206,9 +1206,12 @@ async def import_leads(
     def norm_phone(p: str) -> str:
         return "".join(ch for ch in (p or "") if ch.isdigit())[-10:]
 
+    def digit_count(s) -> int:
+        return sum(ch.isdigit() for ch in str(s or ""))
+
     existing_phones = {norm_phone(e.get("phone", "")): e.get("name") for e in existing if e.get("phone")}
 
-    inserted, skipped, dupes, missing = 0, 0, [], 0
+    inserted, skipped, dupes, missing, invalid = 0, 0, [], 0, 0
     seen_in_file = set()
     for row in rows:
         # Name is optional on import — a lead with just a phone number is still
@@ -1217,6 +1220,21 @@ async def import_leads(
         phone = row.get("phone") or row.get("phone_number") or row.get("mobile") or row.get("contact")
         if not phone:
             missing += 1
+            continue
+        # Guard against swapped Name/Phone columns in the source file — this is
+        # the actual cause of leads silently ending up with a name in the phone
+        # field (e.g. phone="Anuj", name="9873008872"), which later blocks the
+        # agent from calling with "no valid phone number saved". If the phone
+        # cell looks like a name (too few digits) while the name cell looks
+        # like a phone number, swap them back before saving.
+        if digit_count(phone) < 10 and digit_count(name) >= 10:
+            name, phone = phone, name
+        # After the swap check, a phone that still can't yield a real number
+        # is bad data, not a lead — don't silently save it, since a saved lead
+        # with an uncallable phone just surfaces as a confusing error later
+        # when an agent tries to call it.
+        if digit_count(phone) < 10:
+            invalid += 1
             continue
         np = norm_phone(phone)
         if np and (np in existing_phones or np in seen_in_file):
@@ -1252,8 +1270,10 @@ async def import_leads(
         ).to_mongo()
         await db.leads.insert_one(doc)
         inserted += 1
-    # "missing" only counts rows with no phone number, since name is optional on import.
-    return {"inserted": inserted, "skipped": skipped, "missing": missing,
+    # "missing" counts rows with no phone number at all; "invalid" counts rows
+    # that had something in the phone column but it couldn't be turned into a
+    # real number (including ones that looked swapped with the name column).
+    return {"inserted": inserted, "skipped": skipped, "missing": missing, "invalid": invalid,
             "duplicates": dupes[:100], "total_duplicates": len(dupes)}
 
 
@@ -2843,6 +2863,30 @@ async def startup():
         await db.notifications.delete_many({})
         await db.settings.insert_one({"_id": "seed_purged_v2", "at": now_iso()})
         logger.info("Purged all demo/seed data — clean install")
+
+    # ONE-TIME REPAIR — fix leads where the Name and Phone columns got
+    # swapped during an Excel import (e.g. name="9873008872", phone="Anuj").
+    # Those leads look fine in the list but can never be called, which shows
+    # up to agents as "This lead has no valid phone number saved". The
+    # importer itself is now fixed to catch this going forward (see
+    # /leads/import); this just repairs leads that were already saved with
+    # the swap before that fix went in. Runs once, guarded by the flag below.
+    swap_fix_flag = await db.settings.find_one({"_id": "leads_phone_swap_fixed_v1"})
+    if not swap_fix_flag:
+        def _digit_count(s) -> int:
+            return sum(ch.isdigit() for ch in str(s or ""))
+
+        fixed = 0
+        async for lead in db.leads.find({}, {"name": 1, "phone": 1}):
+            name, phone = lead.get("name"), lead.get("phone")
+            if _digit_count(name) >= 10 and _digit_count(phone) < 10:
+                await db.leads.update_one(
+                    {"_id": lead["_id"]},
+                    {"$set": {"name": phone, "phone": name}},
+                )
+                fixed += 1
+        await db.settings.insert_one({"_id": "leads_phone_swap_fixed_v1", "at": now_iso(), "fixed": fixed})
+        logger.info(f"Repaired {fixed} lead(s) with swapped name/phone")
 
     async def _seed(username, password, name, role, email, phone):
         username = username.strip().lower()
