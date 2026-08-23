@@ -565,6 +565,7 @@ export default function Leads() {
             </Dialog>
           )}
 
+          <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <DialogTrigger asChild>
               <Button data-testid="add-lead-btn" className="gap-2 bg-brand hover:bg-brand-dark">
                 <Plus className="h-4 w-4" /> New Lead
