@@ -22,7 +22,7 @@
     "attendance_exempt": true,
     "joining_date": "2020-04-01",
     "wfh": false,
-    "last_login": "2026-08-27T16:19:51.132522+00:00",
+    "last_login": "2026-08-28T09:05:08.505137+00:00",
     "date_of_birth": "1986-10-27",
     "avatar_url": "/api/avatars/6a708520d17689b86fe37834-096a3255.jpg",
     "password_changed_at": "2026-08-05T06:59:50.357473+00:00"
@@ -204,7 +204,7 @@
     "password_hash": "$2b$12$NfR/t5Zqf5/NS7oJIZQ2e.IiPR19Hr9Xnu53JKzyvZWa8nlj/2L.6",
     "created_at": "2026-08-05T06:04:06.545141+00:00",
     "created_by": "6a71b6be0ec2a6851431a347",
-    "last_login": "2026-08-10T06:40:30.206887+00:00"
+    "last_login": "2026-08-28T07:56:03.269407+00:00"
   },
   {
     "_id": "6a72e0ad5df930393651f27b",

@@ -1,12 +1,12 @@
 {
-  "backed_up_at": "2026-08-28T04:27:58.695120Z",
+  "backed_up_at": "2026-08-28T22:01:04.684273Z",
   "collections": {
-    "activities": 17038,
+    "activities": 17070,
     "notifications": 0,
     "attendance": 176,
     "calls": 5160,
     "settings": 4,
-    "leads": 7596,
+    "leads": 7606,
     "messages": 2,
     "groups": 2,
     "login_attempts": 7,
