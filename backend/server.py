@@ -1364,9 +1364,17 @@ async def log_offline_call(payload: CallOfflineLog, user: dict = Depends(get_cur
         lead_updates["follow_up_status"] = payload.outcome
     if payload.notes and payload.notes.strip():
         lead_updates["remark"] = payload.notes.strip()
+    # First logged call on a fresh lead should move it off "new" automatically
+    # — an agent shouldn't have to remember to flip the stage dropdown by hand
+    # every time. Only ever bumps "new" -> "contacted"; never overrides a
+    # stage the lead has already progressed past (or been marked lost/won).
+    if lead.get("status") == "new":
+        lead_updates["status"] = "contacted"
     await db.leads.update_one(
         {"_id": ObjectId(payload.lead_id)},
         {"$inc": {"total_talk_time": duration, "call_count": 1}, "$set": lead_updates})
+    if lead_updates.get("status") == "contacted":
+        await _log_activity(payload.lead_id, user, "status_change", "Status changed from new to contacted")
 
     await _log_activity(payload.lead_id, user, "call_logged",
                         f"Call {payload.outcome} · {_fmt_dur(duration)} (logged offline)"
@@ -1392,10 +1400,18 @@ async def end_call(call_id: str, payload: CallEnd, user: dict = Depends(get_curr
         # Show the latest agent-typed call remark at the top of the lead,
         # instead of leaving the old imported remark displayed forever.
         lead_updates["remark"] = payload.notes.strip()
+    # First logged call on a fresh lead should move it off "new" automatically
+    # — only ever bumps "new" -> "contacted"; never overrides a stage the
+    # lead has already progressed past (or been marked lost/won).
+    lead_doc = await db.leads.find_one({"_id": ObjectId(call["lead_id"])}, {"status": 1})
+    if lead_doc and lead_doc.get("status") == "new":
+        lead_updates["status"] = "contacted"
     await db.leads.update_one(
         {"_id": ObjectId(call["lead_id"])},
         {"$inc": {"total_talk_time": duration, "call_count": 1},
          "$set": lead_updates})
+    if lead_updates.get("status") == "contacted":
+        await _log_activity(call["lead_id"], user, "status_change", "Status changed from new to contacted")
     mins, secs = duration // 60, duration % 60
     await _log_activity(call["lead_id"], user, "call_logged",
                         f"Call {payload.outcome} · {mins}m {secs}s" + (f" · {payload.notes}" if payload.notes else ""),
