@@ -88,6 +88,14 @@ if (typeof window !== "undefined") {
   // Kick off an initial status broadcast + best-effort sync in case the app
   // was reloaded while there was still a queue from a previous session.
   setTimeout(() => { pushStatus(); replayQueuedMutations(); }, 0);
+  // Belt-and-braces: the browser's "online" event only fires on a genuine
+  // connectivity transition. If the device was online the whole time but
+  // the *backend* was briefly down/unreachable (deploy, restart, CORS
+  // misconfig), "online" never fires again and anything queued during that
+  // window would otherwise sit stuck until the agent happens to reload the
+  // page. Polling every 20s catches that case too — replayQueuedMutations()
+  // itself is a cheap no-op when the queue is empty.
+  setInterval(() => { if (navigator.onLine) replayQueuedMutations(); }, 20000);
 }
 
 api.interceptors.response.use(
@@ -100,16 +108,29 @@ api.interceptors.response.use(
   async (error) => {
     const config = error.config || {};
     const method = (config.method || "get").toLowerCase();
-    const isNetworkError = !error.response; // no response at all = offline/timeout/DNS, not a server rejection
+    const noResponse = !error.response; // no response at all = offline/timeout/DNS/CORS — NOT necessarily offline
 
-    if (isNetworkError && method === "get") {
+    // IMPORTANT: `noResponse` alone does not mean the device is offline — it's
+    // also true when the backend is down, mid-deploy, CORS-misconfigured, or
+    // just slow to answer. Gate the "safe to silently queue as a success" path
+    // on navigator.onLine as well. Previously any noResponse error on a
+    // mutation was queued and reported back to the caller as `{ok:true}` —
+    // so if the backend (not the agent's phone) was the thing that was down,
+    // every remark save / call-log / talk-time update looked successful in
+    // the UI (toast + optimistic state) while nothing ever reached the
+    // server or the dashboards. Genuine offline still queues exactly as
+    // before; a reachable-network-but-broken-backend failure now surfaces as
+    // a real error instead of a false "saved" toast.
+    const isGenuineOffline = noResponse && !navigator.onLine;
+
+    if (noResponse && method === "get") {
       const cached = await readCachedResponse(config.url, config.params);
       if (cached) {
         return { data: cached.data, status: 200, statusText: "OK (from offline cache)", headers: {}, config, fromCache: true };
       }
     }
 
-    if (isNetworkError && MUTATION_METHODS.has(method) && !config._isReplay && !QUEUE_EXCLUDE_URLS.has(config.url)) {
+    if (isGenuineOffline && MUTATION_METHODS.has(method) && !config._isReplay && !QUEUE_EXCLUDE_URLS.has(config.url)) {
       const isFormData = typeof FormData !== "undefined" && config.data instanceof FormData;
       if (!isFormData) {
         await enqueueMutation({ method, url: config.url, data: config.__rawData, params: config.params });
