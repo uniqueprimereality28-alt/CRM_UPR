@@ -660,4 +660,3 @@ export default function MyLeads() {
     </div>
   );
 }
-
