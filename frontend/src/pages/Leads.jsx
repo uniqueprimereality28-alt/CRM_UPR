@@ -22,7 +22,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
 
-const SOURCES = ["Website", "99acres", "MagicBricks", "Facebook Ads", "Google Ads", "Referral", "Walk-in", "CSV Import"];
+const SOURCES = ["Website", "99acres", "MagicBricks", "Meta Ads", "Google Ads", "Referral", "Walk-in", "CSV Import"];
 const TAGS = [
   { v: "hot", label: "Hot lead", cls: "bg-rose-50 text-rose-700 border-rose-200" },
   { v: "warm", label: "Warm", cls: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -118,7 +118,8 @@ export default function Leads() {
   }, [load, search]);
 
   useEffect(() => {
-    if (isManager) api.get("/users").then((r) => setAgents(r.data.filter((u) => ["sales", "team_lead"].includes(u.role))));
+    if (isManager) api.get("/users").then((r) => setAgents(r.data.filter((u) =>
+      ["sales", "team_lead"].includes(u.role) || u.username === "sandeep.chauhan")));
   }, [isManager]);
 
   const allSelected = leads?.length > 0 && selected.length === leads.length;
