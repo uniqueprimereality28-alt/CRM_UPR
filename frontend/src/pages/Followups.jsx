@@ -28,7 +28,7 @@ import {
 // tag, stage, follow-up, remarks) plus the ability to hand a lead off to a
 // teammate right from this view.
 
-const SOURCES = ["Website", "99acres", "MagicBricks", "Facebook Ads", "Google Ads", "Referral", "Walk-in", "CSV Import"];
+const SOURCES = ["Website", "99acres", "MagicBricks", "Meta Ads", "Google Ads", "Referral", "Walk-in", "CSV Import"];
 const TAGS = [
   { v: "hot", label: "Hot lead", cls: "bg-rose-50 text-rose-700 border-rose-200" },
   { v: "warm", label: "Warm", cls: "bg-amber-50 text-amber-700 border-amber-200" },
@@ -109,7 +109,8 @@ export default function MyLeads() {
   }, [load, search]);
 
   useEffect(() => {
-    api.get("/users").then((r) => setAgents(r.data.filter((u) => ["sales", "team_lead"].includes(u.role) && u.id !== myId)));
+    api.get("/users").then((r) => setAgents(r.data.filter((u) =>
+      (["sales", "team_lead"].includes(u.role) || u.username === "sandeep.chauhan") && u.id !== myId)));
   }, [myId]);
 
   const allSelected = leads?.length > 0 && selected.length === leads.length;
@@ -659,3 +660,4 @@ export default function MyLeads() {
     </div>
   );
 }
+
