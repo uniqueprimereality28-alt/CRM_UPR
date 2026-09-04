@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Plus, Search, UserPlus, Loader2, Trash2, Filter, MessageCircle,
   AlarmClock, CalendarClock, Flag, PhoneCall, User, Bot,
+  Download, FileSpreadsheet, FileText, FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -21,6 +22,9 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 
 // "My Leads" is the admin/manager's own personal working tab — it always
 // scopes to leads assigned to the logged-in user, no matter their role.
@@ -69,6 +73,7 @@ export default function MyLeads() {
   const [addOpen, setAddOpen] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState({
     name: "", phone: "", email: "", source: "Website", status: "new", tag: "", deal_type: "",
     budget: "", property_interest: "", city: "", notes: "", remark: "",
@@ -191,6 +196,42 @@ export default function MyLeads() {
     } finally { setBusy(false); }
   };
 
+  // Downloads the leads currently visible on this page (respecting the
+  // active status/tag filters) as CSV, Excel, or PDF. The backend already
+  // scopes /leads/export to "assigned to me" for non-manager roles, so this
+  // can never pull in another agent's leads.
+  const downloadExport = async (format) => {
+    setExporting(true);
+    try {
+      const params = { format };
+      if (status !== "all") params.status = status;
+      if (tag !== "all") params.tag = tag;
+      const { data } = await api.get("/leads/export", { params, responseType: "blob" });
+      const ext = format === "xlsx" ? "xlsx" : format;
+      const url = window.URL.createObjectURL(new Blob([data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `my-leads.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Download started");
+    } catch (err) {
+      // With responseType "blob", an error response body also arrives as a
+      // Blob instead of parsed JSON — read it back out as text to get the
+      // real detail message instead of showing "[object Blob]".
+      let detail = "Download failed";
+      const body = err.response?.data;
+      if (body instanceof Blob) {
+        try { detail = JSON.parse(await body.text())?.detail || detail; } catch { /* keep default */ }
+      } else if (body?.detail) {
+        detail = body.detail;
+      }
+      toast.error(apiError(detail));
+    } finally { setExporting(false); }
+  };
+
   const removeLead = async (id) => {
     try {
       await api.delete(`/leads/${id}`);
@@ -272,6 +313,25 @@ export default function MyLeads() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" data-testid="my-leads-download-btn" disabled={exporting} className="gap-2">
+                {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                Download
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem data-testid="my-leads-download-csv" onClick={() => downloadExport("csv")} className="gap-2">
+                <FileText className="h-4 w-4" /> CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="my-leads-download-xlsx" onClick={() => downloadExport("xlsx")} className="gap-2">
+                <FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="my-leads-download-pdf" onClick={() => downloadExport("pdf")} className="gap-2">
+                <FileDown className="h-4 w-4" /> PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <DialogTrigger asChild>
               <Button data-testid="my-leads-add-btn" className="gap-2 bg-brand hover:bg-brand-dark">
