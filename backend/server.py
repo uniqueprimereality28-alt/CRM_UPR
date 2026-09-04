@@ -1131,19 +1131,32 @@ async def export_leads(
             headers={"Content-Disposition": f"attachment; filename=leads_{ist_today_str()}.csv"})
 
     if format == "pdf":
-        buf = io.BytesIO()
-        pdf_doc = SimpleDocTemplate(buf, pagesize=landscape(A4))
-        data = [columns] + [row_for(d) for d in docs]
-        table = Table(data, repeatRows=1)
-        table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
-        ]))
-        pdf_doc.build([table])
-        buf.seek(0)
+        def _pdf_safe(v):
+            # ReportLab's default fonts only support Latin-1. Hindi text, emoji,
+            # or smart quotes in a name/remark/city would otherwise crash the
+            # whole export mid-build with no useful error. Swap anything outside
+            # Latin-1 for '?' so the export always succeeds.
+            s = v if isinstance(v, str) else str(v)
+            return s.encode("latin-1", errors="replace").decode("latin-1")
+
+        try:
+            buf = io.BytesIO()
+            pdf_doc = SimpleDocTemplate(buf, pagesize=landscape(A4))
+            data = [columns] + [[_pdf_safe(c) for c in row_for(d)] for d in docs]
+            table = Table(data, repeatRows=1)
+            table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+            ]))
+            pdf_doc.build([table])
+            buf.seek(0)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()  # still shows up in Render Logs for any future issue
+            raise HTTPException(status_code=500, detail=f"PDF export failed: {e}")
         return StreamingResponse(buf, media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename=leads_{ist_today_str()}.pdf"})
 
