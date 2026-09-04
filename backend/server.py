@@ -3028,6 +3028,21 @@ async def startup():
         await db.settings.insert_one({"_id": "leads_phone_swap_fixed_v1", "at": now_iso(), "fixed": fixed})
         logger.info(f"Repaired {fixed} lead(s) with swapped name/phone")
 
+    # ONE-TIME RENAME — Facebook rebranded its ads platform to "Meta Ads".
+    # Update any lead already saved with the old "Facebook Ads" source label
+    # so existing leads display consistently with the new option in the
+    # source dropdown. Runs once, guarded by the flag below.
+    source_rename_flag = await db.settings.find_one({"_id": "leads_source_facebook_to_meta_v1"})
+    if not source_rename_flag:
+        result = await db.leads.update_many(
+            {"source": "Facebook Ads"}, {"$set": {"source": "Meta Ads"}}
+        )
+        await db.settings.insert_one({
+            "_id": "leads_source_facebook_to_meta_v1", "at": now_iso(),
+            "renamed": result.modified_count,
+        })
+        logger.info(f"Renamed source on {result.modified_count} lead(s): Facebook Ads -> Meta Ads")
+
     async def _seed(username, password, name, role, email, phone):
         username = username.strip().lower()
         existing = await db.users.find_one({"username": username})
