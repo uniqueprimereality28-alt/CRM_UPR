@@ -1089,20 +1089,24 @@ async def clear_duplicate_leads(payload: ClearDuplicatesRequest, admin: dict = D
 @api.get("/leads/export")
 async def export_leads(
     format: str = "xlsx",
-    user: dict = Depends(require_manager),
+    user: dict = Depends(get_current_user),
     status: Optional[str] = None,
     tag: Optional[str] = None,
     assigned_to: Optional[str] = None,
 ):
-    """Bulk export of visible leads to Excel or PDF. Tags/remarks columns included as-is, unchanged."""
+    """Bulk export of visible leads to CSV, Excel, or PDF. Tags/remarks columns included as-is, unchanged.
+    Uses the same visibility rules as GET /leads: managers/full-view roles get every
+    lead matching the filters, everyone else (e.g. sales agents exporting from their
+    own My Leads page) only gets leads assigned to them."""
     base_q = _lead_visibility_query(user)
     query = await _apply_visibility(base_q, user)
+    if can_view_all(user) or user.get("role") == ROLE_TL:
+        if assigned_to:
+            query["assigned_to"] = assigned_to
     if status:
         query["status"] = status
     if tag:
         query["tag"] = tag
-    if assigned_to:
-        query["assigned_to"] = assigned_to
     docs = await db.leads.find(query).sort("created_at", -1).to_list(20000)
 
     columns = ["Name", "Phone Number", "Email", "Status", "Tag", "Remark",
@@ -1115,6 +1119,16 @@ async def export_leads(
             d.get("source") or "", d.get("city") or "",
             d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
         ]
+
+    if format == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(columns)
+        for d in docs:
+            writer.writerow(row_for(d))
+        out = io.BytesIO(buf.getvalue().encode("utf-8-sig"))  # BOM so Excel opens UTF-8 cleanly
+        return StreamingResponse(out, media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=leads_{ist_today_str()}.csv"})
 
     if format == "pdf":
         buf = io.BytesIO()
