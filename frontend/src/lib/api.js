@@ -190,6 +190,37 @@ export function promptFilename(defaultName) {
   return cleaned || defaultName;
 }
 
+// Sends a downloaded file (Blob) straight to the device's native share sheet
+// — on mobile this surfaces WhatsApp, Gmail, Drive, etc. directly, instead
+// of just dropping a file into Downloads. Falls back to a normal browser
+// download wherever the Web Share API (or file sharing specifically) isn't
+// supported, which today is effectively "most desktop browsers" — so
+// desktop users see no change in behavior.
+// Returns "shared", "downloaded", or "cancelled" (person backed out of the
+// share sheet) so the caller can toast appropriately.
+export async function shareOrDownloadFile(blob, filename, mimeType) {
+  try {
+    const file = new File([blob], filename, { type: mimeType });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+      return "shared";
+    }
+  } catch (err) {
+    if (err && err.name === "AbortError") return "cancelled";
+    // Any other share failure (e.g. some apps reject the mime type) — fall
+    // through to a normal download instead of leaving the person stuck.
+  }
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+  return "downloaded";
+}
+
 export const STATUS_META = {
   new: { label: "New", cls: "bg-blue-50 text-blue-700 border-blue-200" },
   contacted: { label: "Contacted", cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
