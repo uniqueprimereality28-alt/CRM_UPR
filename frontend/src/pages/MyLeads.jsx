@@ -196,18 +196,26 @@ export default function MyLeads() {
     } finally { setBusy(false); }
   };
 
-  // Downloads the leads currently visible on this page (respecting the
-  // active status/tag filters) as CSV, Excel, or PDF. "My Leads" must
-  // always scope to the logged-in user's own leads — the backend only
-  // does this automatically for non-manager roles, so admins/superadmins
-  // need assigned_to sent explicitly, or this would try to export every
-  // lead in the company instead of just the ones on this page.
+  // Downloads leads as CSV, Excel, or PDF. If any rows are checked, only
+  // those leads are exported (in the order they appear on screen, so a
+  // sorted list is preserved). Otherwise it falls back to everything
+  // currently visible on this page, respecting the active status/tag
+  // filters. "My Leads" must always scope to the logged-in user's own
+  // leads — the backend only does this automatically for non-manager
+  // roles, so admins/superadmins need assigned_to sent explicitly, or
+  // this would try to export every lead in the company instead of just
+  // the ones on this page.
   const downloadExport = async (format) => {
     setExporting(true);
     try {
       const params = { format, assigned_to: myId };
-      if (status !== "all") params.status = status;
-      if (tag !== "all") params.tag = tag;
+      if (selected.length > 0) {
+        // Preserve on-screen order rather than the raw selection order.
+        params.lead_ids = leads.filter((l) => selected.includes(l.id)).map((l) => l.id).join(",");
+      } else {
+        if (status !== "all") params.status = status;
+        if (tag !== "all") params.tag = tag;
+      }
       const { data } = await api.get("/leads/export", { params, responseType: "blob" });
       const ext = format === "xlsx" ? "xlsx" : format;
       const url = window.URL.createObjectURL(new Blob([data]));
@@ -319,7 +327,7 @@ export default function MyLeads() {
             <DropdownMenuTrigger asChild>
               <Button variant="outline" data-testid="my-leads-download-btn" disabled={exporting} className="gap-2">
                 {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                Download
+                {selected.length > 0 ? `Download (${selected.length} selected)` : "Download"}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
