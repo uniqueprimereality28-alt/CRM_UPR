@@ -900,110 +900,6 @@ async def _ensure_lead_access(lead: dict, user: dict):
         raise HTTPException(status_code=403, detail="This lead is not assigned to you")
 
 
-@api.get("/leads/{lead_id}")
-async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    await _ensure_lead_access(doc, user)
-    activities = await db.activities.find({"lead_id": lead_id}).sort("created_at", -1).to_list(300)
-    calls = await db.calls.find({"lead_id": lead_id}).sort("started_at", -1).to_list(300)
-    for a in activities: a["_id"] = str(a["_id"])
-    for c in calls: c["_id"] = str(c["_id"])
-    return {"lead": Lead.from_mongo(doc), "activities": activities, "calls": calls}
-
-
-@api.put("/leads/{lead_id}", response_model=Lead)
-async def update_lead(lead_id: str, payload: LeadUpdate, user: dict = Depends(get_current_user)):
-    doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    await _ensure_lead_access(doc, user)
-    updates = payload.model_dump(exclude_unset=True)
-    if "status" in updates and updates["status"] not in LEAD_STATUSES:
-        raise HTTPException(status_code=400, detail="Invalid status")
-    if "deal_type" in updates and updates["deal_type"] not in {None, "resale", "rent"}:
-        raise HTTPException(status_code=400, detail="Invalid listing type")
-    if "assigned_to" in updates:
-        if not is_manager(user):
-            updates.pop("assigned_to")
-        elif updates["assigned_to"]:
-            agent = await db.users.find_one({"_id": ObjectId(updates["assigned_to"])})
-            updates["assigned_to_name"] = agent.get("name") if agent else None
-            if updates["assigned_to"] != doc.get("assigned_to"):
-                updates["assigned_at"] = now_iso()
-        else:
-            updates["assigned_to_name"] = None
-            updates["assigned_at"] = None
-    if "brochure_sent" in updates:
-        updates["brochure_sent_at"] = now_iso() if updates["brochure_sent"] else None
-    if "follow_up_at" in updates:
-        updates["reminder_acked"] = False
-    updates["updated_at"] = now_iso()
-    await db.leads.update_one({"_id": ObjectId(lead_id)}, {"$set": updates})
-    if "status" in updates and updates["status"] != doc.get("status"):
-        await _log_activity(lead_id, user, "status_change",
-                            f"Status changed from {doc.get('status')} to {updates['status']}")
-    if updates.get("assigned_to_name"):
-        await _log_activity(lead_id, user, "assignment",
-                            f"Lead assigned to {updates['assigned_to_name']}")
-    if "tag" in updates:
-        await _log_activity(lead_id, user, "tag", f"Tag set to {updates['tag']}")
-    if "deal_type" in updates:
-        await _log_activity(lead_id, user, "tag", f"Listing type set to {updates['deal_type'] or 'none'}")
-    if "follow_up_status" in updates:
-        await _log_activity(lead_id, user, "followup",
-                            f"Follow-up status: {updates['follow_up_status']}")
-    if "brochure_sent" in updates and updates["brochure_sent"] != doc.get("brochure_sent", False):
-        await _log_activity(lead_id, user, "brochure",
-                            "Brochure sent on WhatsApp" if updates["brochure_sent"] else "Brochure tick removed")
-    if updates.get("follow_up_at") and updates["follow_up_at"] != doc.get("follow_up_at"):
-        await _log_activity(lead_id, user, "followup", "Follow-up reminder scheduled")
-    new_doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
-    return Lead.from_mongo(new_doc)
-
-
-@api.delete("/leads/{lead_id}")
-async def delete_lead(lead_id: str, admin: dict = Depends(require_admin)):
-    await db.leads.delete_one({"_id": ObjectId(lead_id)})
-    await db.activities.delete_many({"lead_id": lead_id})
-    return {"ok": True}
-
-
-@api.post("/leads/assign")
-async def assign_leads(payload: AssignRequest, user: dict = Depends(require_manager)):
-    agent = await db.users.find_one({"_id": ObjectId(payload.agent_id)})
-    if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    # Team leads can only assign to their own team members (or themselves)
-    if user.get("role") == ROLE_TL:
-        if agent.get("team_lead_id") != str(user["_id"]) and str(agent["_id"]) != str(user["_id"]):
-            raise HTTPException(status_code=403, detail="You can only assign leads to your own team")
-    ids = [ObjectId(i) for i in payload.lead_ids]
-    await db.leads.update_many(
-        {"_id": {"$in": ids}},
-        {"$set": {"assigned_to": payload.agent_id, "assigned_to_name": agent["name"],
-                  "assigned_at": now_iso(), "updated_at": now_iso()}})
-    for lead_id in payload.lead_ids:
-        await _log_activity(lead_id, user, "assignment", f"Lead assigned to {agent['name']}")
-    return {"ok": True, "assigned": len(payload.lead_ids)}
-
-
-@api.post("/leads/bulk-delete")
-async def bulk_delete_leads(payload: BulkDeleteRequest, admin: dict = Depends(require_admin)):
-    """Admin/superadmin only — delete many leads (and their activities/calls) in one go."""
-    if not payload.lead_ids:
-        raise HTTPException(status_code=400, detail="No leads selected")
-    try:
-        ids = [ObjectId(i) for i in payload.lead_ids]
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid lead id in selection")
-    result = await db.leads.delete_many({"_id": {"$in": ids}})
-    await db.activities.delete_many({"lead_id": {"$in": payload.lead_ids}})
-    await db.calls.delete_many({"lead_id": {"$in": payload.lead_ids}})
-    return {"ok": True, "deleted": result.deleted_count}
-
-
 @api.get("/leads/duplicates")
 async def find_duplicate_leads(admin: dict = Depends(require_admin)):
     """Admin/superadmin only — group leads by phone number and surface groups with more than one lead.
@@ -1042,48 +938,6 @@ async def find_duplicate_leads(admin: dict = Depends(require_admin)):
         "total_duplicate_leads": sum(g["count"] - 1 for g in groups),
         "multi_assigned_groups": sum(1 for g in groups if g["multi_assigned"]),
     }
-
-
-@api.post("/leads/duplicates/resolve")
-async def resolve_duplicate_group(payload: ResolveDuplicateRequest, admin: dict = Depends(require_admin)):
-    """Admin/superadmin only — for one specific phone number, keep the chosen lead and delete every
-    other lead sharing that phone number."""
-    others = await db.leads.find(
-        {"phone": payload.phone, "_id": {"$ne": ObjectId(payload.keep_lead_id)}}
-    ).to_list(1000)
-    ids_to_delete = [str(o["_id"]) for o in others]
-    if ids_to_delete:
-        await db.leads.delete_many({"_id": {"$in": [ObjectId(i) for i in ids_to_delete]}})
-        await db.activities.delete_many({"lead_id": {"$in": ids_to_delete}})
-        await db.calls.delete_many({"lead_id": {"$in": ids_to_delete}})
-    return {"ok": True, "removed": len(ids_to_delete)}
-
-
-@api.post("/leads/duplicates/clear")
-async def clear_duplicate_leads(payload: ClearDuplicatesRequest, admin: dict = Depends(require_admin)):
-    """Admin/superadmin only — for every phone number with duplicates, keep one lead and delete the rest."""
-    pipeline = [
-        {"$match": {"phone": {"$nin": [None, ""]}}},
-        {"$group": {
-            "_id": "$phone",
-            "count": {"$sum": 1},
-            "leads": {"$push": {"id": {"$toString": "$_id"}, "created_at": "$created_at"}},
-        }},
-        {"$match": {"count": {"$gt": 1}}},
-    ]
-    groups = await db.leads.aggregate(pipeline).to_list(5000)
-    to_delete: List[str] = []
-    for g in groups:
-        rows = sorted(g["leads"], key=lambda x: x.get("created_at") or "")
-        if payload.keep == "newest":
-            rows = rows[::-1]
-        to_delete.extend(r["id"] for r in rows[1:])  # keep rows[0], drop the rest
-    if to_delete:
-        ids = [ObjectId(i) for i in to_delete]
-        await db.leads.delete_many({"_id": {"$in": ids}})
-        await db.activities.delete_many({"lead_id": {"$in": to_delete}})
-        await db.calls.delete_many({"lead_id": {"$in": to_delete}})
-    return {"ok": True, "removed": len(to_delete), "groups_cleaned": len(groups)}
 
 
 @api.get("/leads/export")
@@ -1190,6 +1044,152 @@ async def leads_import_template(user: dict = Depends(require_manager)):
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=leads_import_template.xlsx"})
+
+
+@api.get("/leads/{lead_id}")
+async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await _ensure_lead_access(doc, user)
+    activities = await db.activities.find({"lead_id": lead_id}).sort("created_at", -1).to_list(300)
+    calls = await db.calls.find({"lead_id": lead_id}).sort("started_at", -1).to_list(300)
+    for a in activities: a["_id"] = str(a["_id"])
+    for c in calls: c["_id"] = str(c["_id"])
+    return {"lead": Lead.from_mongo(doc), "activities": activities, "calls": calls}
+
+
+@api.put("/leads/{lead_id}", response_model=Lead)
+async def update_lead(lead_id: str, payload: LeadUpdate, user: dict = Depends(get_current_user)):
+    doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    await _ensure_lead_access(doc, user)
+    updates = payload.model_dump(exclude_unset=True)
+    if "status" in updates and updates["status"] not in LEAD_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if "deal_type" in updates and updates["deal_type"] not in {None, "resale", "rent"}:
+        raise HTTPException(status_code=400, detail="Invalid listing type")
+    if "assigned_to" in updates:
+        if not is_manager(user):
+            updates.pop("assigned_to")
+        elif updates["assigned_to"]:
+            agent = await db.users.find_one({"_id": ObjectId(updates["assigned_to"])})
+            updates["assigned_to_name"] = agent.get("name") if agent else None
+            if updates["assigned_to"] != doc.get("assigned_to"):
+                updates["assigned_at"] = now_iso()
+        else:
+            updates["assigned_to_name"] = None
+            updates["assigned_at"] = None
+    if "brochure_sent" in updates:
+        updates["brochure_sent_at"] = now_iso() if updates["brochure_sent"] else None
+    if "follow_up_at" in updates:
+        updates["reminder_acked"] = False
+    updates["updated_at"] = now_iso()
+    await db.leads.update_one({"_id": ObjectId(lead_id)}, {"$set": updates})
+    if "status" in updates and updates["status"] != doc.get("status"):
+        await _log_activity(lead_id, user, "status_change",
+                            f"Status changed from {doc.get('status')} to {updates['status']}")
+    if updates.get("assigned_to_name"):
+        await _log_activity(lead_id, user, "assignment",
+                            f"Lead assigned to {updates['assigned_to_name']}")
+    if "tag" in updates:
+        await _log_activity(lead_id, user, "tag", f"Tag set to {updates['tag']}")
+    if "deal_type" in updates:
+        await _log_activity(lead_id, user, "tag", f"Listing type set to {updates['deal_type'] or 'none'}")
+    if "follow_up_status" in updates:
+        await _log_activity(lead_id, user, "followup",
+                            f"Follow-up status: {updates['follow_up_status']}")
+    if "brochure_sent" in updates and updates["brochure_sent"] != doc.get("brochure_sent", False):
+        await _log_activity(lead_id, user, "brochure",
+                            "Brochure sent on WhatsApp" if updates["brochure_sent"] else "Brochure tick removed")
+    if updates.get("follow_up_at") and updates["follow_up_at"] != doc.get("follow_up_at"):
+        await _log_activity(lead_id, user, "followup", "Follow-up reminder scheduled")
+    new_doc = await db.leads.find_one({"_id": ObjectId(lead_id)})
+    return Lead.from_mongo(new_doc)
+
+
+@api.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: str, admin: dict = Depends(require_admin)):
+    await db.leads.delete_one({"_id": ObjectId(lead_id)})
+    await db.activities.delete_many({"lead_id": lead_id})
+    return {"ok": True}
+
+
+@api.post("/leads/assign")
+async def assign_leads(payload: AssignRequest, user: dict = Depends(require_manager)):
+    agent = await db.users.find_one({"_id": ObjectId(payload.agent_id)})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    # Team leads can only assign to their own team members (or themselves)
+    if user.get("role") == ROLE_TL:
+        if agent.get("team_lead_id") != str(user["_id"]) and str(agent["_id"]) != str(user["_id"]):
+            raise HTTPException(status_code=403, detail="You can only assign leads to your own team")
+    ids = [ObjectId(i) for i in payload.lead_ids]
+    await db.leads.update_many(
+        {"_id": {"$in": ids}},
+        {"$set": {"assigned_to": payload.agent_id, "assigned_to_name": agent["name"],
+                  "assigned_at": now_iso(), "updated_at": now_iso()}})
+    for lead_id in payload.lead_ids:
+        await _log_activity(lead_id, user, "assignment", f"Lead assigned to {agent['name']}")
+    return {"ok": True, "assigned": len(payload.lead_ids)}
+
+
+@api.post("/leads/bulk-delete")
+async def bulk_delete_leads(payload: BulkDeleteRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — delete many leads (and their activities/calls) in one go."""
+    if not payload.lead_ids:
+        raise HTTPException(status_code=400, detail="No leads selected")
+    try:
+        ids = [ObjectId(i) for i in payload.lead_ids]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid lead id in selection")
+    result = await db.leads.delete_many({"_id": {"$in": ids}})
+    await db.activities.delete_many({"lead_id": {"$in": payload.lead_ids}})
+    await db.calls.delete_many({"lead_id": {"$in": payload.lead_ids}})
+    return {"ok": True, "deleted": result.deleted_count}
+
+
+@api.post("/leads/duplicates/resolve")
+async def resolve_duplicate_group(payload: ResolveDuplicateRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — for one specific phone number, keep the chosen lead and delete every
+    other lead sharing that phone number."""
+    others = await db.leads.find(
+        {"phone": payload.phone, "_id": {"$ne": ObjectId(payload.keep_lead_id)}}
+    ).to_list(1000)
+    ids_to_delete = [str(o["_id"]) for o in others]
+    if ids_to_delete:
+        await db.leads.delete_many({"_id": {"$in": [ObjectId(i) for i in ids_to_delete]}})
+        await db.activities.delete_many({"lead_id": {"$in": ids_to_delete}})
+        await db.calls.delete_many({"lead_id": {"$in": ids_to_delete}})
+    return {"ok": True, "removed": len(ids_to_delete)}
+
+
+@api.post("/leads/duplicates/clear")
+async def clear_duplicate_leads(payload: ClearDuplicatesRequest, admin: dict = Depends(require_admin)):
+    """Admin/superadmin only — for every phone number with duplicates, keep one lead and delete the rest."""
+    pipeline = [
+        {"$match": {"phone": {"$nin": [None, ""]}}},
+        {"$group": {
+            "_id": "$phone",
+            "count": {"$sum": 1},
+            "leads": {"$push": {"id": {"$toString": "$_id"}, "created_at": "$created_at"}},
+        }},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    groups = await db.leads.aggregate(pipeline).to_list(5000)
+    to_delete: List[str] = []
+    for g in groups:
+        rows = sorted(g["leads"], key=lambda x: x.get("created_at") or "")
+        if payload.keep == "newest":
+            rows = rows[::-1]
+        to_delete.extend(r["id"] for r in rows[1:])  # keep rows[0], drop the rest
+    if to_delete:
+        ids = [ObjectId(i) for i in to_delete]
+        await db.leads.delete_many({"_id": {"$in": ids}})
+        await db.activities.delete_many({"lead_id": {"$in": to_delete}})
+        await db.calls.delete_many({"lead_id": {"$in": to_delete}})
+    return {"ok": True, "removed": len(to_delete), "groups_cleaned": len(groups)}
 
 
 @api.post("/leads/import")
