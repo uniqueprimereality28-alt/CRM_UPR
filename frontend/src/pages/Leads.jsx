@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
   AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall, Bot,
+  Download, FileSpreadsheet, FileText, FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
@@ -21,6 +22,9 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 
 const SOURCES = ["Website", "99acres", "MagicBricks", "Meta Ads", "Google Ads", "Referral", "Walk-in", "CSV Import"];
 const TAGS = [
@@ -65,6 +69,7 @@ export default function Leads() {
   const [importOpen, setImportOpen] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState({
     name: "", phone: "", email: "", source: "Website", status: "new", tag: "", deal_type: "",
     budget: "", property_interest: "", city: "", notes: "", remark: "", assigned_to: "",
@@ -259,6 +264,51 @@ export default function Leads() {
     } finally { setBusy(false); }
   };
 
+  // Downloads leads as CSV, Excel, or PDF. If any rows are checked, only
+  // those leads are exported (in the order they appear on screen, so a
+  // sorted/filtered selection is preserved). Otherwise it falls back to
+  // everything currently visible on this page — the backend applies the
+  // same visibility rules as the list itself (managers see every matching
+  // lead, agents only see their own), so this always downloads exactly
+  // what the person is looking at.
+  const downloadExport = async (format) => {
+    setExporting(true);
+    try {
+      const params = { format };
+      if (selected.length > 0) {
+        params.lead_ids = leads.filter((l) => selected.includes(l.id)).map((l) => l.id).join(",");
+      } else {
+        if (status !== "all") params.status = status;
+        if (tag !== "all") params.tag = tag;
+        if (isManager && agentFilter === "unassigned") params.unassigned = true;
+        else if (isManager && agentFilter !== "all") params.assigned_to = agentFilter;
+      }
+      const { data } = await api.get("/leads/export", { params, responseType: "blob" });
+      const ext = format === "xlsx" ? "xlsx" : format;
+      const url = window.URL.createObjectURL(new Blob([data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `leads.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Download started");
+    } catch (err) {
+      // With responseType "blob", an error response body also arrives as a
+      // Blob instead of parsed JSON — read it back out as text to get the
+      // real detail message instead of showing "[object Blob]".
+      let detail = "Download failed";
+      const body = err.response?.data;
+      if (body instanceof Blob) {
+        try { detail = JSON.parse(await body.text())?.detail || detail; } catch { /* keep default */ }
+      } else if (body?.detail) {
+        detail = body.detail;
+      }
+      toast.error(apiError(detail));
+    } finally { setExporting(false); }
+  };
+
   const openDuplicatePreview = async () => {
     setDupPreviewOpen(true);
     setDupLoading(true);
@@ -357,6 +407,25 @@ export default function Leads() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" data-testid="leads-download-btn" disabled={exporting} className="gap-2">
+                {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {selected.length > 0 ? `Download (${selected.length} selected)` : "Download"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem data-testid="leads-download-csv" onClick={() => downloadExport("csv")} className="gap-2">
+                <FileText className="h-4 w-4" /> CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="leads-download-xlsx" onClick={() => downloadExport("xlsx")} className="gap-2">
+                <FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="leads-download-pdf" onClick={() => downloadExport("pdf")} className="gap-2">
+                <FileDown className="h-4 w-4" /> PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {isAdmin && (
             <Button
               variant="outline"
