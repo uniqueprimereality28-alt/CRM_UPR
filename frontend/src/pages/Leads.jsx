@@ -6,7 +6,7 @@ import {
   Download, FileSpreadsheet, FileText, FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES } from "../lib/api";
+import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES, promptFilename } from "../lib/api";
 import { tempMeta } from "../lib/ai";
 import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
@@ -272,6 +272,10 @@ export default function Leads() {
   // lead, agents only see their own), so this always downloads exactly
   // what the person is looking at.
   const downloadExport = async (format) => {
+    const ext = format === "xlsx" ? "xlsx" : format;
+    const defaultName = selected.length > 0 ? `leads-selected-${selected.length}` : "leads";
+    const filename = promptFilename(defaultName);
+    if (filename === null) return; // cancelled — don't even hit the network
     setExporting(true);
     try {
       const params = { format };
@@ -284,11 +288,10 @@ export default function Leads() {
         else if (isManager && agentFilter !== "all") params.assigned_to = agentFilter;
       }
       const { data } = await api.get("/leads/export", { params, responseType: "blob" });
-      const ext = format === "xlsx" ? "xlsx" : format;
       const url = window.URL.createObjectURL(new Blob([data]));
       const a = document.createElement("a");
       a.href = url;
-      a.download = `leads.${ext}`;
+      a.download = `${filename}.${ext}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
