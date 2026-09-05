@@ -177,6 +177,19 @@ export function fmtDate(iso) {
   });
 }
 
+// Asks the person what to call a file before it downloads, pre-filled with
+// a sensible default. Browsers don't let a webpage choose which *folder*
+// a download lands in (that's a security restriction, not something we can
+// work around) — every download always goes to the browser's configured
+// Downloads folder. The filename itself, though, we can let them pick.
+// Returns null if they cancel, so the caller can skip the download entirely.
+export function promptFilename(defaultName) {
+  const input = window.prompt("Save file as (without extension):", defaultName);
+  if (input === null) return null; // cancelled
+  const cleaned = input.trim().replace(/[\\/:*?"<>|]+/g, "").slice(0, 150);
+  return cleaned || defaultName;
+}
+
 export const STATUS_META = {
   new: { label: "New", cls: "bg-blue-50 text-blue-700 border-blue-200" },
   contacted: { label: "Contacted", cls: "bg-indigo-50 text-indigo-700 border-indigo-200" },
