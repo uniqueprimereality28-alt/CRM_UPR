@@ -947,21 +947,43 @@ async def export_leads(
     status: Optional[str] = None,
     tag: Optional[str] = None,
     assigned_to: Optional[str] = None,
+    unassigned: Optional[bool] = None,
+    lead_ids: Optional[str] = None,
 ):
     """Bulk export of visible leads to CSV, Excel, or PDF. Tags/remarks columns included as-is, unchanged.
     Uses the same visibility rules as GET /leads: managers/full-view roles get every
     lead matching the filters, everyone else (e.g. sales agents exporting from their
-    own My Leads page) only gets leads assigned to them."""
+    own My Leads page) only gets leads assigned to them.
+
+    `lead_ids` is an optional comma-separated list of lead ids — when present (e.g. the
+    caller has a specific selection checked on screen), the export is restricted to
+    exactly those leads instead of the status/tag/assigned_to filters. The visibility
+    query is still applied on top, so a crafted id for a lead the user isn't allowed to
+    see is silently dropped rather than exported."""
     base_q = _lead_visibility_query(user)
     query = await _apply_visibility(base_q, user)
     if can_view_all(user) or user.get("role") == ROLE_TL:
         if assigned_to:
             query["assigned_to"] = assigned_to
-    if status:
-        query["status"] = status
-    if tag:
-        query["tag"] = tag
+        if unassigned:
+            query["assigned_to"] = None
+    if lead_ids:
+        raw_ids = [i for i in lead_ids.split(",") if i]
+        try:
+            query["_id"] = {"$in": [ObjectId(i) for i in raw_ids]}
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid lead id in selection")
+    else:
+        if status:
+            query["status"] = status
+        if tag:
+            query["tag"] = tag
     docs = await db.leads.find(query).sort("created_at", -1).to_list(20000)
+    if lead_ids:
+        # Preserve the caller's on-screen ordering (e.g. after a client-side sort)
+        # instead of the default created_at sort, since they picked this exact set.
+        order = {i: n for n, i in enumerate(raw_ids)}
+        docs.sort(key=lambda d: order.get(str(d["_id"]), len(order)))
 
     columns = ["Name", "Phone Number", "Email", "Status", "Tag", "Remark",
                "Source", "City", "Assigned To", "Created At"]
