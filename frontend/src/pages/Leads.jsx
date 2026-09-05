@@ -299,9 +299,11 @@ export default function Leads() {
       const mimeType = MIME_TYPES[format] || "application/octet-stream";
       const blob = new Blob([data], { type: mimeType });
       const result = await shareOrDownloadFile(blob, `${filename}.${ext}`, mimeType);
-      if (result === "shared") toast.success("Shared");
-      else if (result === "downloaded") toast.success("Download started");
-      // "cancelled" — they backed out of the share sheet on purpose, no toast.
+      // No toast for "shared" — the OS share sheet gives its own native
+      // confirmation, and the Web Share API deliberately never tells a
+      // webpage which target the person picked (WhatsApp vs. just saving
+      // to Files), so we can't honestly label it beyond that.
+      if (result === "downloaded") toast.success("Download started");
     } catch (err) {
       // With responseType "blob", an error response body also arrives as a
       // Blob instead of parsed JSON — read it back out as text to get the
