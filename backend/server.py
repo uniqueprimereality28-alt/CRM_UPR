@@ -987,14 +987,52 @@ async def export_leads(
         order = {i: n for n, i in enumerate(raw_ids)}
         docs.sort(key=lambda d: order.get(str(d["_id"]), len(order)))
 
-    columns = ["Name", "Phone Number", "Email", "Status", "Tag", "Remark",
-               "Source", "City", "Assigned To", "Created At"]
+    # Human-readable labels for follow_up_status, matching the frontend's
+    # FU_STATUSES list so the export reads the same as the UI dropdowns.
+    FU_STATUS_LABELS = {
+        "interested": "Interested",
+        "visit_scheduled": "Visit Scheduled",
+        "callback": "Callback",
+        "not_interested": "Not interested",
+        "converted": "Converted",
+        "no_answer": "Didn't Pick",
+        "switched_off": "Switched off",
+        "invalid": "Invalid",
+    }
+
+    def _indian_grouping(n):
+        s = str(int(round(n)))
+        if len(s) <= 3:
+            return s
+        last3, rest = s[-3:], s[:-3]
+        parts = []
+        while len(rest) > 2:
+            parts.insert(0, rest[-2:])
+            rest = rest[:-2]
+        if rest:
+            parts.insert(0, rest)
+        return ",".join(parts) + "," + last3
+
+    columns = ["Name", "Phone Number", "Email", "Status", "Follow-up Status", "Tag",
+               "Budget", "Remark", "Source", "Assigned To", "Created At"]
 
     def row_for(d):
+        budget = d.get("budget")
         return [
             d.get("name") or "", d.get("phone") or "", d.get("email") or "",
-            d.get("status") or "", d.get("tag") or "", d.get("remark") or "",
-            d.get("source") or "", d.get("city") or "",
+            d.get("status") or "", FU_STATUS_LABELS.get(d.get("follow_up_status"), d.get("follow_up_status") or ""),
+            d.get("tag") or "", budget if budget else "",
+            d.get("remark") or "", d.get("source") or "",
+            d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
+        ]
+
+    def row_for_pdf(d):
+        budget = d.get("budget")
+        return [
+            d.get("name") or "", d.get("phone") or "", d.get("email") or "",
+            d.get("status") or "", FU_STATUS_LABELS.get(d.get("follow_up_status"), d.get("follow_up_status") or ""),
+            d.get("tag") or "", f"Rs {_indian_grouping(budget)}" if budget else "",
+            d.get("remark") or "", d.get("source") or "",
             d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
         ]
 
@@ -1011,7 +1049,7 @@ async def export_leads(
     if format == "pdf":
         def _pdf_safe(v):
             # ReportLab's default fonts only support Latin-1. Hindi text, emoji,
-            # or smart quotes in a name/remark/city would otherwise crash the
+            # or smart quotes in a name/remark would otherwise crash the
             # whole export mid-build with no useful error. Swap anything outside
             # Latin-1 for '?' so the export always succeeds.
             s = v if isinstance(v, str) else str(v)
@@ -1019,7 +1057,7 @@ async def export_leads(
 
         try:
             buf = io.BytesIO()
-            # Narrow margins since 10 columns need every bit of horizontal room
+            # Narrow margins since 11 columns need every bit of horizontal room
             # on a landscape page.
             pdf_doc = SimpleDocTemplate(
                 buf, pagesize=landscape(A4),
@@ -1031,17 +1069,18 @@ async def export_leads(
             header_style = ParagraphStyle("header", fontName="Helvetica-Bold", fontSize=7, leading=8.5,
                                            textColor=colors.white, wordWrap="CJK")
 
-            # Relative widths per column — Name and Remark get the most room
-            # since they carry the longest free-text, everything else stays
-            # compact. These are ratios, not points: they get scaled to fill
-            # the full usable page width below, so the table always exactly
-            # matches the page and nothing runs off the edge and gets clipped.
-            col_ratios = [1.4, 1.0, 1.4, 0.8, 0.7, 1.6, 0.9, 0.9, 1.1, 0.8]
+            # Relative widths per column, scaled to fill the full usable page
+            # width so the table always exactly matches the page and nothing
+            # runs off the edge and gets clipped. Order matches `columns`:
+            # Name, Phone, Email, Status, Follow-up Status, Tag, Budget, Remark,
+            # Source, Assigned To, Created At — Name and Remark get the most
+            # room since they carry the longest free-text.
+            col_ratios = [1.3, 0.95, 1.3, 0.75, 0.9, 0.65, 0.85, 1.5, 0.85, 1.0, 0.75]
             ratio_total = sum(col_ratios)
             col_widths = [usable_width * r / ratio_total for r in col_ratios]
 
             header_row = [Paragraph(_pdf_safe(c), header_style) for c in columns]
-            body_rows = [[Paragraph(_pdf_safe(c), cell_style) for c in row_for(d)] for d in docs]
+            body_rows = [[Paragraph(_pdf_safe(c), cell_style) for c in row_for_pdf(d)] for d in docs]
             data = [header_row] + body_rows
 
             table = Table(data, colWidths=col_widths, repeatRows=1)
