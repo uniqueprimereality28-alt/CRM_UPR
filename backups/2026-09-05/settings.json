@@ -1,0 +1,30 @@
+[
+  {
+    "_id": "seed_purged_v2",
+    "at": "2026-08-03T12:10:04.634367+00:00"
+  },
+  {
+    "_id": "office",
+    "office_lat": 28.50394377569241,
+    "office_lng": 77.00539390675101,
+    "office_radius_m": 100,
+    "office_start": "11:00",
+    "office_end": "18:00",
+    "office_label": "Unique Prime Reality"
+  },
+  {
+    "_id": "operational_reset",
+    "reset_at": "2026-08-04T11:08:59.028025+00:00",
+    "reset_by": "Vranda Aggarwal"
+  },
+  {
+    "_id": "leads_phone_swap_fixed_v1",
+    "at": "2026-08-23T06:08:53.623643+00:00",
+    "fixed": 247
+  },
+  {
+    "_id": "leads_source_facebook_to_meta_v1",
+    "at": "2026-09-04T08:58:18.787682+00:00",
+    "renamed": 40
+  }
+]
