@@ -6,7 +6,7 @@ import {
   Download, FileSpreadsheet, FileText, FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES, promptFilename } from "../lib/api";
+import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES, promptFilename, shareOrDownloadFile } from "../lib/api";
 import { tempMeta } from "../lib/ai";
 import { useClickToCall } from "../hooks/use-click-to-call";
 import { useAuth } from "../context/AuthContext";
@@ -205,6 +205,14 @@ export default function MyLeads() {
   // roles, so admins/superadmins need assigned_to sent explicitly, or
   // this would try to export every lead in the company instead of just
   // the ones on this page.
+  // On mobile this hands the file straight to the native share sheet
+  // (WhatsApp, Gmail, Drive, etc.) instead of just saving to Downloads;
+  // desktop browsers fall back to a normal download automatically.
+  const MIME_TYPES = {
+    csv: "text/csv",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pdf: "application/pdf",
+  };
   const downloadExport = async (format) => {
     const ext = format === "xlsx" ? "xlsx" : format;
     const defaultName = selected.length > 0 ? `my-leads-selected-${selected.length}` : "my-leads";
@@ -221,15 +229,12 @@ export default function MyLeads() {
         if (tag !== "all") params.tag = tag;
       }
       const { data } = await api.get("/leads/export", { params, responseType: "blob" });
-      const url = window.URL.createObjectURL(new Blob([data]));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${filename}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      toast.success("Download started");
+      const mimeType = MIME_TYPES[format] || "application/octet-stream";
+      const blob = new Blob([data], { type: mimeType });
+      const result = await shareOrDownloadFile(blob, `${filename}.${ext}`, mimeType);
+      if (result === "shared") toast.success("Shared");
+      else if (result === "downloaded") toast.success("Download started");
+      // "cancelled" — they backed out of the share sheet on purpose, no toast.
     } catch (err) {
       // With responseType "blob", an error response body also arrives as a
       // Blob instead of parsed JSON — read it back out as text to get the
