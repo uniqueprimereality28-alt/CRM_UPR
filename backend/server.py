@@ -26,7 +26,9 @@ from starlette.middleware.cors import CORSMiddleware
 from openpyxl import Workbook, load_workbook
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+from reportlab.lib.units import mm
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 
 # --- NEW IMPORT for PDF report generation ---
 from reports_pdf import generate_daily_report_pdf, generate_period_report_pdf
@@ -1017,15 +1019,41 @@ async def export_leads(
 
         try:
             buf = io.BytesIO()
-            pdf_doc = SimpleDocTemplate(buf, pagesize=landscape(A4))
-            data = [columns] + [[_pdf_safe(c) for c in row_for(d)] for d in docs]
-            table = Table(data, repeatRows=1)
+            # Narrow margins since 10 columns need every bit of horizontal room
+            # on a landscape page.
+            pdf_doc = SimpleDocTemplate(
+                buf, pagesize=landscape(A4),
+                leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm,
+            )
+            usable_width = pdf_doc.width
+
+            cell_style = ParagraphStyle("cell", fontName="Helvetica", fontSize=7, leading=8.5, wordWrap="CJK")
+            header_style = ParagraphStyle("header", fontName="Helvetica-Bold", fontSize=7, leading=8.5,
+                                           textColor=colors.white, wordWrap="CJK")
+
+            # Relative widths per column — Name and Remark get the most room
+            # since they carry the longest free-text, everything else stays
+            # compact. These are ratios, not points: they get scaled to fill
+            # the full usable page width below, so the table always exactly
+            # matches the page and nothing runs off the edge and gets clipped.
+            col_ratios = [1.4, 1.0, 1.4, 0.8, 0.7, 1.6, 0.9, 0.9, 1.1, 0.8]
+            ratio_total = sum(col_ratios)
+            col_widths = [usable_width * r / ratio_total for r in col_ratios]
+
+            header_row = [Paragraph(_pdf_safe(c), header_style) for c in columns]
+            body_rows = [[Paragraph(_pdf_safe(c), cell_style) for c in row_for(d)] for d in docs]
+            data = [header_row] + body_rows
+
+            table = Table(data, colWidths=col_widths, repeatRows=1)
             table.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f4f6")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ]))
             pdf_doc.build([table])
             buf.seek(0)
