@@ -1,0 +1,44 @@
+[
+  {
+    "_id": "6a72d685f49df27a9bde986e",
+    "identifier": "amit kumar",
+    "count": 9,
+    "locked_until": "2026-08-29T04:05:08.102091+00:00"
+  },
+  {
+    "_id": "6a72df75f49df27a9bdf13b8",
+    "identifier": "sandeep.chaunan",
+    "count": 6,
+    "locked_until": "2026-08-05T07:34:16.308248+00:00"
+  },
+  {
+    "_id": "6a72f1f9f49df27a9bdff80c",
+    "identifier": "amit",
+    "count": 1,
+    "locked_until": "2026-08-05T08:34:04.937199+00:00"
+  },
+  {
+    "_id": "6a72fac7f49df27a9be07090",
+    "identifier": "amit.kumar1",
+    "count": 7,
+    "locked_until": "2026-08-06T06:26:49.867378+00:00"
+  },
+  {
+    "_id": "6a733bd1f49df27a9be3ad8d",
+    "identifier": "amitkumar",
+    "count": 3,
+    "locked_until": "2026-08-05T13:49:34.315621+00:00"
+  },
+  {
+    "_id": "6a76d20feb7f73081013da24",
+    "identifier": "shrey agarwal",
+    "count": 1,
+    "locked_until": "2026-08-08T07:06:59.439960+00:00"
+  },
+  {
+    "_id": "6a7d994ac22790d1987d78c5",
+    "identifier": "login id - albeera.khan",
+    "count": 2,
+    "locked_until": "2026-08-13T10:31:07.604331+00:00"
+  }
+]
