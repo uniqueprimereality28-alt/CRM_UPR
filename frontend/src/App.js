@@ -197,7 +197,7 @@ function App() {
             <Route
               path="/ai-calling"
               element={
-                <Protected usernames={["vranda.aggarwal"]}>
+                <Protected usernames={["vranda.aggarwal", "sandeep.chauhan"]}>
                   <AICalling />
                 </Protected>
               }
