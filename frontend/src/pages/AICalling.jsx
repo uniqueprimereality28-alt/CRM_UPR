@@ -43,7 +43,7 @@ export default function AICalling() {
           </div>
           <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Calling Center</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Auto-dial assigned leads with a real phone call — a live AI voice agent talks to the
+            Auto-dial assigned leads — a live AI voice agent talks to the
             lead, captures requirements, scores the call, and syncs everything back to the CRM.
           </p>
         </div>
