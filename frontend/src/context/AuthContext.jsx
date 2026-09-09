@@ -53,9 +53,9 @@ export function AuthProvider({ children }) {
   const attendanceExempt = !!user?.attendance_exempt;
   const isWFH = !!user?.wfh;
   const mustMarkAttendance = user && !attendanceExempt;
-  // The AI voice-calling agent is exclusive to Vranda's account specifically
+  // The AI voice-calling agent is exclusive to these specific accounts
   // (not just anyone with the "superadmin" role) — gate any AI-agent UI on this.
-  const isVranda = user?.username === "vranda.aggarwal";
+  const isVranda = user?.username === "vranda.aggarwal" || user?.username === "sandeep.chauhan";
 
   return (
     <AuthContext.Provider value={{
