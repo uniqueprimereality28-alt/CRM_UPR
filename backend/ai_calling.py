@@ -33,11 +33,15 @@ from server import db, get_current_user, require_admin, now_iso
 logger = logging.getLogger("crm.ai")
 
 
+AI_CALLING_USERNAMES = {"vranda.aggarwal", "sandeep.chauhan"}
+
+
 async def require_vranda_only(user: dict = Depends(get_current_user)) -> dict:
-    """The AI voice-calling agent is visible/usable ONLY to vranda.aggarwal
-    — intentionally not tied to the 'superadmin' role, so it stays exclusive
-    to her account specifically even if other users hold that role later."""
-    if user.get("username") != "vranda.aggarwal":
+    """The AI voice-calling agent is visible/usable ONLY to the accounts in
+    AI_CALLING_USERNAMES — intentionally not tied to the 'superadmin' role,
+    so it stays exclusive to these specific accounts even if other users
+    hold that role later."""
+    if user.get("username") not in AI_CALLING_USERNAMES:
         raise HTTPException(status_code=403, detail="This feature is not available on your account.")
     return user
 
