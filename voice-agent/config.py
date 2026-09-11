@@ -30,7 +30,20 @@ WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")  # tiny|base|
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 
-# --- TTS (edge-tts — free, no API key, good Hindi/Hinglish neural voices) ---
+# --- TTS ---
+# "sarvam" = Sarvam Bulbul v3 (paid, ~Rs30/10k chars, best Hinglish quality,
+#            new accounts get free credits — https://dashboard.sarvam.ai)
+# "edge"   = edge-tts (free, no key, lower quality fallback)
+TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "sarvam")
+
+# --- Sarvam Bulbul (used when TTS_PROVIDER=sarvam) ---
+SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "")
+SARVAM_MODEL = os.environ.get("SARVAM_MODEL", "bulbul:v3")
+SARVAM_SPEAKER = os.environ.get("SARVAM_SPEAKER", "anushka")  # try "ritu"/"priya" too, listen and compare
+SARVAM_LANGUAGE = os.environ.get("SARVAM_LANGUAGE", "hi-IN")  # required by Sarvam; handles Hinglish fine
+SARVAM_SAMPLE_RATE = int(os.environ.get("SARVAM_SAMPLE_RATE", "8000"))  # matches Plivo's 8kHz line
+
+# --- edge-tts (used when TTS_PROVIDER=edge, or as emergency fallback) ---
 TTS_VOICE = os.environ.get("TTS_VOICE", "hi-IN-SwaraNeural")  # try hi-IN-MadhurNeural for male
 
 # --- Conversation tuning ---
