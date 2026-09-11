@@ -8,10 +8,10 @@ import os
 # Plivo can call it). Set this after you deploy, e.g. your Render URL. ---
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
-# --- Plivo (telephony) ---
-PLIVO_AUTH_ID = os.environ.get("PLIVO_AUTH_ID", "")
-PLIVO_AUTH_TOKEN = os.environ.get("PLIVO_AUTH_TOKEN", "")
-PLIVO_FROM_NUMBER = os.environ.get("PLIVO_FROM_NUMBER", "")  # your Plivo caller-ID number
+# --- Twilio (telephony) ---
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")  # your Twilio caller-ID number
 
 # --- Shared secret with the CRM backend (must match VOICE_AGENT_SHARED_SECRET there) ---
 VOICE_AGENT_SHARED_SECRET = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
