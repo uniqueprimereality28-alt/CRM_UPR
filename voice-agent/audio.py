@@ -47,6 +47,13 @@ def mp3_bytes_to_pcm16(mp3_bytes: bytes) -> tuple[bytes, int]:
     return seg.raw_data, seg.frame_rate
 
 
+def wav_bytes_to_pcm16(wav_bytes: bytes) -> tuple[bytes, int]:
+    """Decode WAV (Sarvam Bulbul output) -> (PCM16 mono bytes, sample_rate)."""
+    seg = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
+    seg = seg.set_channels(1).set_sample_width(2)  # mono, 16-bit
+    return seg.raw_data, seg.frame_rate
+
+
 def chunk_bytes(data: bytes, chunk_size: int):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
