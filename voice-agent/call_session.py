@@ -1,8 +1,8 @@
 """
 Manages ONE live phone call: buffers incoming caller audio, detects when
 the customer has finished speaking (VAD-based turn-taking), runs
-STT -> LLM -> TTS, and streams the reply audio back to Plivo over the
-same WebSocket.
+STT -> LLM -> TTS, and streams the reply audio back to Twilio over the
+same WebSocket (Twilio Media Streams, bidirectional).
 """
 import asyncio
 import json
@@ -28,6 +28,7 @@ MIN_SPEECH_FRAMES = 4  # ignore tiny blips (<80ms) so we don't transcribe noise
 class CallSession:
     def __init__(self, stream_id: str, call_context: dict):
         self.stream_id = stream_id
+        self.stream_sid: str | None = None  # set by main.py once Twilio's "start" event arrives
         self.lead = call_context.get("lead", {})
         self.agent = call_context.get("agent", {})
         self.inventory = call_context.get("inventory", [])
@@ -96,7 +97,7 @@ class CallSession:
 
     # ---------------- Agent speaking ----------------
     async def speak_opening_line(self, ws):
-        line = await llm.opening_line(self.agent)
+        line = await llm.opening_line(self.agent, self.lead)
         self.history.append({"speaker": "agent", "text": line})
         logger.info(f"[{self.stream_id}] agent (opening): {line}")
         await self._send_tts(ws, line)
@@ -122,8 +123,9 @@ class CallSession:
             for chunk in chunk_bytes(pcm16, FRAME_BYTES_PCM16_8K if rate == 8000 else FRAME_BYTES_PCM16_8K * (rate // 8000)):
                 payload_b64 = pcm16_to_mulaw_b64(chunk, src_rate=rate)
                 await ws.send_text(json.dumps({
-                    "event": "playAudio",
-                    "media": {"contentType": "audio/x-mulaw", "sampleRate": 8000, "payload": payload_b64},
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": payload_b64},
                 }))
                 await asyncio.sleep(FRAME_MS / 1000 * 0.9)  # pace playback ~real-time
         except Exception as e:
@@ -138,7 +140,7 @@ class CallSession:
         self.ended = True
         logger.info(f"[{self.stream_id}] call ending ({reason}), {len(self.history)} turns")
         try:
-            await ws.send_text(json.dumps({"event": "clearAudio"}))
+            await ws.send_text(json.dumps({"event": "clear", "streamSid": self.stream_sid}))
         except Exception:
             pass
         if self.on_finished_callback:
