@@ -50,7 +50,7 @@ your-crm-repo/
 
 | Piece | Provider | Cost |
 |---|---|---|
-| Telephony (actual dialing) | Plivo | pay-per-minute, ~₹0.6–1.2/min — no free tier for real PSTN calls, this is unavoidable |
+| Telephony (actual dialing) | Twilio | free trial: no card, ~$15-20 credit, but can only call **verified** numbers — great for demos, requires upgrading to a paid account before calling unverified leads |
 | Speech-to-text | faster-whisper, self-hosted | **free** |
 | Text-to-speech | edge-tts, self-hosted | **free** |
 | LLM brain | Groq free tier (or your existing key) | **free** within rate limits |
@@ -58,11 +58,15 @@ your-crm-repo/
 
 ## Setup steps
 
-### 1. Get a Plivo account
-- Sign up at [plivo.com](https://console.plivo.com), buy/rent a number (or use trial credit to test)
-- Grab your **Auth ID** and **Auth Token** from the console
-- For production calling in India you'll need DLT registration — Plivo's
-  support can guide this; for testing, trial credit works without it.
+### 1. Get a Twilio account
+- Sign up at [twilio.com](https://www.twilio.com/try-twilio) — **no credit card required**
+- Get a Twilio phone number (free trial numbers are provided/purchasable with trial credit)
+- In the console, add your test target (e.g. your boss's number) as a **Verified Caller ID** —
+  Twilio calls/texts it an OTP to confirm. Trial accounts can only call verified numbers.
+- Grab your **Account SID** and **Auth Token** from the console dashboard
+- For production calling in India to *unverified* leads, you'll need to upgrade to a paid
+  account and (for compliance) register with DLT — this only matters once you go live, not
+  for the demo.
 
 ### 2. Get a free Groq API key (the LLM brain)
 - [console.groq.com/keys](https://console.groq.com/keys) — free, no card required
@@ -89,12 +93,13 @@ On Render:
 
 Env vars to set on this Render service (see `.env.example` for the full list):
 ```
-PLIVO_AUTH_ID=...
-PLIVO_AUTH_TOKEN=...
-PLIVO_FROM_NUMBER=...
+TWILIO_ACCOUNT_SID=...
+TWILIO_AUTH_TOKEN=...
+TWILIO_FROM_NUMBER=...
 VOICE_AGENT_SHARED_SECRET=<make up a long random string>
 CRM_BACKEND_URL=https://your-existing-crm-backend.onrender.com
 LLM_API_KEY=<your Groq key>
+SARVAM_API_KEY=<your Sarvam key, for better Hinglish voice quality>
 PUBLIC_BASE_URL=  <- fill in AFTER first deploy, then redeploy
 ```
 
