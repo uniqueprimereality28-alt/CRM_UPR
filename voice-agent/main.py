@@ -1,8 +1,8 @@
 """
 voice-agent — a standalone microservice that makes REAL outbound phone
-calls (via Plivo), talks to the customer live (faster-whisper STT +
-free LLM + edge-tts TTS), and reports the finished call back to your
-existing CRM's /api/ai/calls/ingest endpoint.
+calls (via Twilio), talks to the customer live (faster-whisper STT +
+free/paid LLM + Sarvam/edge-tts TTS), and reports the finished call back
+to your existing CRM's /api/ai/calls/ingest endpoint.
 
 This is deliberately a SEPARATE service from the main CRM backend
 (different repo folder, different deploy) because real-time audio needs
@@ -15,7 +15,12 @@ Run locally:
 Deploy: this ships with a Dockerfile built for Render (Docker web service).
 Any host that supports long-lived WebSockets + Docker will work the same way
 (Fly.io, a plain VPS, etc.) — just set PUBLIC_BASE_URL to wherever it ends
-up being reachable, since Plivo needs to call it.
+up being reachable, since Twilio needs to call it.
+
+TELEPHONY NOTE: Twilio's bidirectional <Connect><Stream> does not support
+query-string parameters on the wss:// URL, so the call token is passed as a
+nested <Parameter> instead and read back out of the "start" WebSocket event
+(as start.customParameters.token) rather than from the query string.
 """
 import asyncio
 import json
@@ -25,7 +30,6 @@ import uuid
 from typing import Optional
 
 import httpx
-import plivo
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -38,6 +42,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("voice-agent.main")
 
 app = FastAPI(title="voice-agent")
+
+TWILIO_API_BASE = "https://api.twilio.com/2010-04-01"
 
 # call_token -> context dict, populated by /trigger, consumed by /answer and /stream
 PENDING_CALLS: dict[str, dict] = {}
@@ -83,10 +89,10 @@ class TriggerIn(BaseModel):
 @app.post("/trigger")
 async def trigger_call(payload: TriggerIn, x_voice_agent_secret: Optional[str] = Header(None)):
     _require_secret(x_voice_agent_secret)
-    if not config.PLIVO_AUTH_ID or not config.PLIVO_AUTH_TOKEN or not config.PLIVO_FROM_NUMBER:
-        raise HTTPException(500, "PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN / PLIVO_FROM_NUMBER not configured")
+    if not config.TWILIO_ACCOUNT_SID or not config.TWILIO_AUTH_TOKEN or not config.TWILIO_FROM_NUMBER:
+        raise HTTPException(500, "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER not configured")
     if not config.PUBLIC_BASE_URL:
-        raise HTTPException(500, "PUBLIC_BASE_URL not configured — Plivo needs a reachable URL")
+        raise HTTPException(500, "PUBLIC_BASE_URL not configured — Twilio needs a reachable URL")
 
     token = uuid.uuid4().hex
     PENDING_CALLS[token] = {
@@ -103,35 +109,43 @@ async def trigger_call(payload: TriggerIn, x_voice_agent_secret: Optional[str] =
         "status": "dialing",
     }
 
-    client = plivo.RestClient(config.PLIVO_AUTH_ID, config.PLIVO_AUTH_TOKEN)
     try:
-        resp = client.calls.create(
-            from_=config.PLIVO_FROM_NUMBER,
-            to_=payload.phone,
-            answer_url=f"{config.PUBLIC_BASE_URL}/answer?token={token}",
-            answer_method="GET",
-            hangup_url=f"{config.PUBLIC_BASE_URL}/status?token={token}",
-            hangup_method="POST",
-        )
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                f"{TWILIO_API_BASE}/Accounts/{config.TWILIO_ACCOUNT_SID}/Calls.json",
+                data={
+                    "To": payload.phone,
+                    "From": config.TWILIO_FROM_NUMBER,
+                    "Url": f"{config.PUBLIC_BASE_URL}/answer?token={token}",
+                    "Method": "POST",
+                    "StatusCallback": f"{config.PUBLIC_BASE_URL}/status?token={token}",
+                    "StatusCallbackMethod": "POST",
+                },
+                auth=(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN),
+            )
+            resp.raise_for_status()
+            resp_json = resp.json()
     except Exception as e:
         PENDING_CALLS.pop(token, None)
-        logger.error(f"Plivo call creation failed: {e}")
-        raise HTTPException(502, f"Plivo call creation failed: {e}")
+        body = getattr(getattr(e, "response", None), "text", str(e))
+        logger.error(f"Twilio call creation failed: {e} — {body}")
+        raise HTTPException(502, f"Twilio call creation failed: {body}")
 
-    request_uuid = getattr(resp, "request_uuid", None)
-    PENDING_CALLS[token]["request_uuid"] = request_uuid
-    logger.info(f"Dialing {payload.phone} for lead {payload.lead_id} (token={token})")
-    return {"ok": True, "call_uuid": request_uuid or token, "status": "dialing", "token": token}
+    call_sid = resp_json.get("sid")
+    PENDING_CALLS[token]["call_sid"] = call_sid
+    logger.info(f"Dialing {payload.phone} for lead {payload.lead_id} (token={token}, call_sid={call_sid})")
+    return {"ok": True, "call_uuid": call_sid or token, "status": "dialing", "token": token}
 
 
 # ================================================================
-# 2. Plivo hits this when the call is answered -> returns Stream XML
+# 2. Twilio hits this when the call is answered -> returns Connect/Stream TwiML
+#    (query params are NOT supported on the Stream url, so the token travels
+#    as a nested <Parameter> instead, delivered back to us in the "start" event)
 # ================================================================
 @app.get("/answer")
 @app.post("/answer")
 async def answer(token: str):
     if token not in PENDING_CALLS:
-        # unknown/expired token — politely end the call instead of crashing
         return Response(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
             media_type="application/xml",
@@ -140,75 +154,91 @@ async def answer(token: str):
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
-        f'<Stream bidirectional="true" keepCallAlive="true" '
-        f'contentType="audio/x-mulaw;rate=8000" '
-        f'statusCallbackUrl="{config.PUBLIC_BASE_URL}/status?token={token}">'
-        f"wss://{ws_host}/stream?token={token}"
+        "<Connect>"
+        f'<Stream url="wss://{ws_host}/stream">'
+        f'<Parameter name="token" value="{token}"/>'
         "</Stream>"
+        "</Connect>"
         "</Response>"
     )
     return Response(content=xml, media_type="application/xml")
 
 
 # ================================================================
-# 3. Plivo opens a WebSocket here for the live audio, both directions
+# 3. Twilio opens a WebSocket here for the live audio, both directions
 # ================================================================
 @app.websocket("/stream")
 async def stream(websocket: WebSocket):
     await websocket.accept()
-    token = websocket.query_params.get("token")
-    context = PENDING_CALLS.get(token)
-    if not context:
-        await websocket.close()
-        return
-
-    session = CallSession(stream_id=token, call_context={
-        **context,
-        "on_finished": lambda s: _finish_and_ingest(token, context, s),
-    })
-    context["status"] = "in_progress"
+    session: Optional[CallSession] = None
+    context: Optional[dict] = None
+    token: Optional[str] = None
 
     try:
         while True:
             raw = await websocket.receive_text()
             data = json.loads(raw)
             event = data.get("event")
-            if event == "start":
+
+            if event == "connected":
+                continue
+
+            elif event == "start":
+                start = data.get("start", {})
+                stream_sid = start.get("streamSid") or data.get("streamSid")
+                token = (start.get("customParameters") or {}).get("token")
+                context = PENDING_CALLS.get(token)
+                if not context:
+                    logger.error(f"Unknown/expired token on stream start: {token}")
+                    await websocket.close()
+                    return
+                session = CallSession(stream_id=token, call_context={
+                    **context,
+                    "on_finished": lambda s: _finish_and_ingest(token, context, s),
+                })
+                session.stream_sid = stream_sid
+                context["status"] = "in_progress"
                 asyncio.create_task(session.speak_opening_line(websocket))
+
             elif event == "media":
-                payload_b64 = data.get("media", {}).get("payload")
-                if payload_b64:
-                    await session.handle_inbound_frame(websocket, payload_b64)
+                if session:
+                    payload_b64 = data.get("media", {}).get("payload")
+                    if payload_b64:
+                        await session.handle_inbound_frame(websocket, payload_b64)
+
             elif event == "stop":
-                await session.end_call(websocket, reason="plivo_stop")
+                if session and not session.ended:
+                    await session.end_call(websocket, reason="twilio_stop")
                 break
+
     except WebSocketDisconnect:
-        if not session.ended:
+        if session and not session.ended:
             await session.end_call(websocket, reason="ws_disconnect")
     except Exception as e:
         logger.error(f"[{token}] stream handler error: {e}")
-        if not session.ended:
+        if session and not session.ended:
             await session.end_call(websocket, reason=f"error:{e}")
     finally:
-        PENDING_CALLS.pop(token, None)
+        if token:
+            PENDING_CALLS.pop(token, None)
 
 
 # ================================================================
-# 4. Plivo call-status callback (ringing/answered/completed/busy/no-answer)
+# 4. Twilio call-status callback (ringing/in-progress/completed/busy/no-answer)
 # ================================================================
 @app.post("/status")
 async def status_callback(request: Request, token: str):
     form = await request.form()
     call_status = form.get("CallStatus", "")
-    logger.info(f"[{token}] Plivo status: {call_status}")
+    logger.info(f"[{token}] Twilio status: {call_status}")
 
     context = PENDING_CALLS.get(token)
-    if context and call_status in ("busy", "failed", "no-answer", "rejected", "timeout"):
+    if context and call_status in ("busy", "failed", "no-answer", "canceled"):
         # Call never got a live conversation — log it as a proper disposition
         # instead of silently losing the attempt.
         disposition_map = {
             "busy": "no_answer", "failed": "no_answer", "no-answer": "no_answer",
-            "rejected": "wrong_number", "timeout": "no_answer",
+            "canceled": "no_answer",
         }
         fake_session_result = {
             "summary": f"Call not connected ({call_status}).",
@@ -216,7 +246,7 @@ async def status_callback(request: Request, token: str):
             "requirements": {}, "signals": [], "urgency_score": 1,
             "wants_site_visit": False, "wants_brochure": False, "whatsapp_opt_in": False,
             "human_transfer_required": False, "next_followup_days": 1,
-            "remarks": f"Plivo status: {call_status}",
+            "remarks": f"Twilio status: {call_status}",
         }
         await _post_ingest(context, fake_session_result, [], 0, None)
         PENDING_CALLS.pop(token, None)
@@ -251,7 +281,7 @@ async def _post_ingest(context: dict, extracted: dict, transcript: list[dict],
         "campaign_id": context.get("campaign_id"),
         "agent_name": context.get("agent", {}).get("name"),
         "call_uuid": call_uuid,
-        "recording_url": None,  # wire up Plivo call recording URL here if you enable recording
+        "recording_url": None,  # wire up Twilio call recording URL here if you enable recording
         "duration_seconds": duration,
         "transcript": transcript,
         **{k: v for k, v in extracted.items() if k not in ("transcript",)},
