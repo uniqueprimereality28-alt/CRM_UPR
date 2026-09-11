@@ -1,0 +1,9 @@
+[
+  {
+    "_id": "voice_agent_config",
+    "updated_at": "2026-09-11T08:37:03.443233+00:00",
+    "updated_by": "vranda.aggarwal",
+    "voice_agent_shared_secret": "rxci_voice_9247xv",
+    "voice_agent_url": "https://rapidexi-voice-agent.onrender.com"
+  }
+]
