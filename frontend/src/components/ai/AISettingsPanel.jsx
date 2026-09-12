@@ -28,7 +28,7 @@ const VRINDA_PRESET = {
   best_now_answer: "Hamare paas different projects available hain and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
   location_question: "Is there any specific preferred location in mind?",
   builders_options: "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
-  final_summary_template: "I have noted that you are looking for a residential 2 BHK configured property in Manesar Corridor under 3 Cr.",
+  final_summary_template: "Maine aapki saari requirement note kar li hai — aapko {config} property chahiye {location} mein under {budget} for {purpose}.",
   ai_disclosure_answer: "Yes, I am an AI assistant working for Unique Prime reality . and please aap Nishchint rahiye main aapki sari requiremnts note kar rahi hu and i will share it with my team, so they can find you with the best property at the earliest.",
   transfer_number: "7351735035",
   transfer_target_name: "Vrinda Aggarwal",
@@ -439,7 +439,7 @@ export const AISettingsPanel = () => {
                       value={kb.final_summary_template || ""}
                       onChange={(e) => updateKb("final_summary_template", e.target.value)}
                       className="mt-1 text-sm font-mono text-slate-800"
-                      placeholder="I have noted that you are looking for a residential 2 BHK configured property in Manesar Corridor under 3 Cr."
+                      placeholder="Maine aapki saari requirement note kar li hai — aapko {config} property chahiye {location} mein under {budget} for {purpose}."
                     />
                     <p className="text-[11px] text-slate-400 mt-1">
                       Vrinda repeats this back, says "Noted", and tells the customer her team will share the best properties at the earliest.
