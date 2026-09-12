@@ -1,7 +1,6 @@
 """
-Unique Prime Reality - Outbound Calling Agent
-Built with LiveKit Agents SDK, Vobiz SIP Trunk, Deepgram Nova-3 STT,
-Grok LLM (xAI), and Sarvam AI TTS (Indian voice).
+Unique Prime Reality - AI Outbound Calling Agent (Vrinda)
+Powered by LiveKit + Vobiz SIP + Deepgram STT + Grok LLM + Sarvam AI TTS
 """
 
 import asyncio
@@ -9,21 +8,17 @@ import json
 import logging
 import os
 import re
+import sys
 import time
-from typing import Annotated, Optional
+from typing import Optional
 
 import aiohttp
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    JobProcess,
-    WorkerOptions,
-    cli,
-    llm,
-)
-from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, openai, silero
+from dotenv import load_dotenv
 from livekit import api
+from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm
+from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.room_io import AudioInputOptions, AudioOutputOptions, RoomOptions
+from livekit.plugins import deepgram, noise_cancellation, openai, silero
 
 try:
     from livekit.plugins import sarvam
@@ -33,28 +28,43 @@ except ImportError:
 
 import config
 
-logger = logging.getLogger("upr-calling-agent")
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("upr-calling-agent")
+
+VOICE_TURN_HANDLING = {
+    "turn_detection": "vad",
+    "endpointing": {"mode": "fixed", "min_delay": 0.8, "max_delay": 2.5},
+    "interruption": {
+        "enabled": True,
+        "mode": "vad",
+        "min_duration": 0.8,
+        "min_words": 2,
+        "resume_false_interruption": True,
+    },
+    "preemptive_generation": {"enabled": False},
+}
 
 
-# ─── Phone Number Helper ───
-
-def format_e164(phone: str) -> str:
-    cleaned = re.sub(r"[^\d+]", "", phone)
-    if not cleaned.startswith("+"):
+def normalize_e164(phone: str) -> str:
+    cleaned = re.sub(r"[\s().-]", "", str(phone or "")).strip()
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+    elif cleaned.startswith("0") and len(cleaned) == 11:
+        cleaned = "+91" + cleaned[1:]
+    elif not cleaned.startswith("+"):
         if len(cleaned) == 10:
             cleaned = "+91" + cleaned
-        elif len(cleaned) == 12 and cleaned.startswith("91"):
-            cleaned = "+" + cleaned
         else:
-            cleaned = "+91" + cleaned
+            cleaned = "+" + cleaned
     return cleaned
 
 
-# ─── CRM Sync & Signal Extraction ───
+# ─── CRM Sync & Structured Key-Points Extraction ───
 
 async def extract_call_signals_with_llm(transcript: str) -> dict:
-    """Use Grok / OpenAI to extract structured requirements and scoring signals from transcript."""
+    """Use Grok / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
     fallback_result = {
         "summary": "Call completed with customer.",
         "disposition": "connected",
@@ -72,20 +82,22 @@ async def extract_call_signals_with_llm(transcript: str) -> dict:
     if not transcript or len(transcript.strip()) < 10:
         return fallback_result
 
-    prompt = f"""You are an expert real estate CRM data analyst. Analyze this phone conversation transcript between Simran (Unique Prime Reality AI consultant) and a customer.
+    prompt = f"""You are an expert real estate CRM data analyst. Analyze this phone conversation transcript between Vrinda (Unique Prime Reality AI consultant) and a customer.
 
 TRANSCRIPT:
 {transcript}
 
 Extract the following information in pure JSON format with no markdown wrappers:
 {{
-  "summary": "One sentence summary of the call outcome and discussion",
+  "summary": "Key points summary in bullet format: • Requirement (BHK, Budget, Location, Purpose) • Discussion highlights • Next step/Outcome",
   "disposition": "connected | callback | not_interested | wrong_number | busy",
   "requirements": {{
-    "budget": "extracted budget string or null",
-    "bhk": "e.g. 2 BHK, 3 BHK, 4 BHK or null",
-    "location": "preferred location or null",
-    "timeline": "immediate, 30 days, 6 months, or null"
+    "property_type": "residential | commercial | studio | penthouse",
+    "purpose": "personal_use | investment",
+    "budget": "extracted budget string e.g. Under 3 Cr, 1.5 Cr, 90L",
+    "bhk": "e.g. 2 BHK, 3 BHK, 4 BHK, studio, penthouse",
+    "location_preference": "e.g. Dwarka Expressway, Manesar Corridor, Golf Course Ext, Sohna Road",
+    "possession_timeline": "immediate, 30 days, 6 months, or null"
   }},
   "signals": [
     Choose from: "whatsapp_details", "budget_shared", "bhk_shared", "timeline_shared", "wants_site_visit", "wants_callback", "urgent_30_days", "investor_intent", "casual_interest", "not_interested", "wrong_number", "call_later", "requested_human"
@@ -96,7 +108,7 @@ Extract the following information in pure JSON format with no markdown wrappers:
   "whatsapp_opt_in": true/false,
   "human_transfer_required": true/false,
   "next_followup_days": integer (e.g. 1, 2, 7) or null,
-  "remarks": "Notable customer preferences or remarks"
+  "remarks": "Notable customer preferences, objections or remarks"
 }}"""
 
     try:
@@ -129,64 +141,60 @@ Extract the following information in pure JSON format with no markdown wrappers:
     return fallback_result
 
 
-async def sync_call_to_crm(
+async def post_call_to_crm(
     lead_id: str,
+    campaign_id: Optional[str],
     call_uuid: str,
-    duration_seconds: int,
-    transcript_items: list[dict],
-    campaign_id: Optional[str] = None,
-    agent_name: str = "Simran",
+    duration_seconds: float,
+    transcript_list: list[dict],
+    agent_name: str = config.AGENT_NAME,
 ) -> None:
-    """Send call recording metadata, full transcript, and extracted signals back to CRM /api/ai/calls/ingest."""
+    """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint."""
     if not config.CRM_BACKEND_URL:
-        logger.info("CRM_BACKEND_URL not set; skipping CRM sync.")
+        logger.warning("CRM_BACKEND_URL is not set. Skipping CRM ingest.")
         return
 
-    formatted_transcript = "\n".join(
-        f"{t.get('role', 'speaker').capitalize()}: {t.get('content', '')}"
-        for t in transcript_items
-    )
-
-    signals = await extract_call_signals_with_llm(formatted_transcript)
+    full_transcript_text = "\n".join(f"{item.get('speaker')}: {item.get('text')}" for item in transcript_list)
+    analysis = await extract_call_signals_with_llm(full_transcript_text)
 
     payload = {
-        "call_uuid": call_uuid,
         "lead_id": lead_id,
         "campaign_id": campaign_id,
         "agent_name": agent_name,
-        "duration_seconds": duration_seconds,
-        "transcript": transcript_items,
-        "summary": signals.get("summary", "Outbound AI call completed."),
-        "disposition": signals.get("disposition", "connected"),
-        "requirements": signals.get("requirements", {}),
-        "signals": signals.get("signals", []),
-        "urgency_score": signals.get("urgency_score", 5),
-        "wants_site_visit": signals.get("wants_site_visit", False),
-        "wants_brochure": signals.get("wants_brochure", False),
-        "whatsapp_opt_in": signals.get("whatsapp_opt_in", False),
-        "human_transfer_required": signals.get("human_transfer_required", False),
-        "next_followup_days": signals.get("next_followup_days", 2),
-        "remarks": signals.get("remarks", ""),
+        "call_uuid": call_uuid,
+        "duration_seconds": round(duration_seconds),
+        "transcript": transcript_list,
+        "summary": analysis.get("summary", "Outbound AI call completed."),
+        "disposition": analysis.get("disposition", "connected"),
+        "requirements": analysis.get("requirements", {}),
+        "signals": analysis.get("signals", []),
+        "urgency_score": analysis.get("urgency_score", 5),
+        "wants_site_visit": analysis.get("wants_site_visit", False),
+        "wants_brochure": analysis.get("wants_brochure", False),
+        "whatsapp_opt_in": analysis.get("whatsapp_opt_in", False),
+        "human_transfer_required": analysis.get("human_transfer_required", False),
+        "next_followup_days": analysis.get("next_followup_days", 2),
+        "remarks": analysis.get("remarks", ""),
     }
 
-    url = f"{config.CRM_BACKEND_URL.rstrip('/')}/api/ai/calls/ingest"
-    headers = {"Content-Type": "application/json"}
-    if config.VOICE_AGENT_SHARED_SECRET:
-        headers["X-Voice-Agent-Secret"] = config.VOICE_AGENT_SHARED_SECRET
+    ingest_url = f"{config.CRM_BACKEND_URL}/api/ai/calls/ingest"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Voice-Agent-Secret": config.VOICE_AGENT_SHARED_SECRET,
+    }
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=25) as resp:
-                if resp.status == 200:
-                    logger.info("Successfully synced call %s for lead %s to CRM", call_uuid, lead_id)
+            async with session.post(ingest_url, json=payload, headers=headers, timeout=25) as resp:
+                if resp.status in (200, 201):
+                    logger.info("Call successfully synced to CRM! Lead: %s, Signals: %s", lead_id, analysis.get("signals"))
                 else:
-                    text = await resp.text()
-                    logger.error("Failed to sync call to CRM (%s): %s", resp.status, text)
+                    logger.error("Failed to sync call to CRM (%s): %s", resp.status, await resp.text())
     except Exception as e:
-        logger.error("Error posting call to CRM ingest: %s", e)
+        logger.error("Error posting call to CRM ingest endpoint: %s", e)
 
 
-# ─── LiveKit Agent Setup & Lifecycle ───
+# ─── LiveKit Worker ───
 
 def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load(
@@ -221,7 +229,7 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.warning("Could not parse job metadata: %s", e)
 
     lead_id = lead_id or f"lead_{int(time.time())}"
-    runtime_agent_name = agent_config.get("agentName") or config.AGENT_NAME
+    runtime_agent_name = agent_config.get("agent_name") or agent_config.get("agentName") or config.AGENT_NAME
 
     logger.info("Job started | lead_id=%s | phone=%s | type=%s", lead_id, phone_number, call_type)
 
@@ -244,7 +252,7 @@ async def entrypoint(ctx: JobContext) -> None:
             model=config.GROK_MODEL,
             base_url="https://api.x.ai/v1",
             api_key=config.GROK_API_KEY,
-            temperature=0.4,
+            temperature=0.3,
         )
         logger.info("LLM initialized with Grok (xAI): %s", config.GROK_MODEL)
     elif config.GROQ_API_KEY:
@@ -252,14 +260,14 @@ async def entrypoint(ctx: JobContext) -> None:
             model=config.GROQ_MODEL,
             base_url="https://api.groq.com/openai/v1",
             api_key=config.GROQ_API_KEY,
-            temperature=0.4,
+            temperature=0.3,
         )
         logger.info("LLM initialized with Groq: %s", config.GROQ_MODEL)
     else:
         llm_instance = openai.LLM(
             model=config.OPENAI_MODEL,
             api_key=config.OPENAI_API_KEY or None,
-            temperature=0.4,
+            temperature=0.3,
         )
         logger.info("LLM initialized with OpenAI fallback: %s", config.OPENAI_MODEL)
 
@@ -293,87 +301,150 @@ async def entrypoint(ctx: JobContext) -> None:
     # 4. System prompt
     system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt)
 
-    assistant = VoiceAssistant(
-        vad=vad_instance,
+    # 5. Agent
+    agent = Agent(
+        instructions=system_prompt,
         stt=stt_instance,
         llm=llm_instance,
         tts=tts_instance,
-        fnc_ctx=llm.FunctionContext(),
-        chat_ctx=llm.ChatContext().append(
-            role="system",
-            text=system_prompt,
+        turn_handling=VOICE_TURN_HANDLING,
+    )
+
+    session = AgentSession(
+        vad=vad_instance,
+        turn_handling=VOICE_TURN_HANDLING,
+    )
+
+    disconnecting = False
+
+    async def schedule_delayed_hangup(delay_sec: float = 3.5):
+        nonlocal disconnecting
+        if disconnecting:
+            return
+        disconnecting = True
+        logger.info("Exit trigger detected. Closing call after %.1fs for speech completion...", delay_sec)
+        await asyncio.sleep(delay_sec)
+        ctx.shutdown()
+
+    @session.on("conversation_item_added")
+    def on_item(ev) -> None:
+        msg = ev.item
+        if not isinstance(msg, llm.ChatMessage):
+            return
+        text = (msg.text_content or "").strip()
+        if not text:
+            return
+        speaker = "Customer" if msg.role == "user" else runtime_agent_name
+        transcript_items.append({"speaker": speaker, "text": text, "timestamp": round(time.time() - call_start, 1)})
+        logger.info("%s: %s", speaker, text)
+
+        # Drop-off rule check: if Vrinda says goodbye or customer said no/completed wrap-up
+        lower = text.lower()
+        if speaker == runtime_agent_name:
+            if any(phrase in lower for phrase in ["thank you for your time, have a nice day", "have a nice day", "have a wonderful day"]) and "kya aap gurgaon" not in lower:
+                asyncio.create_task(schedule_delayed_hangup(3.5))
+
+    session_closed = asyncio.Event()
+
+    @session.on("close")
+    def on_close(ev) -> None:
+        logger.info("Session closed.")
+        session_closed.set()
+
+    # Start audio session first
+    await session.start(
+        agent,
+        room=ctx.room,
+        room_options=RoomOptions(
+            audio_input=AudioInputOptions(
+                sample_rate=8000,
+                num_channels=1,
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
+            audio_output=AudioOutputOptions(sample_rate=8000, num_channels=1),
+            close_on_disconnect=True,
         ),
     )
-
-    # 5. Track transcripts
-    @assistant.on("user_speech_committed")
-    def on_user_speech(msg: llm.ChatMessage):
-        transcript_items.append({"role": "customer", "content": msg.text, "time": round(time.time() - call_start, 1)})
-        logger.info("Customer: %s", msg.text)
-
-    @assistant.on("agent_speech_committed")
-    def on_agent_speech(msg: llm.ChatMessage):
-        transcript_items.append({"role": "agent", "content": msg.text, "time": round(time.time() - call_start, 1)})
-        logger.info("%s: %s", runtime_agent_name, msg.text)
-
-    assistant.start(ctx.room)
+    logger.info("Voice pipeline ready.")
 
     # 6. Outbound Telephony: Dial lead via Vobiz SIP Trunk
-    if phone_number and config.VOBIZ_SIP_TRUNK_ID:
-        e164_target = format_e164(phone_number)
-        logger.info("Dialing %s via Vobiz SIP Trunk %s...", e164_target, config.VOBIZ_SIP_TRUNK_ID)
+    outbound_trunk_id = config.VOBIZ_SIP_TRUNK_ID
+    if call_type == "outbound" and phone_number and outbound_trunk_id:
+        e164_phone = normalize_e164(phone_number)
+        logger.info("Dialling %s via Vobiz SIP trunk %s ...", e164_phone, outbound_trunk_id)
         try:
-            lk_api = api.LiveKitAPI(
-                url=config.LIVEKIT_URL,
-                api_key=config.LIVEKIT_API_KEY,
-                api_secret=config.LIVEKIT_API_SECRET,
-            )
-            await lk_api.sip.create_sip_participant(
+            await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
-                    sip_trunk_id=config.VOBIZ_SIP_TRUNK_ID,
-                    sip_call_to=e164_target,
                     room_name=ctx.room.name,
-                    participant_identity=f"phone_{e164_target}",
-                    participant_name=agent_config.get("leadName") or "Customer",
+                    sip_trunk_id=outbound_trunk_id,
+                    sip_call_to=e164_phone,
+                    participant_identity=f"sip_{e164_phone}",
+                    wait_until_answered=True,
                 )
             )
-            await lk_api.aclose()
-            logger.info("SIP dial participant requested successfully.")
-        except Exception as e:
-            logger.error("Failed to create SIP participant via Vobiz: %s", e)
+            logger.info("Call answered by customer! Playing initial greeting...")
+            greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
+            await session.say(greeting, allow_interruptions=False)
+            logger.info("Greeting finished. Conversation active.")
+        except Exception as exc:
+            logger.error("Outbound Vobiz call failed to connect: %s", exc)
+            ctx.shutdown()
+            return
+    elif call_type == "outbound" and not outbound_trunk_id:
+        logger.warning("No VOBIZ_SIP_TRUNK_ID configured. Operating in test/browser room mode.")
+        await ctx.wait_for_participant()
+        greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
+        await session.say(greeting, allow_interruptions=True)
+    else:
+        logger.info("Waiting for web participant...")
+        await ctx.wait_for_participant()
+        await session.say(f"Hello, main {runtime_agent_name} bol rahi hoon Unique Prime Reality, Gurgaon se. How may I help you?", allow_interruptions=True)
 
-    # 7. Greeting
-    await asyncio.sleep(1.5)
-    greeting = config.build_outbound_greeting(user_prompt or "property enquiry", agent_config)
-    await assistant.say(greeting, allow_interruptions=True)
+    # Max call duration safeguard
+    async def enforce_max_duration() -> None:
+        await asyncio.sleep(config.MAX_CALL_DURATION_SECONDS)
+        logger.warning("Max duration reached — closing call.")
+        session.say("Thank you for your time. Have a wonderful day!", allow_interruptions=False)
+        await asyncio.sleep(4)
+        ctx.shutdown()
 
-    # 8. Wait until call ends
-    room_disconnected = asyncio.Event()
+    duration_task = asyncio.create_task(enforce_max_duration())
 
-    @ctx.room.on("disconnected")
-    def on_disconnect():
-        room_disconnected.set()
+    try:
+        await session_closed.wait()
+    finally:
+        duration_task.cancel()
+        call_duration = time.time() - call_start
+        logger.info("Call session complete. Duration: %.1fs, Turns: %d", call_duration, len(transcript_items))
 
-    await room_disconnected.wait()
-
-    # 9. Post-call Sync
-    duration = int(time.time() - call_start)
-    logger.info("Call concluded (%ds). Syncing signals and transcript to CRM...", duration)
-    await sync_call_to_crm(
-        lead_id=lead_id,
-        call_uuid=ctx.room.name,
-        duration_seconds=duration,
-        transcript_items=transcript_items,
-        campaign_id=campaign_id,
-        agent_name=runtime_agent_name,
-    )
+        # Post results back to CRM
+        await post_call_to_crm(
+            lead_id=lead_id,
+            campaign_id=campaign_id,
+            call_uuid=ctx.room.name,
+            duration_seconds=call_duration,
+            transcript_list=transcript_items,
+            agent_name=runtime_agent_name,
+        )
 
 
 if __name__ == "__main__":
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            prewarm_fnc=prewarm,
-            agent_name=config.LIVEKIT_AGENT_NAME,
+    if not config.LIVEKIT_URL:
+        logger.error(
+            "ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Render Environment variables."
         )
-    )
+        sys.exit(1)
+
+    worker_kwargs = {
+        "entrypoint_fnc": entrypoint,
+        "prewarm_fnc": prewarm,
+        "agent_name": config.LIVEKIT_AGENT_NAME,
+    }
+    if config.LIVEKIT_URL:
+        worker_kwargs["ws_url"] = config.LIVEKIT_URL
+    if config.LIVEKIT_API_KEY:
+        worker_kwargs["api_key"] = config.LIVEKIT_API_KEY
+    if config.LIVEKIT_API_SECRET:
+        worker_kwargs["api_secret"] = config.LIVEKIT_API_SECRET
+
+    cli.run_app(WorkerOptions(**worker_kwargs))
