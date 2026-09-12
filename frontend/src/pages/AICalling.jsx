@@ -19,12 +19,14 @@ import {
 import { AICampaigns } from "../components/ai/AICampaigns";
 import { AISettingsPanel } from "../components/ai/AISettingsPanel";
 import { TranscriptDialog } from "../components/ai/TranscriptDialog";
+import { OutboundDialer } from "../components/ai/OutboundDialer";
 
 export default function AICalling() {
   const { isVranda } = useAuth();
   const [stats, setStats] = useState(null);
   const [openCall, setOpenCall] = useState(null);
   const [vaStatus, setVaStatus] = useState(null);
+  const [activeTab, setActiveTab] = useState("dialer");
 
   const loadStats = useCallback(() => {
     api.get("/ai/dashboard").then((r) => setStats(r.data)).catch(() => {});
@@ -34,17 +36,18 @@ export default function AICalling() {
     api.get("/ai/calls/real/settings").then((r) => setVaStatus(r.data)).catch(() => setVaStatus(false));
   }, []);
 
+  const isConnected = vaStatus && (vaStatus.livekit_url || vaStatus.voice_agent_url);
+
   return (
     <div className="space-y-6" data-testid="ai-calling-page">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-brand">
-            <Bot className="h-4 w-4" /> AI Telecalling
+            <Bot className="h-4 w-4" /> AI Telecalling Center
           </div>
-          <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Calling Center</h1>
+          <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Telecalling</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Auto-dial assigned leads — a live AI voice agent talks to the
-            lead, captures requirements, scores the call, and syncs everything back to the CRM.
+            Outbound voice agent for Unique Prime Reality — dials leads via Vobiz SIP, uses Sarvam AI voice & Grok LLM, scores requirements, and updates CRM leads in real time.
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={loadStats} data-testid="refresh-stats-btn">
@@ -52,33 +55,35 @@ export default function AICalling() {
         </Button>
       </div>
 
-      {vaStatus === false || (vaStatus && !vaStatus.voice_agent_url) ? (
+      {!isConnected ? (
         <div className="flex items-center gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          Voice-agent isn't connected yet — calls won't dial until it is.
-          <Link to="/settings" className="ml-auto inline-flex items-center gap-1 font-semibold underline">
-            <Link2 className="h-3.5 w-3.5" /> Connect it in Settings
-          </Link>
+          <span>Telephony isn't configured yet — calls won't dial until your LiveKit Cloud URL & Vobiz SIP Trunk ID are set.</span>
+          <button onClick={() => setActiveTab("settings")} className="ml-auto inline-flex items-center gap-1 font-semibold underline">
+            <Link2 className="h-3.5 w-3.5" /> Configure in Settings
+          </button>
         </div>
-      ) : vaStatus && vaStatus.voice_agent_url ? (
+      ) : (
         <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          Voice-agent connected — every call placed from here is a real phone call.
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+          <span>Telephony active — LiveKit Cloud & Vobiz SIP connected with Sarvam AI Indian voice & Grok reasoning.</span>
         </div>
-      ) : null}
+      )}
 
-      <Tabs defaultValue="overview" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="flex h-auto flex-wrap gap-1 bg-slate-100 p-1">
+          <TabsTrigger value="dialer" data-testid="tab-dialer" className="gap-1.5"><Phone className="h-3.5 w-3.5" /> Outbound Dialer</TabsTrigger>
           <TabsTrigger value="overview" data-testid="tab-overview" className="gap-1.5"><Thermometer className="h-3.5 w-3.5" /> Overview</TabsTrigger>
           <TabsTrigger value="campaigns" data-testid="tab-campaigns" className="gap-1.5"><Megaphone className="h-3.5 w-3.5" /> Campaigns</TabsTrigger>
-          <TabsTrigger value="calls" data-testid="tab-calls" className="gap-1.5"><Phone className="h-3.5 w-3.5" /> AI Calls</TabsTrigger>
+          <TabsTrigger value="calls" data-testid="tab-calls" className="gap-1.5"><ListChecks className="h-3.5 w-3.5" /> AI Calls</TabsTrigger>
           <TabsTrigger value="followups" data-testid="tab-followups" className="gap-1.5"><AlarmClock className="h-3.5 w-3.5" /> Follow-ups</TabsTrigger>
           <TabsTrigger value="transfers" data-testid="tab-transfers" className="gap-1.5"><PhoneForwarded className="h-3.5 w-3.5" /> Transfers</TabsTrigger>
           <TabsTrigger value="whatsapp" data-testid="tab-whatsapp" className="gap-1.5"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</TabsTrigger>
-          <TabsTrigger value="settings" data-testid="tab-settings" className="gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Agent Settings</TabsTrigger>
+          <TabsTrigger value="settings" data-testid="tab-settings" className="gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Telephony & Settings</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} /></TabsContent>
+        <TabsContent value="dialer" className="mt-5"><OutboundDialer onCallDispatched={loadStats} /></TabsContent>
+        <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} onOpenDialer={() => setActiveTab("dialer")} /></TabsContent>
         <TabsContent value="campaigns" className="mt-5"><AICampaigns isAdmin={isVranda} onChanged={loadStats} /></TabsContent>
         <TabsContent value="calls" className="mt-5"><CallsTab onOpenCall={setOpenCall} /></TabsContent>
         <TabsContent value="followups" className="mt-5"><FollowupsTab isAdmin={isVranda} onChanged={loadStats} onOpenCall={setOpenCall} /></TabsContent>
@@ -93,7 +98,7 @@ export default function AICalling() {
 }
 
 /* ---------------- Overview ---------------- */
-const Overview = ({ stats, onOpenCall }) => {
+const Overview = ({ stats, onOpenCall, onOpenDialer }) => {
   if (!stats) return <Skel />;
   const total = stats.hot + stats.warm + stats.cold + stats.lost || 1;
   const bars = [
@@ -101,6 +106,20 @@ const Overview = ({ stats, onOpenCall }) => {
   ];
   return (
     <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand/20 bg-brand-light/40 p-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand text-white shadow-sm">
+            <Phone className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-sm font-bold text-slate-900">Start an Outbound AI Call</div>
+            <div className="text-xs text-slate-500">Auto-dial any lead via LiveKit + Vobiz SIP with Sarvam AI Indian voice & Grok LLM</div>
+          </div>
+        </div>
+        <Button onClick={onOpenDialer} className="gap-1.5 bg-brand hover:bg-brand-dark" size="sm">
+          Launch Dialer <ArrowUpRight className="h-3.5 w-3.5" />
+        </Button>
+      </div>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Total AI calls" value={stats.total_calls} icon={Phone} accent="brand" testId="stat-total" />
         <StatCard label="Hot leads" value={stats.hot} icon={Flame} accent="rose" testId="stat-hot" />
