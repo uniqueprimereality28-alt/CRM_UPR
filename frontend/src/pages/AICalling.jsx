@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Bot, Phone, Flame, Snowflake, PhoneForwarded, AlarmClock, MessageCircle,
   Loader2, Eye, RefreshCw, Check, ListChecks, Megaphone, SlidersHorizontal,
-  Thermometer, ArrowUpRight, Link2, CheckCircle2, AlertTriangle, Users, CalendarDays
+  Thermometer, ArrowUpRight, Link2, CheckCircle2, AlertTriangle, Users, CalendarDays,
+  Headphones
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -90,6 +91,7 @@ export default function AICalling() {
         </TabsList>
 
         <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} onOpenDialer={() => setActiveTab("dialer")} /></TabsContent>
+        <TabsContent value="livetest" className="mt-5"><LiveTest /></TabsContent>
         <TabsContent value="dialer" className="mt-5"><OutboundDialer onCallDispatched={loadStats} /></TabsContent>
         <TabsContent value="bulk" className="mt-5"><BulkDialer onDispatched={loadStats} /></TabsContent>
         <TabsContent value="campaigns" className="mt-5"><AICampaigns isAdmin={isVranda} onChanged={loadStats} /></TabsContent>
