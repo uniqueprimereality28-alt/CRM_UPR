@@ -29,7 +29,7 @@ export default function AICalling() {
   const [stats, setStats] = useState(null);
   const [openCall, setOpenCall] = useState(null);
   const [vaStatus, setVaStatus] = useState(null);
-  const [activeTab, setActiveTab] = useState("dialer");
+  const [activeTab, setActiveTab] = useState("overview");
 
   const loadStats = useCallback(() => {
     api.get("/ai/dashboard").then((r) => setStats(r.data)).catch(() => {});
@@ -75,26 +75,26 @@ export default function AICalling() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="flex h-auto flex-wrap gap-1 bg-slate-100 p-1">
+          <TabsTrigger value="overview" data-testid="tab-overview" className="gap-1.5"><Thermometer className="h-3.5 w-3.5" /> Overview</TabsTrigger>
           <TabsTrigger value="dialer" data-testid="tab-dialer" className="gap-1.5"><Phone className="h-3.5 w-3.5" /> Outbound Dialer</TabsTrigger>
           <TabsTrigger value="bulk" data-testid="tab-bulk" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Bulk Dialer</TabsTrigger>
-          <TabsTrigger value="appointments" data-testid="tab-appointments" className="gap-1.5"><CalendarDays className="h-3.5 w-3.5" /> Appointments & Visits</TabsTrigger>
-          <TabsTrigger value="overview" data-testid="tab-overview" className="gap-1.5"><Thermometer className="h-3.5 w-3.5" /> Overview</TabsTrigger>
           <TabsTrigger value="campaigns" data-testid="tab-campaigns" className="gap-1.5"><Megaphone className="h-3.5 w-3.5" /> Campaigns</TabsTrigger>
-          <TabsTrigger value="calls" data-testid="tab-calls" className="gap-1.5"><ListChecks className="h-3.5 w-3.5" /> AI Calls</TabsTrigger>
+          <TabsTrigger value="calls" data-testid="tab-calls" className="gap-1.5"><ListChecks className="h-3.5 w-3.5" /> AI Callers</TabsTrigger>
           <TabsTrigger value="followups" data-testid="tab-followups" className="gap-1.5"><AlarmClock className="h-3.5 w-3.5" /> Follow-ups</TabsTrigger>
           <TabsTrigger value="transfers" data-testid="tab-transfers" className="gap-1.5"><PhoneForwarded className="h-3.5 w-3.5" /> Transfers</TabsTrigger>
+          <TabsTrigger value="appointments" data-testid="tab-appointments" className="gap-1.5"><CalendarDays className="h-3.5 w-3.5" /> Appointments & Visits</TabsTrigger>
           <TabsTrigger value="whatsapp" data-testid="tab-whatsapp" className="gap-1.5"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings" className="gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Knowledge Base & Settings</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} onOpenDialer={() => setActiveTab("dialer")} /></TabsContent>
         <TabsContent value="dialer" className="mt-5"><OutboundDialer onCallDispatched={loadStats} /></TabsContent>
         <TabsContent value="bulk" className="mt-5"><BulkDialer onDispatched={loadStats} /></TabsContent>
-        <TabsContent value="appointments" className="mt-5"><AppointmentsView /></TabsContent>
-        <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} onOpenDialer={() => setActiveTab("dialer")} /></TabsContent>
         <TabsContent value="campaigns" className="mt-5"><AICampaigns isAdmin={isVranda} onChanged={loadStats} /></TabsContent>
         <TabsContent value="calls" className="mt-5"><CallsTab onOpenCall={setOpenCall} /></TabsContent>
         <TabsContent value="followups" className="mt-5"><FollowupsTab isAdmin={isVranda} onChanged={loadStats} onOpenCall={setOpenCall} /></TabsContent>
         <TabsContent value="transfers" className="mt-5"><TransfersTab onChanged={loadStats} /></TabsContent>
+        <TabsContent value="appointments" className="mt-5"><AppointmentsView /></TabsContent>
         <TabsContent value="whatsapp" className="mt-5"><WhatsAppTab /></TabsContent>
         <TabsContent value="settings" className="mt-5"><AISettingsPanel /></TabsContent>
       </Tabs>
