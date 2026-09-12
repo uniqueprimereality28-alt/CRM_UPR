@@ -90,7 +90,8 @@ export const TranscriptDialog = ({ callId, open, onOpenChange }) => {
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Conversation transcript</div>
               <div className="space-y-2.5">
                 {(call.transcript || []).map((t, i) => {
-                  const isAgent = t.speaker === "agent";
+                  const spk = (t.speaker || "").toLowerCase();
+                  const isAgent = spk !== "customer" && spk !== "user" && spk !== "client";
                   return (
                     <div key={i} className={`flex gap-2 ${isAgent ? "" : "flex-row-reverse"}`} data-testid={`turn-${i}`}>
                       <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${isAgent ? "bg-brand-light text-brand" : "bg-emerald-50 text-emerald-600"}`}>
