@@ -20,7 +20,7 @@ export const LiveTest = () => {
   const [customerName, setCustomerName] = useState("Aarav");
   const [selectedPhraseKey, setSelectedPhraseKey] = useState("greeting");
   const [customText, setCustomText] = useState("");
-  const [speaker, setSpeaker] = useState("meera");
+  const [speaker, setSpeaker] = useState("bulbul");
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
 
