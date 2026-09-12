@@ -3102,7 +3102,7 @@ app.include_router(api)
 # Imported down here (not at the top of the file) because ai_calling.py
 # does `from server import db, get_current_user, ...`, which needs those
 # names to already exist in this module by the time it's imported.
-from ai_calling import ai_router, ai_public_router
+from ai_calling import ai_router, ai_public_router, seed_ai_defaults
 app.include_router(ai_router)
 app.include_router(ai_public_router)
 
@@ -3254,6 +3254,13 @@ async def startup():
                 "created_by_name": founders[0].get("name"),
                 "created_at": now_iso(),
             })
+
+    # Seed AI Telecalling defaults (Vrinda persona, scoring rules, project inventory, knowledge base)
+    try:
+        await seed_ai_defaults()
+        logger.info("Seeded and verified AI Telecalling defaults & scoring engine")
+    except Exception as exc:
+        logger.warning(f"Could not seed AI defaults on startup: {exc}")
 
 
 @app.on_event("shutdown")
