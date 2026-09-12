@@ -225,6 +225,10 @@ async def entrypoint(ctx: JobContext) -> None:
             raw_cfg = meta.get("agent_config", {})
             if isinstance(raw_cfg, dict):
                 agent_config = raw_cfg
+            lead_name = meta.get("lead_name") or meta.get("leadName") or agent_config.get("lead_name") or agent_config.get("leadName") or ""
+            if lead_name:
+                agent_config["lead_name"] = lead_name
+                agent_config["leadName"] = lead_name
         except Exception as e:
             logger.warning("Could not parse job metadata: %s", e)
 
