@@ -288,7 +288,7 @@ class BulkDispatchIn(BaseModel):
     contacts: Optional[List[dict]] = None
     prompt: Optional[str] = ""
     model_provider: Optional[str] = "grok"
-    voice: Optional[str] = "sarvam-meera"
+    voice: Optional[str] = "sarvam-bulbul"
     campaign_name: Optional[str] = "Direct Bulk Dispatch"
 
 
@@ -853,7 +853,7 @@ class RealCallTriggerIn(BaseModel):
     campaign_id: Optional[str] = None
     agent_id: Optional[str] = None
     model_provider: Optional[str] = "grok"
-    voice: Optional[str] = "sarvam-meera"
+    voice: Optional[str] = "sarvam-bulbul"
 
 
 class CallIngestIn(BaseModel):
@@ -894,7 +894,7 @@ async def _get_voice_agent_config() -> dict:
         "grok_api_key": doc.get("grok_api_key") or GROK_API_KEY_ENV or "",
         "sarvam_api_key": doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "",
         "deepgram_api_key": doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "",
-        "sarvam_speaker": doc.get("sarvam_speaker") or "meera",
+        "sarvam_speaker": doc.get("sarvam_speaker") or "bulbul",
         "sarvam_language": doc.get("sarvam_language") or "hi-IN",
     }
 
@@ -931,7 +931,7 @@ async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
         "livekit_agent_name": cfg.get("livekit_agent_name", "upr-calling-agent"),
         "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id", ""),
         "voice_agent_url": cfg.get("voice_agent_url", ""),
-        "sarvam_speaker": cfg.get("sarvam_speaker", "meera"),
+        "sarvam_speaker": cfg.get("sarvam_speaker", "bulbul"),
         "sarvam_language": cfg.get("sarvam_language", "hi-IN"),
         "has_livekit_key": bool(cfg.get("livekit_api_key")),
         "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
@@ -963,7 +963,7 @@ async def _dispatch_outbound_call(
     campaign_id: Optional[str] = None,
     user_prompt: str = "",
     model_provider: str = "grok",
-    voice: str = "sarvam-meera",
+    voice: str = "sarvam-bulbul",
 ) -> dict:
     cfg = await _get_voice_agent_config()
     lead_id = str(lead["_id"])
@@ -1155,7 +1155,7 @@ async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(req
         campaign_id=payload.campaign_id,
         user_prompt=payload.prompt or "",
         model_provider=payload.model_provider or "grok",
-        voice=payload.voice or "sarvam-meera",
+        voice=payload.voice or "sarvam-bulbul",
     )
 
     await db.leads.update_one(
@@ -1342,7 +1342,7 @@ async def complete_followup(fu_id: str, user: dict = Depends(get_current_user)):
 
 class TTSTestIn(BaseModel):
     text: str
-    speaker: Optional[str] = "meera"
+    speaker: Optional[str] = "bulbul"
     language: Optional[str] = "hi-IN"
 
 
@@ -1358,7 +1358,7 @@ async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
         body = {
             "inputs": [payload.text[:500]],
             "target_language_code": payload.language or "hi-IN",
-            "speaker": payload.speaker or "meera",
+            "speaker": payload.speaker or "bulbul",
             "model": "bulbul:v1",
         }
         try:
@@ -1576,7 +1576,7 @@ async def bulk_dispatch_calls(payload: BulkDispatchIn, user: dict = Depends(requ
                 campaign_id=None,
                 user_prompt=payload.prompt or "",
                 model_provider=payload.model_provider or "grok",
-                voice=payload.voice or "sarvam-meera",
+                voice=payload.voice or "sarvam-bulbul",
             )
 
             await db.leads.update_one(
