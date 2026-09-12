@@ -212,6 +212,20 @@ export default function Leads() {
     } finally { setBusy(false); }
   };
 
+  const doAssignAI = async () => {
+    if (selected.length === 0) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post("/leads/assign", { lead_ids: selected, agent_id: "ai" });
+      toast.success(`${data.assigned} lead(s) queued for AI Calling!`);
+      setSelected([]);
+      load();
+    } catch (err) {
+      toast.error(apiError(err.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+
   const doImport = async () => {
     if (!file || busy) return; // guard against double-clicking the upload button
     setBusy(true);
@@ -464,6 +478,7 @@ export default function Leads() {
                         <SelectTrigger data-testid="import-agent-select"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">Leave unassigned</SelectItem>
+                          <SelectItem value="ai">🤖 AI Voice Agent (Vrinda)</SelectItem>
                           {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                         </SelectContent>
                       </Select>
@@ -782,15 +797,20 @@ export default function Leads() {
           <span className="text-sm font-medium text-brand">{selected.length} selected</span>
           <Select value={assignTo} onValueChange={setAssignTo}>
             <SelectTrigger className="w-56 bg-white" data-testid="bulk-assign-select">
-              <SelectValue placeholder="Choose person" />
+              <SelectValue placeholder="Choose person / AI" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="ai">🤖 AI Voice Agent (Vrinda)</SelectItem>
               {agents.map((a) => <SelectItem key={a.id} value={a.id}>{a.name} ({a.role})</SelectItem>)}
             </SelectContent>
           </Select>
           <Button size="sm" onClick={doAssign} disabled={!assignTo || busy}
             data-testid="bulk-assign-confirm" className="bg-brand hover:bg-brand-dark">
             Assign leads
+          </Button>
+          <Button size="sm" onClick={doAssignAI} disabled={busy}
+            className="gap-1.5 bg-brand-dark hover:bg-brand text-white shadow-sm">
+            <Bot className="h-4 w-4" /> Send to AI Calling ({selected.length})
           </Button>
           {isAdmin && (
             <Button size="sm" variant="destructive" onClick={bulkDelete} disabled={busy}
