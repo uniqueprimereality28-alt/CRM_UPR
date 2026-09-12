@@ -1207,6 +1207,35 @@ async def delete_lead(lead_id: str, admin: dict = Depends(require_admin)):
 
 @api.post("/leads/assign")
 async def assign_leads(payload: AssignRequest, user: dict = Depends(require_manager)):
+    if payload.agent_id in ("ai", "ai_agent"):
+        ids = [ObjectId(i) for i in payload.lead_ids]
+        ts = now_iso()
+        await db.leads.update_many(
+            {"_id": {"$in": ids}},
+            {"$set": {
+                "assigned_to": "ai",
+                "assigned_to_name": "AI Voice Agent (Vrinda)",
+                "assigned_agent_type": "ai",
+                "ai_call_status": "queued",
+                "assigned_at": ts,
+                "updated_at": ts,
+            }}
+        )
+        active_camp = await db.ai_campaigns.find_one({"status": {"$in": ["active", "draft"]}})
+        camp_id = str(active_camp["_id"]) if active_camp else None
+        for lead_id in payload.lead_ids:
+            await _log_activity(lead_id, user, "assignment", "Lead assigned to AI Voice Agent (Vrinda)")
+            existing = await db.ai_queue.find_one({"lead_id": lead_id})
+            if not existing:
+                await db.ai_queue.insert_one({
+                    "campaign_id": camp_id,
+                    "lead_id": lead_id,
+                    "status": "queued",
+                    "retries": 0,
+                    "created_at": ts,
+                })
+        return {"ok": True, "assigned": len(payload.lead_ids)}
+
     agent = await db.users.find_one({"_id": ObjectId(payload.agent_id)})
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1222,6 +1251,7 @@ async def assign_leads(payload: AssignRequest, user: dict = Depends(require_mana
     for lead_id in payload.lead_ids:
         await _log_activity(lead_id, user, "assignment", f"Lead assigned to {agent['name']}")
     return {"ok": True, "assigned": len(payload.lead_ids)}
+
 
 
 @api.post("/leads/bulk-delete")
@@ -1324,8 +1354,11 @@ async def import_leads(
 
     agent_name = None
     if assigned_to:
-        agent = await db.users.find_one({"_id": ObjectId(assigned_to)})
-        agent_name = agent.get("name") if agent else None
+        if assigned_to in ("ai", "ai_agent"):
+            agent_name = "AI Voice Agent (Vrinda)"
+        else:
+            agent = await db.users.find_one({"_id": ObjectId(assigned_to)})
+            agent_name = agent.get("name") if agent else None
 
     skip_dupes = str(skip_duplicates).lower() in ("true", "1", "yes")
     existing = await db.leads.find({}, {"phone": 1, "name": 1}).to_list(50000)
@@ -1395,8 +1428,22 @@ async def import_leads(
             assigned_at=now_iso() if assigned_to else None,
             created_at=now_iso(), updated_at=now_iso(),
         ).to_mongo()
-        await db.leads.insert_one(doc)
+        if assigned_to in ("ai", "ai_agent"):
+            doc["assigned_agent_type"] = "ai"
+            doc["ai_call_status"] = "queued"
+        ins = await db.leads.insert_one(doc)
+        if assigned_to in ("ai", "ai_agent"):
+            active_camp = await db.ai_campaigns.find_one({"status": {"$in": ["active", "draft"]}})
+            camp_id = str(active_camp["_id"]) if active_camp else None
+            await db.ai_queue.insert_one({
+                "campaign_id": camp_id,
+                "lead_id": str(ins.inserted_id),
+                "status": "queued",
+                "retries": 0,
+                "created_at": now_iso(),
+            })
         inserted += 1
+
     # "missing" counts rows with no phone number at all; "invalid" counts rows
     # that had something in the phone column but it couldn't be turned into a
     # real number (including ones that looked swapped with the name column).
