@@ -72,6 +72,15 @@ VOICE_AGENT_URL_ENV = os.environ.get("VOICE_AGENT_URL", "").rstrip("/")
 VOICE_AGENT_SHARED_SECRET_ENV = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
 VOICE_AGENT_SETTINGS_DOC_ID = "voice_agent_config"
 
+LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "").strip()
+LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "").strip()
+LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "").strip()
+LIVEKIT_AGENT_NAME_ENV = os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
+VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "").strip()
+GROK_API_KEY_ENV = os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY", "").strip()
+SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "").strip()
+DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "").strip()
+
 TRANSFER_TARGET_NAME = "Vranda Aggarwal"
 TRANSFER_TARGET_NUMBER = "7351735035"
 
@@ -671,67 +680,47 @@ async def assign_leads(campaign_id: str, payload: AssignLeadsIn, user: dict = De
 
 @ai_router.post("/campaigns/{campaign_id}/run")
 async def run_campaign(campaign_id: str, payload: RunIn, user: dict = Depends(require_vranda_only)):
-    """Places REAL outbound calls (via the voice-agent microservice) for the
+    """Places REAL outbound calls (via LiveKit/Vobiz SIP or voice-agent) for the
     next N queued leads in this campaign. This is asynchronous — a call
-    takes minutes to actually happen, so this endpoint only STARTS the
+    takes minutes to actually happen, so this endpoint STARTS the
     dials and marks each queue item 'calling'. Each queue item is moved to
-    'done' later, automatically, when that lead's real call finishes and
-    the voice-agent reports back via /calls/ingest (see _finalize_call)."""
-    voice_agent_url, voice_agent_secret = await _get_voice_agent_config()
-    if not voice_agent_url or not voice_agent_secret:
-        raise HTTPException(
-            500,
-            "Real calling is not configured yet. Go to Settings and paste the "
-            "voice-agent URL + shared secret first.",
-        )
+    'done' automatically when the call finishes and reports back via /calls/ingest."""
     c = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
     if not c:
         raise HTTPException(404, "Campaign not found")
     agent = await _get_agent(c.get("agent_id"))
-    inventory = await db.ai_inventory.find().to_list(500)
-    if not inventory:
-        inventory = DEFAULT_INVENTORY
+    inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
 
     limit = max(1, min(payload.limit, 20))
     queued = await db.ai_queue.find({"campaign_id": campaign_id, "status": "queued"}).limit(limit).to_list(limit)
 
-    import httpx
     dialing, failed = [], []
-    async with httpx.AsyncClient(timeout=20) as client:
-        for q in queued:
-            lead = await db.leads.find_one({"_id": ObjectId(q["lead_id"])})
-            if not lead or not lead.get("phone"):
-                await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {"status": "skipped"}})
-                continue
-            body = {
-                "lead_id": str(lead["_id"]), "lead_name": lead.get("name"), "phone": lead.get("phone"),
-                "city": lead.get("city"), "property_interest": lead.get("property_interest"),
-                "budget": lead.get("budget"), "remark": lead.get("remark"), "campaign_id": campaign_id,
-                "agent": {
-                    "name": agent.get("name"), "voice_gender": agent.get("voice_gender", "female"),
-                    "voice_accent": agent.get("voice_accent"), "language_style": agent.get("language_style", "formal_hinglish"),
-                    "personality": agent.get("personality"), "intro_line": agent.get("intro_line"),
-                    "guardrails": agent.get("guardrails"),
-                },
-                "inventory": inventory,
-            }
-            try:
-                resp = await client.post(f"{voice_agent_url}/trigger", json=body,
-                                         headers={"X-Voice-Agent-Secret": voice_agent_secret})
-                resp.raise_for_status()
-                data = resp.json()
-                await db.ai_queue.update_one({"_id": q["_id"]}, {
-                    "$set": {"status": "calling", "call_uuid": data.get("call_uuid"), "dialed_at": now_iso()},
-                    "$inc": {"attempts": 1},
-                })
-                await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
-                    "assigned_agent_type": "ai", "ai_call_status": "dialing",
-                    "ai_call_uuid": data.get("call_uuid"), "updated_at": now_iso(),
-                }})
-                dialing.append({"lead_name": q.get("lead_name"), "call_uuid": data.get("call_uuid")})
-            except httpx.HTTPError as e:
-                logger.error(f"campaign dial failed for lead {q.get('lead_id')}: {e}")
-                failed.append({"lead_name": q.get("lead_name"), "error": str(e)})
+    for q in queued:
+        lead = await db.leads.find_one({"_id": ObjectId(q["lead_id"])})
+        if not lead or not lead.get("phone"):
+            await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {"status": "skipped"}})
+            continue
+        try:
+            res = await _dispatch_outbound_call(
+                lead=lead,
+                agent=agent,
+                inventory=inventory,
+                campaign_id=campaign_id,
+                user_prompt=c.get("script_template", ""),
+            )
+            call_uuid = res.get("call_uuid")
+            await db.ai_queue.update_one({"_id": q["_id"]}, {
+                "$set": {"status": "calling", "call_uuid": call_uuid, "dialed_at": now_iso()},
+                "$inc": {"attempts": 1},
+            })
+            await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
+                "assigned_agent_type": "ai", "ai_call_status": "dialing",
+                "ai_call_uuid": call_uuid, "updated_at": now_iso(),
+            }})
+            dialing.append({"lead_name": q.get("lead_name"), "call_uuid": call_uuid})
+        except Exception as e:
+            logger.error(f"campaign dial failed for lead {q.get('lead_id')}: {e}")
+            failed.append({"lead_name": q.get("lead_name"), "error": str(e)})
 
     remaining = await db.ai_queue.count_documents({"campaign_id": campaign_id, "status": "queued"})
     return {"dialing": len(dialing), "failed": len(failed), "remaining": remaining,
@@ -757,10 +746,18 @@ async def run_single(payload: CallRunIn, user: dict = Depends(require_admin)):
 # ================================================================
 # REAL VOICE CALLING — talks to the separate voice-agent microservice
 # ================================================================
+# ================================================================
+# REAL VOICE CALLING — LiveKit + Vobiz SIP + Grok + Sarvam AI
+# ================================================================
 class RealCallTriggerIn(BaseModel):
-    lead_id: str
+    lead_id: Optional[str] = None
+    phone: Optional[str] = None
+    lead_name: Optional[str] = None
+    prompt: Optional[str] = None
     campaign_id: Optional[str] = None
     agent_id: Optional[str] = None
+    model_provider: Optional[str] = "grok"
+    voice: Optional[str] = "sarvam-meera"
 
 
 class CallIngestIn(BaseModel):
@@ -787,117 +784,273 @@ class CallIngestIn(BaseModel):
     remarks: str = ""
 
 
-async def _get_voice_agent_config() -> tuple[str, str]:
+async def _get_voice_agent_config() -> dict:
     """DB-stored config (settable from inside the CRM) wins over env vars."""
-    doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID})
-    url = ((doc or {}).get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/")
-    secret = (doc or {}).get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV
-    return url, secret
+    doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
+    return {
+        "livekit_url": doc.get("livekit_url") or LIVEKIT_URL_ENV or "",
+        "livekit_api_key": doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "",
+        "livekit_api_secret": doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "",
+        "livekit_agent_name": doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent",
+        "vobiz_sip_trunk_id": doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "",
+        "voice_agent_url": (doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
+        "voice_agent_shared_secret": doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "",
+        "grok_api_key": doc.get("grok_api_key") or GROK_API_KEY_ENV or "",
+        "sarvam_api_key": doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "",
+        "deepgram_api_key": doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "",
+        "sarvam_speaker": doc.get("sarvam_speaker") or "meera",
+        "sarvam_language": doc.get("sarvam_language") or "hi-IN",
+    }
 
 
 async def _check_voice_agent_secret(x_voice_agent_secret: Optional[str]):
-    _, configured_secret = await _get_voice_agent_config()
-    if not configured_secret:
+    cfg = await _get_voice_agent_config()
+    secret = cfg.get("voice_agent_shared_secret")
+    if not secret:
         raise HTTPException(500, "Voice-agent shared secret is not configured on the CRM backend")
-    if not x_voice_agent_secret or x_voice_agent_secret != configured_secret:
+    if not x_voice_agent_secret or x_voice_agent_secret != secret:
         raise HTTPException(401, "Invalid or missing voice-agent shared secret")
 
 
 class VoiceAgentSettingsIn(BaseModel):
-    voice_agent_url: str
-    voice_agent_shared_secret: Optional[str] = None  # blank/omitted = keep existing secret unchanged
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+    livekit_agent_name: Optional[str] = None
+    vobiz_sip_trunk_id: Optional[str] = None
+    voice_agent_url: Optional[str] = None
+    voice_agent_shared_secret: Optional[str] = None
+    grok_api_key: Optional[str] = None
+    sarvam_api_key: Optional[str] = None
+    deepgram_api_key: Optional[str] = None
+    sarvam_speaker: Optional[str] = None
+    sarvam_language: Optional[str] = None
 
 
 @ai_router.get("/calls/real/settings")
 async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
-    """Lets Vranda see/set the voice-agent API link and shared secret
-    directly from the CRM UI — no backend code edits or redeploy needed.
-    The secret itself is never sent back to the browser, only whether one
-    is set, so it can't leak via network tab / screenshots."""
-    url, secret = await _get_voice_agent_config()
-    return {"voice_agent_url": url, "secret_configured": bool(secret),
-            "source": "database" if url and url != VOICE_AGENT_URL_ENV else ("env" if url else "unset")}
+    cfg = await _get_voice_agent_config()
+    return {
+        "livekit_url": cfg.get("livekit_url", ""),
+        "livekit_agent_name": cfg.get("livekit_agent_name", "upr-calling-agent"),
+        "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id", ""),
+        "voice_agent_url": cfg.get("voice_agent_url", ""),
+        "sarvam_speaker": cfg.get("sarvam_speaker", "meera"),
+        "sarvam_language": cfg.get("sarvam_language", "hi-IN"),
+        "has_livekit_key": bool(cfg.get("livekit_api_key")),
+        "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
+        "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
+        "has_grok_key": bool(cfg.get("grok_api_key")),
+        "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
+        "has_deepgram_key": bool(cfg.get("deepgram_api_key")),
+        "secret_configured": bool(cfg.get("voice_agent_shared_secret") or cfg.get("livekit_api_secret")),
+        "source": "database" if cfg.get("livekit_url") else ("env" if LIVEKIT_URL_ENV else "unset"),
+    }
 
 
 @ai_router.post("/calls/real/settings")
 async def set_voice_agent_settings(payload: VoiceAgentSettingsIn, user: dict = Depends(require_vranda_only)):
-    if not payload.voice_agent_url.startswith("http"):
-        raise HTTPException(400, "voice_agent_url must be a full https:// URL")
-    update = {"voice_agent_url": payload.voice_agent_url.rstrip("/"),
-              "updated_at": now_iso(), "updated_by": user.get("username")}
-    if payload.voice_agent_shared_secret:  # blank = keep whatever secret is already stored
-        update["voice_agent_shared_secret"] = payload.voice_agent_shared_secret
+    update = {"updated_at": now_iso(), "updated_by": user.get("username")}
+    for field, val in payload.model_dump().items():
+        if val is not None and str(val).strip() != "":
+            update[field] = str(val).strip()
     await db.ai_settings.update_one(
         {"_id": VOICE_AGENT_SETTINGS_DOC_ID}, {"$set": update}, upsert=True,
     )
     return {"ok": True}
 
 
+async def _dispatch_outbound_call(
+    lead: dict,
+    agent: dict,
+    inventory: list,
+    campaign_id: Optional[str] = None,
+    user_prompt: str = "",
+    model_provider: str = "grok",
+    voice: str = "sarvam-meera",
+) -> dict:
+    cfg = await _get_voice_agent_config()
+    lead_id = str(lead["_id"])
+    lead_name = lead.get("name") or "Valued Customer"
+    phone = lead.get("phone")
+    if not phone:
+        raise HTTPException(400, "Lead has no phone number")
+
+    e164_phone = phone.strip()
+    if not e164_phone.startswith("+"):
+        e164_phone = "+91" + e164_phone if len(e164_phone) == 10 else "+" + e164_phone
+
+    clean_digits = re.sub(r"[^0-9]", "", e164_phone)
+    call_uuid = f"call-{clean_digits}-{uuid.uuid4().hex[:6]}"
+
+    # 1. Direct LiveKit Cloud dispatch
+    livekit_url = cfg.get("livekit_url")
+    livekit_api_key = cfg.get("livekit_api_key")
+    livekit_api_secret = cfg.get("livekit_api_secret")
+
+    if livekit_url and livekit_api_key and livekit_api_secret:
+        import jwt
+        http_url = livekit_url.replace("wss://", "https://").replace("ws://", "http://").rstrip("/")
+        agent_name = cfg.get("livekit_agent_name") or "upr-calling-agent"
+
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        token_payload = {
+            "iss": livekit_api_key,
+            "sub": "crm_backend",
+            "nbf": now_ts - 5,
+            "exp": now_ts + 600,
+            "video": {
+                "roomCreate": True,
+                "roomAdmin": True,
+                "room": call_uuid,
+            },
+        }
+        token = jwt.encode(token_payload, livekit_api_secret, algorithm="HS256")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        metadata_dict = {
+            "lead_id": lead_id,
+            "lead_name": lead_name,
+            "phone_number": e164_phone,
+            "campaign_id": campaign_id,
+            "user_prompt": user_prompt or lead.get("remark") or "",
+            "model_provider": model_provider,
+            "voice_id": voice,
+            "agent_config": {
+                "agentName": agent.get("name", "Simran"),
+                "companyName": "Unique Prime Reality",
+                "leadName": lead_name,
+                "systemPrompt": agent.get("guardrails", ""),
+                "transferNumber": TRANSFER_TARGET_NUMBER,
+            },
+        }
+        metadata_str = json.dumps(metadata_dict)
+
+        import httpx
+        async with httpx.AsyncClient(timeout=20) as client:
+            try:
+                # Create Room
+                await client.post(
+                    f"{http_url}/twirp/livekit.RoomService/CreateRoom",
+                    headers=headers,
+                    json={"name": call_uuid, "metadata": metadata_str, "empty_timeout": 300},
+                )
+                # Create Dispatch
+                dispatch_resp = await client.post(
+                    f"{http_url}/twirp/livekit.AgentDispatchService/CreateDispatch",
+                    headers=headers,
+                    json={"agent_name": agent_name, "room": call_uuid, "metadata": metadata_str},
+                )
+                dispatch_resp.raise_for_status()
+                return {"call_uuid": call_uuid, "status": "dispatched", "method": "livekit_cloud"}
+            except Exception as e:
+                logger.error(f"LiveKit Cloud dispatch error: {e}")
+                if not cfg.get("voice_agent_url"):
+                    raise HTTPException(502, f"LiveKit Cloud dispatch failed: {e}")
+
+    # 2. HTTP Voice Agent trigger (fallback)
+    voice_agent_url = cfg.get("voice_agent_url")
+    voice_agent_secret = cfg.get("voice_agent_shared_secret")
+    if voice_agent_url and voice_agent_secret:
+        import httpx
+        body = {
+            "lead_id": lead_id,
+            "lead_name": lead_name,
+            "phone": e164_phone,
+            "city": lead.get("city"),
+            "property_interest": lead.get("property_interest"),
+            "budget": lead.get("budget"),
+            "remark": lead.get("remark"),
+            "campaign_id": campaign_id,
+            "user_prompt": user_prompt,
+            "agent": {
+                "name": agent.get("name"),
+                "voice_gender": agent.get("voice_gender", "female"),
+                "voice_accent": agent.get("voice_accent"),
+                "language_style": agent.get("language_style", "formal_hinglish"),
+                "personality": agent.get("personality"),
+                "intro_line": agent.get("intro_line"),
+                "guardrails": agent.get("guardrails"),
+            },
+            "inventory": inventory,
+        }
+        async with httpx.AsyncClient(timeout=20) as client:
+            try:
+                resp = await client.post(
+                    f"{voice_agent_url}/trigger",
+                    json=body,
+                    headers={"X-Voice-Agent-Secret": voice_agent_secret},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {"call_uuid": data.get("call_uuid", call_uuid), "status": "dialing", "method": "http_worker"}
+            except Exception as e:
+                raise HTTPException(502, f"Voice-agent trigger failed: {e}")
+
+    raise HTTPException(
+        500,
+        "Calling service is not configured yet. Go to AI Calling Settings and configure your LiveKit Cloud credentials & Vobiz SIP Trunk ID.",
+    )
+
+
 @ai_router.post("/calls/real/trigger")
 async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(require_vranda_only)):
-    """Vranda clicks 'Call now (real)' in the CRM. This asks the voice-agent
-    microservice to actually dial the lead's phone number. The CRM backend
-    never talks to Plivo directly — only the voice-agent does."""
-    voice_agent_url, voice_agent_secret = await _get_voice_agent_config()
-    if not voice_agent_url or not voice_agent_secret:
-        raise HTTPException(
-            500,
-            "Real calling is not configured yet. Go to Settings and paste the "
-            "voice-agent URL + shared secret (or set VOICE_AGENT_URL / "
-            "VOICE_AGENT_SHARED_SECRET as env vars on the backend).",
-        )
-    lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
+    lead = None
+    if payload.lead_id:
+        try:
+            lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
+        except Exception:
+            pass
+    if not lead and payload.phone:
+        clean_phone = payload.phone.strip()
+        lead = await db.leads.find_one({"phone": clean_phone})
+        if not lead:
+            new_lead = {
+                "name": payload.lead_name or f"Lead {clean_phone[-4:]}",
+                "phone": clean_phone,
+                "status": "new",
+                "source": "AI Outbound",
+                "created_at": now_iso(),
+                "assigned_to": str(user.get("_id", "")),
+                "assigned_to_name": user.get("name", "Vranda Aggarwal"),
+            }
+            ins = await db.leads.insert_one(new_lead)
+            lead = await db.leads.find_one({"_id": ins.inserted_id})
+
     if not lead:
-        raise HTTPException(404, "Lead not found")
-    if not lead.get("phone"):
-        raise HTTPException(400, "Lead has no phone number")
+        raise HTTPException(404, "Lead not found. Please provide a valid lead_id or phone number.")
 
     agent = await _get_agent(payload.agent_id)
     inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
-    campaign = None
-    if payload.campaign_id:
-        campaign = await db.ai_campaigns.find_one({"_id": ObjectId(payload.campaign_id)})
 
-    import httpx
-    body = {
-        "lead_id": str(lead["_id"]),
-        "lead_name": lead.get("name"),
-        "phone": lead.get("phone"),
-        "city": lead.get("city"),
-        "property_interest": lead.get("property_interest"),
-        "budget": lead.get("budget"),
-        "remark": lead.get("remark"),
-        "campaign_id": payload.campaign_id,
-        "agent": {
-            "name": agent.get("name"),
-            "voice_gender": agent.get("voice_gender", "female"),
-            "voice_accent": agent.get("voice_accent"),
-            "language_style": agent.get("language_style", "formal_hinglish"),
-            "personality": agent.get("personality"),
-            "intro_line": agent.get("intro_line"),
-            "guardrails": agent.get("guardrails"),
-        },
-        "inventory": inventory,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(
-                f"{voice_agent_url}/trigger",
-                json=body,
-                headers={"X-Voice-Agent-Secret": voice_agent_secret},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as e:
-        logger.error(f"voice-agent trigger failed: {e}")
-        raise HTTPException(502, f"Could not reach voice-agent service: {e}")
+    dispatch_res = await _dispatch_outbound_call(
+        lead=lead,
+        agent=agent,
+        inventory=inventory,
+        campaign_id=payload.campaign_id,
+        user_prompt=payload.prompt or "",
+        model_provider=payload.model_provider or "grok",
+        voice=payload.voice or "sarvam-meera",
+    )
 
     await db.leads.update_one(
         {"_id": lead["_id"]},
-        {"$set": {"assigned_agent_type": "ai", "ai_call_status": "dialing",
-                  "ai_call_uuid": data.get("call_uuid"), "updated_at": now_iso()}},
+        {"$set": {
+            "assigned_agent_type": "ai",
+            "ai_call_status": "dialing",
+            "ai_call_uuid": dispatch_res.get("call_uuid"),
+            "updated_at": now_iso(),
+        }},
     )
-    return {"ok": True, "call_uuid": data.get("call_uuid"), "status": data.get("status", "dialing")}
+    return {
+        "ok": True,
+        "call_uuid": dispatch_res.get("call_uuid"),
+        "status": dispatch_res.get("status", "dialing"),
+        "lead_id": str(lead["_id"]),
+    }
 
 
 @ai_public_router.post("/calls/ingest")
