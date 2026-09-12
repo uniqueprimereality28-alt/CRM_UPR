@@ -1,56 +1,133 @@
-"""
-Central config for the voice-agent microservice.
-Everything is read from environment variables — see .env.example.
-"""
 import os
+from dotenv import load_dotenv
 
-# --- Public URL of THIS service (must be reachable from the internet so
-# Plivo can call it). Set this after you deploy, e.g. your Render URL. ---
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-# --- Twilio (telephony) ---
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")  # your Twilio caller-ID number
+# ─── LiveKit & Telephony ───
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip()
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "").strip()
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "").strip()
+LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
 
-# --- Shared secret with the CRM backend (must match VOICE_AGENT_SHARED_SECRET there) ---
-VOICE_AGENT_SHARED_SECRET = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
+VOBIZ_SIP_TRUNK_ID = os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID", "").strip()
+DEFAULT_TRANSFER_NUMBER = os.getenv("DEFAULT_TRANSFER_NUMBER", "+917351735035").strip()
+DEFAULT_TRANSFER_NAME = os.getenv("DEFAULT_TRANSFER_NAME", "Vranda Aggarwal").strip()
+MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
 
-# --- CRM backend base URL (where /api/ai/calls/ingest lives) ---
-CRM_BACKEND_URL = os.environ.get("CRM_BACKEND_URL", "").rstrip("/")
+# ─── AI Providers ───
+# STT: Deepgram
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
+DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
+DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()  # "hi", "en-IN", "en", "multi"
 
-# --- LLM (conversation brain). Any OpenAI-compatible endpoint works. ---
-# Groq's free tier (fast, generous limits) is the default recommendation.
-LLM_API_BASE = os.environ.get("LLM_API_BASE", "https://api.groq.com/openai/v1")
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
+# LLM: Grok (xAI) or Groq / OpenAI fallback
+GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
-# --- STT (faster-whisper, fully local/free — no API key needed) ---
-WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "small")  # tiny|base|small|medium
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
-WHISPER_COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
+# TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "meera").strip()  # meera, pavithra, maitri, arvind, amartya
+SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()  # hi-IN, en-IN
 
-# --- TTS ---
-# "sarvam" = Sarvam Bulbul v3 (paid, ~Rs30/10k chars, best Hinglish quality,
-#            new accounts get free credits — https://dashboard.sarvam.ai)
-# "edge"   = edge-tts (free, no key, lower quality fallback)
-TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "sarvam")
+DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
 
-# --- Sarvam Bulbul (used when TTS_PROVIDER=sarvam) ---
-SARVAM_API_KEY = os.environ.get("SARVAM_API_KEY", "")
-SARVAM_MODEL = os.environ.get("SARVAM_MODEL", "bulbul:v3")
-SARVAM_SPEAKER = os.environ.get("SARVAM_SPEAKER", "anushka")  # try "ritu"/"priya" too, listen and compare
-SARVAM_LANGUAGE = os.environ.get("SARVAM_LANGUAGE", "hi-IN")  # required by Sarvam; handles Hinglish fine
-SARVAM_SAMPLE_RATE = int(os.environ.get("SARVAM_SAMPLE_RATE", "8000"))  # matches Plivo's 8kHz line
+# ─── CRM Backend Integration ───
+CRM_BACKEND_URL = os.getenv("CRM_BACKEND_URL", "http://localhost:8001").rstrip("/")
+VOICE_AGENT_SHARED_SECRET = os.getenv("VOICE_AGENT_SHARED_SECRET", "upr-secret-token-change-in-prod").strip()
 
-# --- edge-tts (used when TTS_PROVIDER=edge, or as emergency fallback) ---
-TTS_VOICE = os.environ.get("TTS_VOICE", "hi-IN-SwaraNeural")  # try hi-IN-MadhurNeural for male
+# ─── Agent Persona & Default Prompts ───
+AGENT_NAME = "Simran"
+COMPANY_NAME = "Unique Prime Reality"
+MARKET = "Gurgaon, Haryana, India"
 
-# --- Conversation tuning ---
-MAX_TURNS = int(os.environ.get("MAX_TURNS", "14"))
-SILENCE_MS_TO_END_TURN = int(os.environ.get("SILENCE_MS_TO_END_TURN", "700"))
-MAX_CALL_SECONDS = int(os.environ.get("MAX_CALL_SECONDS", "300"))
+DEFAULT_INVENTORY = [
+    {
+        "project": "Prime Elmwood Residences",
+        "location": "Sector 79, Gurgaon",
+        "config": "2/3 BHK",
+        "price_range": "₹1.2 Cr – ₹1.9 Cr",
+        "possession": "Dec 2026",
+        "highlights": "IGI Airport 25 mins, upcoming metro extension, modern clubhouse",
+    },
+    {
+        "project": "Prime Skyline Towers",
+        "location": "Golf Course Extension Road, Gurgaon",
+        "config": "3/4 BHK Luxury",
+        "price_range": "₹2.4 Cr – ₹3.8 Cr",
+        "possession": "Ready to move",
+        "highlights": "Ultra-luxury gated community, panoramic Aravali views",
+    },
+    {
+        "project": "Prime Green Vista",
+        "location": "Sohna Road, Gurgaon",
+        "config": "2/3 BHK",
+        "price_range": "₹95 L – ₹1.6 Cr",
+        "possession": "Jun 2027",
+        "highlights": "Investor favourite, expected high rental yield, close to cloverleaf",
+    },
+]
 
-# --- Human transfer target (for logging/consistency with the CRM side) ---
-TRANSFER_TARGET_NAME = os.environ.get("TRANSFER_TARGET_NAME", "Vranda Aggarwal")
-TRANSFER_TARGET_NUMBER = os.environ.get("TRANSFER_TARGET_NUMBER", "7351735035")
+BASE_AGENT_CONTEXT = f"""\
+<role>
+You are {AGENT_NAME}, an expert, courteous, and polite tele-calling consultant for {COMPANY_NAME}, a premier real estate firm in Gurgaon.
+You speak warm, natural Hinglish (conversational mix of Hindi and English) or English depending on how the customer speaks to you.
+Speak concisely: 1 to 2 short sentences per response. Never give long lectures. Always ask only ONE question at a time.
+Disclose that you are an AI calling assistant from {COMPANY_NAME} if asked directly.
+</role>
+
+<business>
+Company: {COMPANY_NAME}
+Location: Gurgaon, Haryana
+Key Projects:
+- Prime Elmwood Residences (Sector 79, Gurgaon | 2/3 BHK | ₹1.2 Cr – ₹1.9 Cr | Possession Dec 2026)
+- Prime Skyline Towers (Golf Course Ext Road | 3/4 BHK | ₹2.4 Cr – ₹3.8 Cr | Ready to move)
+- Prime Green Vista (Sohna Road | 2/3 BHK | ₹95 L – ₹1.6 Cr | Possession Jun 2027)
+Never invent unverified discounts, legal approvals, or false promises.
+</business>
+
+<conversation_rules>
+1. Greet the customer warmly and confirm if it's a good time to speak.
+2. Ask about their requirement: BHK configuration (2/3/4 BHK), budget range, preferred location in Gurgaon, and timeline to buy.
+3. If they are interested, offer to send project brochures/details on WhatsApp or schedule a site visit this weekend.
+4. If they ask for a human representative, want legal/loan guidance, or have complex queries, offer to connect them to senior consultant {DEFAULT_TRANSFER_NAME}.
+5. If they say not interested or wrong number, apologize politely and end the call gracefully.
+6. Keep speech natural, respectful, and engaging with Indian conversational markers ("Ji", "Sure sir/ma'am", "Bilkul").
+</conversation_rules>
+"""
+
+def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_prompt: str = "") -> str:
+    """Compose per-call instructions from dashboard config and customer context."""
+    agent_config = agent_config or {}
+    name = agent_config.get("agentName") or AGENT_NAME
+    company = agent_config.get("companyName") or COMPANY_NAME
+    custom_instructions = agent_config.get("systemPrompt") or ""
+    objective = agent_config.get("callObjective") or "Qualify buyer requirement and schedule site visit or WhatsApp follow-up."
+    
+    lead_name = agent_config.get("leadName") or ""
+    lead_context = f"\n<lead_info>\nCustomer Name: {lead_name}\nContext: {user_prompt}\n</lead_info>" if (lead_name or user_prompt) else ""
+
+    prompt = f"""{BASE_AGENT_CONTEXT}
+<call_type>{call_type.upper()}</call_type>
+<call_objective>{objective}</call_objective>
+{lead_context}
+"""
+    if custom_instructions:
+        prompt += f"\n<specific_instructions>\n{custom_instructions}\n</specific_instructions>\n"
+
+    return prompt
+
+def build_outbound_greeting(reason: str = "enquiry", agent_config: dict = None) -> str:
+    agent_config = agent_config or {}
+    name = agent_config.get("agentName") or AGENT_NAME
+    lead_name = agent_config.get("leadName", "").strip()
+    company = agent_config.get("companyName") or COMPANY_NAME
+    
+    greeting_prefix = f"Namaste {lead_name} ji!" if lead_name else "Namaste!"
+    return (
+        f"{greeting_prefix} Main {name} bol rahi hoon from {company}, Gurgaon. "
+        f"Aapne property ke regarding enquire kiya tha, kya aapse 2 minute baat ho sakti hai?"
+    )
