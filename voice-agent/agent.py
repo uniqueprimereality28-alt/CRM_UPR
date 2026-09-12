@@ -229,6 +229,7 @@ async def entrypoint(ctx: JobContext) -> None:
             if lead_name:
                 agent_config["lead_name"] = lead_name
                 agent_config["leadName"] = lead_name
+            inventory = meta.get("inventory") or agent_config.get("inventory") or config.DEFAULT_INVENTORY
         except Exception as e:
             logger.warning("Could not parse job metadata: %s", e)
 
@@ -303,7 +304,7 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("TTS initialized with Deepgram Aura: %s", config.DEEPGRAM_TTS_MODEL)
 
     # 4. System prompt
-    system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt)
+    system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt, inventory=inventory)
 
     # 5. Agent
     agent = Agent(
