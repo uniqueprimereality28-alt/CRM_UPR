@@ -64,7 +64,7 @@ export const BulkDialer = ({ onDispatched }) => {
   const [numbersText, setNumbersText] = useState("");
   const [prompt, setPrompt] = useState("");
   const [modelProvider, setModelProvider] = useState("grok");
-  const [voice, setVoice] = useState("sarvam-meera");
+  const [voice, setVoice] = useState("sarvam-bulbul");
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [results, setResults] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
