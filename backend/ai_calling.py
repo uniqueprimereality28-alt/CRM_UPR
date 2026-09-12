@@ -136,7 +136,7 @@ DEFAULT_KNOWLEDGE_BASE = {
     "best_now_answer": "We have different projects and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
     "location_question": "Is there any specific preferred location in mind?",
     "builders_options": "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
-    "final_summary_template": "Maine aapki saari requirement note kar li hai — aapko {config} property chahiye {location} mein under {budget} for {purpose}.",
+    "final_summary_template": "Maine aapki saari requirement note kar li hai — aapko {config} property chahiye {location} mein under {budget} for {purpose}. Main ye saari details hamari senior team ke sath share kar rahi hoon and they will get in touch with you shortly. Thank you so much for your time, have a nice day!",
     "ai_disclosure_answer": "Yes, I am an AI assistant working for Unique Prime reality . and please aap Nishchint rahiye main aapki sari requiremnts note kar rahi hu and i will share it with my team, so they can find you with the best property at the earliest.",
     "transfer_number": "7351735035",
     "transfer_target_name": "Vrinda Aggarwal",
@@ -1339,6 +1339,77 @@ async def complete_followup(fu_id: str, user: dict = Depends(get_current_user)):
 
 
 # ---------------- Transfers ----------------
+
+class TTSTestIn(BaseModel):
+    text: str
+    speaker: Optional[str] = "meera"
+    language: Optional[str] = "hi-IN"
+
+
+@ai_router.post("/tts/test")
+async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
+    cfg = await _get_voice_agent_config()
+    sarvam_key = cfg.get("sarvam_api_key") or os.getenv("SARVAM_API_KEY", "").strip()
+
+    if sarvam_key:
+        import httpx
+        url = "https://api.sarvam.ai/text-to-speech"
+        headers = {"api-subscription-key": sarvam_key, "Content-Type": "application/json"}
+        body = {
+            "inputs": [payload.text[:500]],
+            "target_language_code": payload.language or "hi-IN",
+            "speaker": payload.speaker or "meera",
+            "model": "bulbul:v1",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                res = await client.post(url, headers=headers, json=body)
+                if res.status_code == 200:
+                    data = res.json()
+                    audios = data.get("audios") or []
+                    if audios:
+                        return {"audio_base64": audios[0], "format": "wav", "provider": "sarvam"}
+        except Exception as e:
+            logger.warning(f"Sarvam TTS test failed: {e}")
+
+    return {"text": payload.text, "use_browser_speech": True, "provider": "browser"}
+
+
+@ai_router.post("/followups/auto-dial-due")
+async def auto_dial_due_followups(user: dict = Depends(require_vranda_only)):
+    now_str = now_iso()
+    due_list = await db.ai_followups.find({
+        "status": "pending",
+        "due_at": {"$lte": now_str}
+    }).limit(20).to_list(20)
+
+    dialed = []
+    for fu in due_list:
+        fu_id = str(fu["_id"])
+        try:
+            lead = await db.leads.find_one({"_id": ObjectId(fu["lead_id"])})
+            if not lead:
+                continue
+            agent = await _get_agent(None)
+            inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
+            res = await _dispatch_outbound_call(
+                lead=lead,
+                agent=agent,
+                inventory=inventory,
+                campaign_id=fu.get("campaign_id"),
+                user_prompt=f"Scheduled callback: {fu.get('prior_summary', '')}",
+            )
+            await db.ai_followups.update_one(
+                {"_id": fu["_id"]},
+                {"$set": {"status": "calling", "dialed_at": now_str, "call_uuid": res.get("call_uuid")}}
+            )
+            dialed.append({"lead_name": lead.get("name"), "phone": lead.get("phone"), "status": "dispatched"})
+        except Exception as e:
+            logger.error(f"Auto-dial failed for followup {fu_id}: {e}")
+
+    return {"ok": True, "dialed_count": len(dialed), "dialed": dialed}
+
+
 @ai_router.get("/transfers")
 async def list_transfers(status: Optional[str] = None, user: dict = Depends(get_current_user)):
     q = {"status": status} if status else {}
