@@ -1,164 +1,99 @@
-# voice-agent Vrandaa 
+# Unique Prime Reality - AI Outbound Calling Agent
 
-A **real** outbound AI voice-calling microservice for the Unique Prime Reality
-CRM. This replaces the "simulated" call feature (which just asked an LLM to
-invent a fake transcript) with an actual phone call: Plivo dials the lead,
-faster-whisper transcribes what they say, an LLM decides the reply, edge-tts
-speaks it back, live, in real time.
+Real-time AI telecalling service for Unique Prime Reality CRM (`CRM_UPR`).
+Powered by **LiveKit Cloud**, **Vobiz SIP Trunk**, **Deepgram STT**, **Grok (xAI) LLM**, and **Sarvam AI TTS**.
 
-It is a **separate service** from the CRM backend on purpose — real-time audio
-needs a persistent WebSocket + tight processing loop that doesn't belong
-bolted onto your request/response API.
+---
 
-**Access control:** the entire feature (every AI endpoint, the Settings
-panel, the "Call now (real)" button) is restricted to the CRM account
-`vranda.aggarwal` specifically — not just "admin" or "superadmin" generally.
-This is enforced on the backend (a single router-level dependency covers
-every AI route) and mirrored on the frontend (the whole AI card and nav
-entry are hidden for everyone else). No one else in the CRM can see or
-trigger this, even by URL.
+## Architecture Highlights
 
-## Where this goes in your repo
+1. **Telephony**: Outbound calls dialed via your **Vobiz SIP trunk** managed by LiveKit Cloud.
+2. **STT**: **Deepgram Nova-3** for ultra-low latency transcription of Indian speech (Hindi & English).
+3. **LLM Brain**: **Grok (xAI)** for natural, intelligent Gurgaon real estate conversations.
+4. **TTS Voice**: **Sarvam AI** with natural Indian accents (*Meera*, *Arvind*, etc.).
+5. **Zero VPS Needed**: The worker connects outbound over WebSockets to LiveKit Cloud. It requires **no static IP, no open ports, and no Linux VPS**.
 
-```
-your-crm-repo/
-├── backend/            <- existing CRM backend (unchanged except ai_calling.py + a 6-line addition to server.py)
-│   ├── server.py       <- REPLACE with the one provided (adds a router import, nothing else touched)
-│   ├── ai_calling.py   <- REPLACE with the one provided
-│   └── requirements.txt<- REPLACE with the one provided (adds httpx)
-├── frontend/
-│   └── src/
-│       ├── context/AuthContext.jsx <- REPLACE (adds an isVranda flag, nothing else touched)
-│       └── pages/
-│           ├── LeadDetail.jsx      <- REPLACE (adds the Vranda-only "Call now (real)" button)
-│           └── Settings.jsx        <- REPLACE (adds a Vranda-only panel to paste the voice-agent API link)
-└── voice-agent/         <- NEW folder, add everything from this package here, deployed as its own Render service
-    ├── main.py
-    ├── config.py
-    ├── audio.py
-    ├── stt.py
-    ├── tts.py
-    ├── llm.py
-    ├── call_session.py
-    ├── requirements.txt
-    ├── Dockerfile
-    ├── .dockerignore
-    └── .env.example
-```
+---
 
-## What each free service does
+## Step 1: Set Up Telephony (Vobiz + LiveKit Cloud)
 
-| Piece | Provider | Cost |
-|---|---|---|
-| Telephony (actual dialing) | Twilio | free trial: no card, ~$15-20 credit, but can only call **verified** numbers — great for demos, requires upgrading to a paid account before calling unverified leads |
-| Speech-to-text | faster-whisper, self-hosted | **free** |
-| Text-to-speech | edge-tts, self-hosted | **free** |
-| LLM brain | Groq free tier (or your existing key) | **free** within rate limits |
-| Orchestration | this FastAPI service | free (just server hosting, ~₹400–500/mo VPS) |
+1. **Sign up for LiveKit Cloud**:
+   - Go to [cloud.livekit.io](https://cloud.livekit.io) and create a free project.
+   - Note your `LIVEKIT_URL` (`wss://...`), `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` from **Settings → Keys**.
 
-## Setup steps
+2. **Configure Vobiz Outbound SIP Trunk in LiveKit**:
+   - In LiveKit Cloud console, navigate to **SIP → Outbound Trunks**.
+   - Click **Create Outbound Trunk**.
+   - Enter your **Vobiz SIP credentials**:
+     - **Address / Domain**: Your Vobiz SIP server address (e.g. `sip.vobiz.ai` or your carrier domain).
+     - **Transport**: UDP or TLS.
+     - **Username & Password**: Your Vobiz SIP trunk credentials.
+     - **Caller ID**: Your registered Vobiz caller phone number.
+   - Save the trunk. LiveKit will give you an **Outbound Trunk ID** starting with `ST_...` (e.g. `ST_abc123xyz`).
+   - Add this as `VOBIZ_SIP_TRUNK_ID` in your `.env`.
 
-### 1. Get a Twilio account
-- Sign up at [twilio.com](https://www.twilio.com/try-twilio) — **no credit card required**
-- Get a Twilio phone number (free trial numbers are provided/purchasable with trial credit)
-- In the console, add your test target (e.g. your boss's number) as a **Verified Caller ID** —
-  Twilio calls/texts it an OTP to confirm. Trial accounts can only call verified numbers.
-- Grab your **Account SID** and **Auth Token** from the console dashboard
-- For production calling in India to *unverified* leads, you'll need to upgrade to a paid
-  account and (for compliance) register with DLT — this only matters once you go live, not
-  for the demo.
+---
 
-### 2. Get a free Groq API key (the LLM brain)
-- [console.groq.com/keys](https://console.groq.com/keys) — free, no card required
-- Alternatively, reuse your existing `EMERGENT_LLM_KEY` by pointing
-  `LLM_API_BASE`/`LLM_API_KEY` at an OpenAI-compatible proxy if you have one;
-  Groq is simplest to start free.
+## Step 2: Get Your AI API Keys
 
-### 3. Deploy this folder as its own Render web service
-This folder deploys as a **Docker** web service on Render (not Railway —
-Docker is used deliberately here because `ffmpeg` needs to be installed at
-the OS level for TTS audio decoding, and Render's native Python buildpack
-doesn't give you apt-get access; Docker does).
+- **Deepgram** (STT): Get a key at [console.deepgram.com](https://console.deepgram.com)
+- **Grok / xAI** (LLM): Get a key at [console.x.ai](https://console.x.ai)
+- **Sarvam AI** (TTS): Get an API subscription key at [sarvam.ai](https://www.sarvam.ai)
 
-On Render:
-1. **New → Web Service** → connect this repo → set **Root Directory** to `voice-agent`
-2. **Runtime**: Docker (Render will detect the `Dockerfile` automatically)
-3. **Instance type**: at least 1GB RAM recommended (faster-whisper's `small`
-   model needs headroom); start on Render's Starter tier and scale if calls
-   feel slow
-4. Add the env vars below in the Render dashboard's **Environment** tab
-5. Deploy once to get your `https://<name>.onrender.com` URL, then **add
-   `PUBLIC_BASE_URL=https://<that-url>` and redeploy** — Plivo needs to know
-   this service's own public address to open the audio WebSocket back to it
+---
 
-Env vars to set on this Render service (see `.env.example` for the full list):
-```
-TWILIO_ACCOUNT_SID=...
-TWILIO_AUTH_TOKEN=...
-TWILIO_FROM_NUMBER=...
-VOICE_AGENT_SHARED_SECRET=<make up a long random string>
-CRM_BACKEND_URL=https://your-existing-crm-backend.onrender.com
-LLM_API_KEY=<your Groq key>
-SARVAM_API_KEY=<your Sarvam key, for better Hinglish voice quality>
-PUBLIC_BASE_URL=  <- fill in AFTER first deploy, then redeploy
+## Step 3: Deployment (Zero VPS Required!)
+
+### Option A: Deploy on Railway (Recommended — Already hosts your CRM!)
+
+Since your CRM (`backend/` and `frontend/`) is already running on Railway:
+
+1. Open your existing **Railway Project**.
+2. Click **+ New** → **GitHub Repo** → select `CRM_UPR`.
+3. In the new service settings:
+   - Go to **Settings** → **Root Directory** → set to `/voice-agent`.
+   - Railway will automatically detect the `Dockerfile` and build it.
+4. Go to the **Variables** tab and set:
+   ```env
+   LIVEKIT_URL=wss://your-project.livekit.cloud
+   LIVEKIT_API_KEY=your-livekit-api-key
+   LIVEKIT_API_SECRET=your-livekit-api-secret
+   LIVEKIT_AGENT_NAME=upr-calling-agent
+   VOBIZ_SIP_TRUNK_ID=ST_your_trunk_id
+   DEEPGRAM_API_KEY=your-deepgram-key
+   GROK_API_KEY=your-grok-key
+   SARVAM_API_KEY=your-sarvam-key
+   CRM_BACKEND_URL=https://your-crm-backend.up.railway.app
+   VOICE_AGENT_SHARED_SECRET=your-secure-secret
+   ```
+5. Deploy! The worker is now running 24/7 in the cloud without needing a VPS.
+
+---
+
+### Option B: Run Locally on your Windows PC (Free, Zero Setup!)
+
+You can also run the calling worker right on your computer during office hours:
+
+```powershell
+cd voice-agent
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env with your keys
+python agent.py start
 ```
 
-> Render free/starter instances can spin down when idle, which adds a cold-start
-> delay before the first call connects. If you're doing this for real, a paid
-> "always-on" instance avoids that delay — worth it once you're past testing.
+Whenever you click **Initiate Call** in the CRM, LiveKit Cloud routes the call through your running agent instantly.
 
-### 4. Connect it to your CRM — no backend code edits needed
-This is the part you asked for: log into the CRM as **vranda.aggarwal**, go
-to **Settings → AI Voice Calling Agent** (a new panel, visible only on her
-account), and paste in:
-- **Voice-agent URL**: `https://<your-voice-agent-name>.onrender.com`
-- **Shared secret**: the same random string you set as `VOICE_AGENT_SHARED_SECRET`
-  on the voice-agent service above
+---
 
-Click **Save connection**. That's it — stored in the database, no redeploy,
-no `.env` editing on the CRM backend side. (An env var fallback still exists
-on the backend too, `VOICE_AGENT_URL`/`VOICE_AGENT_SHARED_SECRET`, in case
-you'd rather set it at deploy time instead — whichever is set in the
-database always takes priority over the env var.)
+## CRM Integration & Scoring Sync
 
-### 5. Replace the three files
-- `backend/ai_calling.py` → replace with the version provided (adds
-  `/api/ai/calls/real/trigger` and `/api/ai/calls/ingest`, everything else
-  — scoring, campaigns, WhatsApp, transfers — is untouched)
-- `backend/requirements.txt` → replace (adds `httpx`)
-- `frontend/src/pages/LeadDetail.jsx` → replace (adds the green
-  **"Call now (real)"** button next to your existing simulated one)
-
-### 6. Test it
-Open a lead in the CRM → click **"Call now (real)"**. Your phone (or the
-lead's) should actually ring within a few seconds. Talk to it. When the call
-ends, the CRM lead updates with a real transcript, real score, and real
-temperature — same as the simulated flow, just backed by an actual
-conversation this time.
-
-## Honest limitations of this first version
-
-- **Half-duplex** — the agent doesn't listen while it's talking (no true
-  barge-in/interruption handling yet). Customers need to wait for it to
-  finish a sentence before replying. This is normal for a v1 and can be
-  upgraded later.
-- **Latency** — expect ~1.5–2.5s between the customer finishing a sentence
-  and hearing the reply, since STT runs on CPU. Faster with a GPU, or by
-  switching `WHISPER_MODEL_SIZE` down to `base`/`tiny` (less accurate but
-  quicker).
-- **No call recording upload wired up yet** — Plivo can record calls, but
-  saving the recording file/URL back onto the lead isn't implemented in this
-  version (there's a `recording_url` field ready for it in `/calls/ingest`).
-- **I could not place a live test call from here** — this code is built
-  against Plivo's and edge-tts's documented, current APIs and every module
-  imports and runs correctly, but you'll be the first to actually test it
-  against a real phone call. Watch the service logs (`/health` endpoint,
-  plus your platform's log viewer) the first few times.
-
-## Changing the agent's voice
-
-`TTS_VOICE` in `.env` — try `hi-IN-MadhurNeural` (male) or
-`en-IN-NeerjaNeural` (English-first Indian accent). Full list:
-```
-edge-tts --list-voices | grep -i "hi-IN\|en-IN"
-```
+When the call concludes:
+1. The agent uses Grok to extract customer requirement signals:
+   - Budget, BHK, location preference, timeline
+   - High-intent signals: `wants_site_visit`, `whatsapp_details`, `urgent_30_days`, `investor_intent`
+   - Negative signals: `not_interested`, `wrong_number`
+2. The agent POSTs the call data back to `CRM_BACKEND_URL/api/ai/calls/ingest`.
+3. The CRM's scoring engine calculates the intent score, marks the lead as `Hot`, `Warm`, or `Cold`, and creates follow-ups/transfers for your sales team.
