@@ -98,157 +98,162 @@ export const OutboundDialer = ({ onCallDispatched }) => {
             Dispatch Simran to dial the lead via Vobiz SIP with real-time Sarvam AI voice & Grok reasoning.
           </p>
         </div>
-        <Badge variant="outline" className="border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
-          <span className="mr-1.5 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> Live Telephony Ready
-        </Badge>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowLeadSearch(!showLeadSearch)}
+          className="gap-1.5 text-xs"
+        >
+          <Search className="h-3.5 w-3.5" />
+          {showLeadSearch ? "Hide Lead Picker" : "Select from CRM Leads"}
+        </Button>
       </div>
 
-      <form onSubmit={handleDispatch} className="mt-5 space-y-4">
-        {/* Lead Picker or Quick Fill */}
-        <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-700">Select Existing CRM Lead (Optional)</span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs text-brand hover:text-brand-dark"
-              onClick={() => setShowLeadSearch(!showLeadSearch)}
-            >
-              <Search className="mr-1 h-3 w-3" /> {showLeadSearch ? "Close search" : "Browse leads"}
-            </Button>
+      {showLeadSearch && (
+        <div className="mt-4 rounded-xl border border-brand/20 bg-brand-light/30 p-4">
+          <div className="text-xs font-semibold text-brand uppercase tracking-wider mb-2">
+            Quick Pick from Leads
           </div>
-
-          {showLeadSearch && (
-            <div className="mt-3 space-y-2">
-              <Input
-                placeholder="Search CRM leads by name or phone..."
-                value={leadSearch}
-                onChange={(e) => setLeadSearch(e.target.value)}
-                className="h-8 text-xs bg-white"
-              />
-              <div className="max-h-36 overflow-y-auto space-y-1 divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white p-1">
-                {filteredLeads.length === 0 ? (
-                  <div className="p-2 text-center text-xs text-slate-400">No matching leads found.</div>
-                ) : (
-                  filteredLeads.map((l) => (
-                    <button
-                      key={l.id || l._id}
-                      type="button"
-                      onClick={() => handleSelectLead(l)}
-                      className="flex w-full items-center justify-between p-2 text-left text-xs hover:bg-brand-light/40 rounded transition"
-                    >
-                      <span className="font-medium text-slate-800">{l.name}</span>
-                      <span className="text-slate-500">{l.phone}</span>
-                      {l.tag && <Badge variant="outline" className="text-[10px] uppercase">{l.tag}</Badge>}
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
+          <Input
+            placeholder="Search lead by name or phone..."
+            value={leadSearch}
+            onChange={(e) => setLeadSearch(e.target.value)}
+            className="mb-3 bg-white text-xs"
+          />
+          <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+            {filteredLeads.length === 0 ? (
+              <div className="text-xs text-slate-400 py-2">No matching leads found.</div>
+            ) : (
+              filteredLeads.slice(0, 10).map((l) => (
+                <button
+                  key={l.id || l._id}
+                  type="button"
+                  onClick={() => handleSelectLead(l)}
+                  className="w-full text-left flex items-center justify-between rounded-lg p-2 text-xs hover:bg-white transition-colors border border-transparent hover:border-slate-200"
+                >
+                  <div>
+                    <span className="font-semibold text-slate-800">{l.name}</span>
+                    <span className="ml-2 font-mono text-slate-500">{l.phone}</span>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] uppercase">
+                    {l.property_interest || l.status || "Lead"}
+                  </Badge>
+                </button>
+              ))
+            )}
+          </div>
         </div>
+      )}
 
+      <form onSubmit={handleDispatch} className="mt-6 space-y-5">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <Label className="text-xs font-medium text-slate-700">Phone number (with country code)</Label>
+            <Label className="text-xs font-medium text-slate-700">Customer Phone Number *</Label>
             <Input
-              type="tel"
-              placeholder="+91 98765 43210"
-              value={phone}
-              onChange={(e) => { setPhone(e.target.value); setStatus("idle"); setStatusMessage(""); }}
               required
-              className="mt-1 font-mono text-sm"
+              type="tel"
+              placeholder="+91 9876543210"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              className="mt-1.5 font-mono text-sm"
             />
-            <span className="mt-1 block text-[11px] text-slate-400">e.g. +919876543210 or 10-digit mobile</span>
+            <span className="mt-1 block text-[11px] text-slate-400">
+              Format: +919876543210 or 10-digit mobile number
+            </span>
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-slate-700">Customer name</Label>
+            <Label className="text-xs font-medium text-slate-700">Customer Name</Label>
             <Input
-              placeholder="e.g. Rahul Sharma"
+              type="text"
+              placeholder="e.g. Rajesh Kumar"
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
-              className="mt-1 text-sm"
+              className="mt-1.5 text-sm"
             />
-            <span className="mt-1 block text-[11px] text-slate-400">Used by Simran in the opening greeting</span>
           </div>
         </div>
 
         <div>
-          <Label className="text-xs font-medium text-slate-700 flex items-center gap-1.5">
-            <MessageSquare className="h-3.5 w-3.5 text-slate-400" /> Call objective / Special context
+          <Label className="text-xs font-medium text-slate-700">
+            Call Context / Specific Objective
           </Label>
           <Textarea
-            placeholder="e.g. Following up on Sector 79 3 BHK enquiry. Emphasize ready-to-move discount and metro connectivity."
-            rows={2}
+            rows={3}
+            placeholder="e.g. Enquired about 3 BHK in Sector 79 under 1.8 Cr. Pitch Prime Elmwood Residences pre-launch discount and invite for Saturday site visit."
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            className="mt-1 text-xs"
+            className="mt-1.5 text-sm"
           />
+          <span className="mt-1 block text-[11px] text-slate-400">
+            Injected dynamically into Simran's prompt for this specific call.
+          </span>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <Label className="text-xs font-medium text-slate-700">LLM Reasoning Brain</Label>
+            <Label className="text-xs font-medium text-slate-700">LLM Reasoning Engine</Label>
             <Select value={modelProvider} onValueChange={setModelProvider}>
-              <SelectTrigger className="mt-1 text-xs">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="grok">Grok (xAI) · Recommended for Hinglish</SelectItem>
-                <SelectItem value="groq">Groq · Llama 3.3 70B</SelectItem>
-                <SelectItem value="openai">OpenAI · GPT-4o mini</SelectItem>
+                <SelectItem value="grok">Grok (xAI) · Recommended for Real Estate</SelectItem>
+                <SelectItem value="openai">OpenAI (GPT-4o) · High Precision</SelectItem>
+                <SelectItem value="groq">Groq (Llama 3.3) · Fast Response</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div>
-            <Label className="text-xs font-medium text-slate-700">TTS Voice (Sarvam AI / Deepgram)</Label>
+            <Label className="text-xs font-medium text-slate-700">Voice Synthesis (TTS)</Label>
             <Select value={voice} onValueChange={setVoice}>
-              <SelectTrigger className="mt-1 text-xs">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="sarvam-meera">Sarvam AI · Meera (Indian Female - Warm)</SelectItem>
-                <SelectItem value="sarvam-pavithra">Sarvam AI · Pavithra (Indian Female - Clear)</SelectItem>
-                <SelectItem value="sarvam-arvind">Sarvam AI · Arvind (Indian Male - Confident)</SelectItem>
-                <SelectItem value="aura-2-thalia-en">Deepgram Aura · Thalia (English)</SelectItem>
+                <SelectItem value="sarvam-meera">Sarvam AI · Meera (Natural Indian Accent)</SelectItem>
+                <SelectItem value="sarvam-bulbul">Sarvam AI · Bulbul (Warm & Engaging)</SelectItem>
+                <SelectItem value="sarvam-amit">Sarvam AI · Amit (Male Professional)</SelectItem>
+                <SelectItem value="deepgram-aura">Deepgram · Aura (English Only)</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
 
-        <Button
-          type="submit"
-          disabled={status === "dispatching" || !phone.trim()}
-          className="w-full gap-2 bg-brand hover:bg-brand-dark py-2.5 font-semibold text-white shadow-sm"
-        >
-          {status === "dispatching" ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" /> Dispatching Call via Vobiz...
-            </>
-          ) : (
-            <>
-              Initiate Outbound Call <ArrowUpRight className="h-4 w-4" />
-            </>
-          )}
-        </Button>
-
-        {statusMessage && (
-          <div
-            className={`flex items-start gap-2.5 rounded-xl border p-3.5 text-xs ${
-              status === "success"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                : "border-rose-200 bg-rose-50 text-rose-800"
-            }`}
+        <div className="pt-2">
+          <Button
+            type="submit"
+            disabled={status === "dispatching"}
+            className="w-full gap-2 bg-brand py-2.5 text-sm font-semibold hover:bg-brand-dark"
           >
-            {status === "success" ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+            {status === "dispatching" ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Connecting to LiveKit Cloud & Dialing via Vobiz...
+              </>
             ) : (
-              <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
+              <>
+                <Phone className="h-4 w-4" />
+                Initiate AI Phone Call Now
+              </>
             )}
-            <span className="leading-relaxed">{statusMessage}</span>
+          </Button>
+        </div>
+
+        {status === "success" && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+            <div>
+              <div className="font-semibold">Call Dispatched Successfully</div>
+              <div className="mt-0.5 text-xs text-emerald-700">{statusMessage}</div>
+            </div>
+          </div>
+        )}
+
+        {status === "error" && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <div>
+              <div className="font-semibold">Dispatch Failed</div>
+              <div className="mt-0.5 text-xs text-rose-700">{statusMessage}</div>
+            </div>
           </div>
         )}
       </form>
