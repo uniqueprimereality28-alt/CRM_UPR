@@ -15,10 +15,12 @@ DEFAULT_TRANSFER_NAME = os.getenv("DEFAULT_TRANSFER_NAME", "Vrinda Aggarwal").st
 MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
 
 # ─── AI Providers ───
+# STT: Deepgram
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
-DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
+DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()  # "hi", "en-IN", "en", "multi"
 
+# LLM: Grok (xAI) or Groq / OpenAI fallback
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -26,9 +28,10 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
+# TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
-SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "meera").strip()
-SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "meera").strip()  # meera, bulbul, amit
+SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()  # hi-IN, en-IN
 
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
 
@@ -69,6 +72,7 @@ DEFAULT_INVENTORY = [
 ]
 
 def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_prompt: str = "") -> str:
+    """Compose per-call instructions from dashboard config and customer context."""
     agent_config = agent_config or {}
     name = agent_config.get("agent_name") or agent_config.get("agentName") or AGENT_NAME
     company = agent_config.get("company_name") or agent_config.get("companyName") or COMPANY_NAME
@@ -148,6 +152,7 @@ Market: {market}
 
 
 def build_outbound_greeting(reason: str = "enquiry", agent_config: dict = None) -> str:
+    """Generate the first words spoken when the customer answers the phone."""
     agent_config = agent_config or {}
     name = agent_config.get("agent_name") or agent_config.get("agentName") or AGENT_NAME
     company = agent_config.get("company_name") or agent_config.get("companyName") or COMPANY_NAME
