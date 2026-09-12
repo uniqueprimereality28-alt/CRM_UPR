@@ -2,8 +2,7 @@
 Attachable AI Calling layer for Unique Prime Reality CRM.
 
 REAL (v2) outbound AI telecalling engine:
-- Real outbound phone calls placed via a separate voice-agent microservice
-  (Plivo telephony + faster-whisper STT + LLM + edge-tts TTS)
+- Real outbound phone calls placed via LiveKit Cloud + Vobiz SIP Trunk
 - Structured requirement extraction from the ACTUAL call transcript
 - Points-based lead scoring engine (admin editable) -> Hot/Warm/Cold
 - Call summaries, follow-up scheduling, WhatsApp logs, human transfer to Vranda
@@ -21,6 +20,7 @@ import json
 import random
 import uuid
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any
 
@@ -58,61 +58,76 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 LLM_MODEL = ("openai", "gpt-5.4-mini")
 
 # ---------------- Real voice-agent integration ----------------
-# The voice-agent is a SEPARATE microservice (see /voice-agent in the repo root)
-# that does actual telephony + STT + TTS. This backend never talks to Plivo
-# directly; it only (a) asks the voice-agent to place a call, and
-# (b) receives the finished call's transcript back from it.
-#
-# The URL + shared secret can be set two ways:
-#  1. Env vars (VOICE_AGENT_URL / VOICE_AGENT_SHARED_SECRET) — set once at deploy time.
-#  2. From inside the CRM itself: Vranda can paste them in via
-#     GET/POST /api/ai/calls/real/settings — no redeploy needed, no code edits.
-# The DB value (if set) always wins over the env var.
-VOICE_AGENT_URL_ENV = os.environ.get("VOICE_AGENT_URL", "").rstrip("/")
-VOICE_AGENT_SHARED_SECRET_ENV = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
-VOICE_AGENT_SETTINGS_DOC_ID = "voice_agent_config"
-
-LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "").strip()
-LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "").strip()
-LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "").strip()
-LIVEKIT_AGENT_NAME_ENV = os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
-VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "").strip()
-GROK_API_KEY_ENV = os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY", "").strip()
-SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "").strip()
-DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "").strip()
-
-TRANSFER_TARGET_NAME = "Vranda Aggarwal"
+VOICE_AGENT_URL = os.environ.get("VOICE_AGENT_URL", "")
+VOICE_AGENT_SHARED_SECRET = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+VOBIZ_SIP_TRUNK_ID = os.environ.get("VOBIZ_SIP_TRUNK_ID", "")
 TRANSFER_TARGET_NUMBER = "7351735035"
+TRANSFER_TARGET_NAME = "Vranda Aggarwal"
 
-# ---------------- Scoring engine defaults ----------------
+
+async def _get_voice_agent_config() -> dict:
+    doc = await db.ai_settings.find_one({"_id": "telephony_config"})
+    cfg = doc.get("config", {}) if doc else {}
+    return {
+        "voice_agent_url": (cfg.get("voice_agent_url") or VOICE_AGENT_URL).rstrip("/"),
+        "voice_agent_shared_secret": cfg.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET,
+        "livekit_url": cfg.get("livekit_url") or LIVEKIT_URL,
+        "livekit_api_key": cfg.get("livekit_api_key") or LIVEKIT_API_KEY,
+        "livekit_api_secret": cfg.get("livekit_api_secret") or LIVEKIT_API_SECRET,
+        "livekit_agent_name": cfg.get("livekit_agent_name") or "upr-calling-agent",
+        "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID,
+        "grok_api_key": cfg.get("grok_api_key") or os.environ.get("GROK_API_KEY", ""),
+        "sarvam_api_key": cfg.get("sarvam_api_key") or os.environ.get("SARVAM_API_KEY", ""),
+        "deepgram_api_key": cfg.get("deepgram_api_key") or os.environ.get("DEEPGRAM_API_KEY", ""),
+        "sarvam_speaker": cfg.get("sarvam_speaker") or "meera",
+        "sarvam_language": cfg.get("sarvam_language") or "hi-IN",
+    }
+
+
+async def _check_voice_agent_secret(provided: Optional[str]):
+    cfg = await _get_voice_agent_config()
+    expected = cfg.get("voice_agent_shared_secret")
+    if not expected:
+        raise HTTPException(500, "Voice agent shared secret is not configured on the CRM backend")
+    if not provided or provided != expected:
+        raise HTTPException(401, "Invalid voice-agent shared secret header")
+
+
+# ---------------- Default scoring rules ----------------
 DEFAULT_SCORING_RULES = {
-    "whatsapp_details": {"label": "Asked for project details on WhatsApp", "points": 20},
-    "budget_shared": {"label": "Shared budget clearly", "points": 15},
-    "bhk_shared": {"label": "Shared BHK requirement", "points": 10},
-    "timeline_shared": {"label": "Shared timeline to buy", "points": 15},
-    "wants_site_visit": {"label": "Wants a site visit", "points": 35},
-    "wants_callback": {"label": "Wants callback from sales person", "points": 25},
-    "urgent_30_days": {"label": "Urgent buying intent within 30 days", "points": 30},
-    "investor_intent": {"label": "Investor intent / multiple units", "points": 30},
-    "casual_interest": {"label": "Asked only casually / low intent", "points": 5},
-    "not_interested": {"label": "Says not interested", "points": -30},
-    "wrong_number": {"label": "Wrong number", "points": -50},
-    "call_later": {"label": "Asked to call later", "points": 5},
-    "requested_human": {"label": "Requested human representative", "points": 25},
+    "budget_shared": {"label": "Buyer shared specific budget", "points": 20},
+    "bhk_shared": {"label": "Buyer shared BHK / configuration", "points": 15},
+    "timeline_shared": {"label": "Buyer shared buying timeline", "points": 15},
+    "wants_site_visit": {"label": "Buyer requested site visit", "points": 35},
+    "wants_callback": {"label": "Buyer requested follow-up callback", "points": 10},
+    "urgent_30_days": {"label": "Looking to buy within 30 days", "points": 25},
+    "investor_intent": {"label": "Investor looking for multiple units / rental yield", "points": 20},
+    "whatsapp_details": {"label": "Agreed to receive brochure on WhatsApp", "points": 10},
+    "casual_interest": {"label": "Casual interest / exploring market", "points": 5},
+    "not_interested": {"label": "Explicitly not interested", "points": -50},
+    "wrong_number": {"label": "Wrong number / invalid contact", "points": -100},
+    "call_later": {"label": "Busy / asked to call later", "points": 0},
+    "requested_human": {"label": "Requested human senior consultant (Vranda)", "points": 20},
+}
+
+TEMPERATURE_BANDS = {
+    "hot": 60,
+    "warm": 30,
+    "cold": 0,
+    "lost": -1,
 }
 
 DEFAULT_AGENT = {
     "name": "Simran",
     "voice_gender": "female",
-    "voice_accent": "Indian female, mid-30s, warm & polite",
+    "voice_accent": "Indian English & Hindi (Hinglish)",
     "language_style": "formal_hinglish",
-    "personality": "Sweet, polite, educated, patient. Human-like pacing. Light Haryanvi/Hindi flavour, not exaggerated.",
-    "intro_line": "Namaste! Main Simran bol rahi hoon, Unique Prime Reality se. Aapse property ke baare mein 2 minute baat kar sakti hoon?",
-    "guardrails": (
-        "Never make false promises. Never speak against competitors, regions, regulators or policies. "
-        "Disclose you are an AI assistant from Unique Prime Reality if asked. If unsure, say: "
-        "'Sir, maine aapki query receive kar li hai, main aapko updated details share karwa deti hoon.'"
-    ),
+    "personality": "Warm, polite, professional, never pushy. Fluent in conversational Hinglish.",
+    "intro_line": "Namaste! Main Simran bol rahi hoon, Unique Prime Reality Gurgaon se. Kya aapse property enquiry ke regarding 2 minute baat ho sakti hai?",
+    "guardrails": "Never quote unverified discounts, legal advice, or guaranteed returns. If pushed for an on-the-spot price commitment, offer human transfer to Vranda Aggarwal.",
     "active": True,
 }
 
@@ -124,6 +139,32 @@ DEFAULT_INVENTORY = [
     {"project": "Prime Green Vista", "location": "Sohna Road, Gurgaon", "config": "2/3 BHK",
      "price_range": "₹95 L – ₹1.6 Cr", "possession": "Jun 2027", "highlights": "Investor favourite, high rental yield"},
 ]
+
+DEFAULT_KNOWLEDGE_BASE = {
+    "agent_name": "Simran",
+    "company_name": "Unique Prime Reality",
+    "company_description": "A premier real-estate consultancy selling verified luxury and investment residential projects in Gurgaon.",
+    "company_website": "https://uniqueprimereality.com",
+    "company_phone": "+91 7351735035",
+    "office_hours": "Monday–Saturday, 10:00 AM–7:00 PM IST",
+    "market": "Gurgaon, Haryana, India (Golf Course Ext Road, Sector 79, Sohna Road, Dwarka Expressway)",
+    "address": "Gurgaon, Haryana, India",
+    "services": "Residential apartment sales, luxury builder floors, investment consultation, site visit coordination, and home loan guidance.",
+    "tone": "Warm, polite, respectful, and never pushy. Speak fluent conversational Hinglish or English.",
+    "system_prompt": "Keep each response to 1 or 2 short sentences. Always ask only one question at a time. Never invent prices or legal advice.",
+    "call_objective": "Qualify property requirements (BHK, budget, location, timeline) and book site visits or WhatsApp brochure follow-ups.",
+    "qualification_goals": "Confirm customer name, preferred BHK, budget range in Lakhs/Crores, preferred Gurgaon sector, and buying timeline.",
+    "success_criteria": "Leave the customer with a confirmed site visit, WhatsApp project details, or scheduled senior consultant callback.",
+    "offer": "Exclusive pre-launch pricing on Sector 79 Prime Elmwood Residences, and special payment plans for Skyline Towers.",
+    "objection_handling": "Acknowledge concerns respectfully, provide confirmed facts on location/metro/pricing, and offer a WhatsApp brochure or consultant callback if unsure.",
+    "escalation_rules": "Offer immediate human transfer to Vranda Aggarwal (+91 7351735035) if the customer demands a human, asks for legal/bank details, or requests an on-the-spot price commitment.",
+    "compliance_notes": "Disclose that you are an AI assistant from Unique Prime Reality if asked directly. Never promise guaranteed investment returns.",
+    "custom_greeting": "Namaste! Main Simran bol rahi hoon, Unique Prime Reality Gurgaon se. Kya aapse property enquiry ke regarding 2 minute baat ho sakti hai?",
+    "opening_style": "permission",
+    "transfer_number": "7351735035",
+    "transfer_target_name": "Vranda Aggarwal",
+    "transfer_enabled": True,
+}
 
 CUSTOMER_MOODS = [
     ("hot_buyer", 18), ("warm_curious", 26), ("investor", 12),
@@ -204,6 +245,98 @@ class WhatsAppIn(BaseModel):
     message: Optional[str] = None
 
 
+class KnowledgeBaseIn(BaseModel):
+    agent_name: Optional[str] = None
+    company_name: Optional[str] = None
+    company_description: Optional[str] = None
+    company_website: Optional[str] = None
+    company_phone: Optional[str] = None
+    office_hours: Optional[str] = None
+    market: Optional[str] = None
+    address: Optional[str] = None
+    services: Optional[str] = None
+    tone: Optional[str] = None
+    system_prompt: Optional[str] = None
+    call_objective: Optional[str] = None
+    qualification_goals: Optional[str] = None
+    success_criteria: Optional[str] = None
+    offer: Optional[str] = None
+    objection_handling: Optional[str] = None
+    escalation_rules: Optional[str] = None
+    compliance_notes: Optional[str] = None
+    custom_greeting: Optional[str] = None
+    opening_style: Optional[str] = None
+    transfer_number: Optional[str] = None
+    transfer_target_name: Optional[str] = None
+    transfer_enabled: Optional[bool] = None
+
+
+class AppointmentIn(BaseModel):
+    lead_id: Optional[str] = None
+    customer_name: str
+    phone: str
+    date: str
+    time: str
+    purpose: str = "Property consultation"
+    project: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class BulkDispatchIn(BaseModel):
+    numbers: List[str]
+    prompt: Optional[str] = ""
+    model_provider: Optional[str] = "grok"
+    voice: Optional[str] = "sarvam-meera"
+    campaign_name: Optional[str] = "Direct Bulk Dispatch"
+
+
+class RealCallTriggerIn(BaseModel):
+    lead_id: Optional[str] = None
+    phone: Optional[str] = None
+    lead_name: Optional[str] = None
+    campaign_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    prompt: Optional[str] = None
+    model_provider: Optional[str] = "grok"
+    voice: Optional[str] = "sarvam-meera"
+
+
+class CallIngestIn(BaseModel):
+    call_uuid: str
+    lead_id: str
+    campaign_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    duration_seconds: Optional[int] = 0
+    recording_url: Optional[str] = None
+    transcript: List[dict] = []
+    summary: str = ""
+    disposition: str = "connected"
+    requirements: dict = {}
+    signals: List[str] = []
+    urgency_score: int = 5
+    wants_site_visit: bool = False
+    wants_brochure: bool = False
+    whatsapp_opt_in: bool = False
+    human_transfer_required: bool = False
+    next_followup_days: Optional[int] = 2
+    remarks: Optional[str] = None
+
+
+class TelephonySettingsIn(BaseModel):
+    voice_agent_url: Optional[str] = None
+    voice_agent_shared_secret: Optional[str] = None
+    livekit_url: Optional[str] = None
+    livekit_api_key: Optional[str] = None
+    livekit_api_secret: Optional[str] = None
+    livekit_agent_name: Optional[str] = None
+    vobiz_sip_trunk_id: Optional[str] = None
+    grok_api_key: Optional[str] = None
+    sarvam_api_key: Optional[str] = None
+    deepgram_api_key: Optional[str] = None
+    sarvam_speaker: Optional[str] = None
+    sarvam_language: Optional[str] = None
+
+
 # ---------------- Serialization helper ----------------
 def _clean(doc: dict) -> dict:
     if not doc:
@@ -236,7 +369,14 @@ async def _get_scoring_rules() -> dict:
     return DEFAULT_SCORING_RULES
 
 
-# ---------------- LLM simulation ----------------
+async def _get_knowledge_base() -> dict:
+    doc = await db.ai_settings.find_one({"_id": "knowledge_base"})
+    if doc and doc.get("kb"):
+        return {**DEFAULT_KNOWLEDGE_BASE, **doc["kb"]}
+    return dict(DEFAULT_KNOWLEDGE_BASE)
+
+
+# ---------------- LLM simulation (Offline demo only) ----------------
 async def _llm_simulate(agent: dict, lead: dict, inventory: List[dict], mood: str,
                         allowed_signals: List[str], prior_context: Optional[str]) -> Optional[dict]:
     if not EMERGENT_LLM_KEY:
@@ -252,72 +392,80 @@ async def _llm_simulate(agent: dict, lead: dict, inventory: List[dict], mood: st
         for p in inventory
     ) or "- (no inventory uploaded)"
 
-    system = (
-        f"You are {agent.get('name','Simran')}, a female AI tele-calling assistant for 'Unique Prime Reality', "
-        f"a real estate consultancy selling residential projects in Gurgaon. "
-        f"Persona: {agent.get('personality','polite, educated, mid-30s')}. "
-        f"Voice: {agent.get('voice_accent','Indian female, warm')}. "
-        f"Speak in FORMAL HINGLISH (English-heavy, polite) with a very light Haryanvi/Hindi flavour — never exaggerated. "
-        f"GUARDRAILS: {agent.get('guardrails','')} "
-        f"Goals of the call: greet politely, confirm availability, gauge buying intent for Gurgaon projects, "
-        f"capture requirements (property type, BHK, budget, location, parking, possession timeline, callback preference), "
-        f"detect seriousness & urgency, offer to share details on WhatsApp, ask preferred callback time, and escalate to a human "
-        f"({TRANSFER_TARGET_NAME}) if the customer asks for a sales representative or is a serious buyer.\n\n"
-        f"AVAILABLE INVENTORY:\n{inv_txt}\n\n"
-        "You must SIMULATE a realistic short phone conversation between the AGENT and the CUSTOMER, then extract structured data. "
-        "Output STRICT JSON only, no markdown, matching this schema:\n"
-        "{\n"
-        '  "transcript": [{"speaker":"agent"|"customer","text":"..."}],\n'
-        '  "summary": "2-3 sentence English summary of the call",\n'
-        '  "disposition": "connected|interested|callback|not_interested|wrong_number|no_answer|site_visit|transferred",\n'
-        '  "requirements": {"property_type":str|null,"bhk":str|null,"budget":number|null,"location_preference":str|null,"parking":str|null,"possession_timeline":str|null,"callback_preference":str|null},\n'
-        f'  "signals": [subset of {allowed_signals}],\n'
-        '  "urgency_score": 1-10,\n'
-        '  "wants_site_visit": bool, "wants_brochure": bool, "whatsapp_opt_in": bool,\n'
-        '  "human_transfer_required": bool, "next_followup_days": int|null,\n'
-        '  "remarks": "short internal note"\n'
-        "}\n"
-        "Only include signal keys that genuinely occurred. budget must be a number in rupees (e.g. 15000000 for 1.5 Cr) or null."
-    )
+    sys_prompt = f"""You are simulating a phone call between an AI voice agent and a real estate customer in Gurgaon, India.
 
-    prior = f"\nThis is a FOLLOW-UP call. Previous context: {prior_context}" if prior_context else ""
-    user = (
-        f"Lead: name={lead.get('name')}, phone={lead.get('phone')}, city={lead.get('city') or 'Gurgaon'}, "
-        f"existing_interest={lead.get('property_interest') or 'unknown'}, existing_budget={lead.get('budget') or 'unknown'}, "
-        f"prior_remarks={lead.get('remark') or 'none'}.\n"
-        f"Simulate the customer behaving as: '{mood}'. Keep the transcript realistic (6-14 turns; very short if wrong_number/no_answer)."
-        f"{prior}\nReturn ONLY the JSON object."
-    )
+AGENT PERSONA:
+- Name: {agent.get('name', 'Simran')}
+- Voice/Language: {agent.get('language_style', 'formal_hinglish')}
+- Tone: {agent.get('personality', '')}
+- Opening line: {agent.get('intro_line', '')}
+- Guardrails: {agent.get('guardrails', '')}
+
+COMPANY INVENTORY (Unique Prime Reality, Gurgaon):
+{inv_txt}
+
+LEAD CONTEXT:
+- Name: {lead.get('name', 'Customer')}
+- Phone: {lead.get('phone', '')}
+- City: {lead.get('city', 'Gurgaon')}
+- Prior enquiry: {lead.get('property_interest', 'residential')}
+- Budget hint: {lead.get('budget', 'unknown')}
+- Notes: {lead.get('remark', '')}
+{f"PRIOR CONVERSATION CONTEXT: {prior_context}" if prior_context else ""}
+
+SIMULATION DIRECTIVE:
+Simulate customer mood = "{mood}". Produce a realistic transcript (3 to 6 turns per side) in Hinglish (Roman script Hindi + English).
+Then extract requirements and signals.
+
+Output STRICT JSON ONLY:
+{{
+  "transcript": [
+    {{"speaker": "agent"|"customer", "text": "..."}}
+  ],
+  "summary": "one sentence summary of the call",
+  "disposition": "site_visit" | "callback" | "interested" | "not_interested" | "wrong_number" | "connected",
+  "requirements": {{
+    "property_type": "Apartment" | "Plot" | "Builder Floor" | "Commercial",
+    "bhk": "2 BHK" | "3 BHK" | "4 BHK" | null,
+    "budget": number in INR or null,
+    "location_preference": string or null,
+    "possession_timeline": string or null,
+    "parking": "Required" | "Optional" | null,
+    "callback_preference": string or null
+  }},
+  "signals": list of signals selected ONLY from: {json.dumps(allowed_signals)},
+  "urgency_score": 1-10 integer,
+  "wants_site_visit": bool,
+  "wants_brochure": bool,
+  "whatsapp_opt_in": bool,
+  "human_transfer_required": bool,
+  "next_followup_days": integer or null,
+  "remarks": string
+}}"""
 
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
-            session_id=f"aicall-{uuid.uuid4()}",
-            system_message=system,
-        ).with_model(*LLM_MODEL)
-        resp = await chat.send_message(UserMessage(text=user))
-        text = resp if isinstance(resp, str) else str(resp)
-        text = text.strip()
+            model=LLM_MODEL[1],
+            system_prompt=sys_prompt,
+        )
+        resp = await chat.send_message(UserMessage(content=f"Generate simulation for mood: {mood}"))
+        text = resp.content.strip()
         if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.lstrip().startswith("json"):
-                text = text.lstrip()[4:]
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
-            text = text[start:end + 1]
-        return json.loads(text)
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        data = json.loads(text)
+        return data
     except Exception as e:
-        logger.warning(f"LLM simulate failed: {e}")
+        logger.error(f"LLM simulation error: {e}")
         return None
 
 
 def _mock_simulate(agent: dict, lead: dict, inventory: List[dict], mood: str) -> dict:
-    """Deterministic fallback when the LLM is unavailable."""
-    name = lead.get("name") or "Sir"
-    proj = (inventory[0] if inventory else DEFAULT_INVENTORY[0])
-    intro = agent.get("intro_line") or f"Namaste! Main {agent.get('name','Simran')} bol rahi hoon, Unique Prime Reality se."
-    base = [{"speaker": "agent", "text": intro}]
-
+    name = lead.get("name", "Sir")
+    proj = inventory[0] if inventory else DEFAULT_INVENTORY[0]
+    base = [
+        {"speaker": "agent", "text": agent.get("intro_line") or f"Namaste {name} ji, Unique Prime Reality se."},
+    ]
     if mood == "wrong_number":
         base += [{"speaker": "customer", "text": "Sorry, aapko galat number lag gaya."},
                  {"speaker": "agent", "text": "Oh, apologies for the disturbance. Aapka din shubh ho!"}]
@@ -345,7 +493,6 @@ def _mock_simulate(agent: dict, lead: dict, inventory: List[dict], mood: str) ->
                 "wants_brochure": False, "whatsapp_opt_in": True, "human_transfer_required": False,
                 "next_followup_days": 1, "remarks": "Call back tomorrow."}
 
-    # hot_buyer / warm_curious / investor / just_browsing
     base += [
         {"speaker": "customer", "text": "Haan boliye, kya property hai aapke paas?"},
         {"speaker": "agent", "text": f"Ji, hamare paas {proj['project']} hai {proj['location']} mein, {proj['config']}, {proj['price_range']}. Aap kis budget aur BHK mein dekh rahe hain?"},
@@ -394,7 +541,7 @@ def _mock_simulate(agent: dict, lead: dict, inventory: List[dict], mood: str) ->
                 "urgency_score": 5, "wants_site_visit": False, "wants_brochure": True,
                 "whatsapp_opt_in": True, "human_transfer_required": False, "next_followup_days": 5,
                 "remarks": "Warm — nurture with brochure & follow-up."}
-    # just_browsing
+
     base += [
         {"speaker": "customer", "text": "Bas aise hi pooch raha tha, koi serious plan nahi hai abhi."},
         {"speaker": "agent", "text": "Koi baat nahi sir, main details WhatsApp par bhej deti hoon, jab plan bane to bata dijiyega."},
@@ -409,8 +556,7 @@ def _mock_simulate(agent: dict, lead: dict, inventory: List[dict], mood: str) ->
 async def _run_single_call(lead: dict, agent: dict, rules: dict, inventory: List[dict],
                            mood: Optional[str], campaign: Optional[dict],
                            actor: dict, prior_context: Optional[str] = None) -> dict:
-    """SIMULATED path (v1) — no real phone call happens. Kept for demo/testing
-    and as a fallback when the voice-agent service is not configured."""
+    """SIMULATED path (v1) — kept for offline demo/testing."""
     mood = mood or _weighted_mood()
     allowed = list(rules.keys())
     result = await _llm_simulate(agent, lead, inventory, mood, allowed, prior_context)
@@ -419,317 +565,296 @@ async def _run_single_call(lead: dict, agent: dict, rules: dict, inventory: List
         result = _mock_simulate(agent, lead, inventory, mood)
         source = "mock"
     return await _finalize_call(lead, agent, rules, campaign, actor.get("username"),
-                                mood, result, source)
+                                mood, result, source=source)
 
 
 async def _finalize_call(lead: dict, agent: dict, rules: dict, campaign: Optional[dict],
-                         actor_username: Optional[str], mood: Optional[str],
-                         result: dict, source: str) -> dict:
-    """Shared tail: scoring, persistence, CRM sync, follow-up/transfer/WhatsApp
-    side-effects. Used by BOTH the simulated path (_run_single_call) and the
-    REAL call ingest path (POST /api/ai/calls/ingest, called by the voice-agent
-    microservice once an actual phone call has finished)."""
-    signals = [s for s in (result.get("signals") or []) if s in rules]
-    score = sum(int(rules[s]["points"]) for s in signals)
-    score = max(-60, min(120, score))
-    temperature = temperature_for(score)
+                         caller_username: str, mood: str, result: dict, source: str = "ai") -> dict:
+    raw_signals = result.get("signals") or []
+    intent_score = 0
+    signal_breakdown = []
+    for s in raw_signals:
+        r = rules.get(s)
+        if r:
+            pts = r.get("points", 0)
+            intent_score += pts
+            signal_breakdown.append({"signal": s, "label": r.get("label", s), "points": pts})
+        else:
+            signal_breakdown.append({"signal": s, "label": s, "points": 0})
 
-    req = result.get("requirements") or {}
-    lead_id = lead["_id"]
-    attempt = int(lead.get("ai_call_attempt_count", 0)) + 1
+    temp = temperature_for(intent_score)
     ts = now_iso()
+    lead_id = str(lead["_id"])
 
-    disposition = result.get("disposition", "connected")
-    transfer_needed = bool(result.get("human_transfer_required"))
-    next_days = result.get("next_followup_days")
-    next_followup_at = None
-    if isinstance(next_days, int) and next_days >= 0:
-        next_followup_at = (datetime.now(timezone.utc) + timedelta(days=next_days)).isoformat()
-
-    # Persist the AI call record (transcript + extraction)
     call_doc = {
-        "lead_id": str(lead_id),
+        "lead_id": lead_id,
         "lead_name": lead.get("name"),
         "lead_phone": lead.get("phone"),
         "campaign_id": str(campaign["_id"]) if campaign else None,
         "campaign_name": campaign.get("name") if campaign else None,
-        "agent_name": agent.get("name"),
-        "mood": mood,
-        "source": source,
-        "transcript": result.get("transcript") or [],
-        "summary": result.get("summary") or "",
-        "disposition": disposition,
-        "requirements": req,
-        "signals": signals,
-        "intent_score": score,
-        "temperature": temperature,
-        "urgency_score": result.get("urgency_score"),
+        "agent_name": agent.get("name", "Simran"),
+        "agent_voice": agent.get("voice_accent"),
+        "caller_username": caller_username,
+        "mood_simulated": mood,
+        "simulation_engine": source,
+        "transcript": result.get("transcript", []),
+        "summary": result.get("summary", ""),
+        "disposition": result.get("disposition", "connected"),
+        "requirements": result.get("requirements", {}),
+        "signals": signal_breakdown,
+        "intent_score": intent_score,
+        "temperature": temp,
+        "urgency_score": result.get("urgency_score", 5),
         "wants_site_visit": bool(result.get("wants_site_visit")),
         "wants_brochure": bool(result.get("wants_brochure")),
         "whatsapp_opt_in": bool(result.get("whatsapp_opt_in")),
-        "human_transfer_required": transfer_needed,
-        "next_followup_at": next_followup_at,
-        "remarks": result.get("remarks") or "",
-        "attempt": attempt,
+        "human_transfer_required": bool(result.get("human_transfer_required")),
+        "next_followup_days": result.get("next_followup_days"),
+        "remarks": result.get("remarks"),
         "created_at": ts,
-        "created_by": actor_username,
     }
     ins = await db.ai_calls.insert_one(call_doc)
     call_id = str(ins.inserted_id)
-    call_doc.pop("_id", None)
 
-    # Sync structured fields back onto the CRM lead
-    lead_update = {
-        "assigned_agent_type": "ai",
-        "ai_call_status": "called",
+    lead_updates = {
+        "ai_called": True,
         "ai_last_call_at": ts,
-        "ai_call_attempt_count": attempt,
-        "ai_last_disposition": disposition,
+        "ai_call_count": (lead.get("ai_call_count") or 0) + 1,
+        "ai_temperature": temp,
+        "ai_intent_score": intent_score,
+        "ai_disposition": call_doc["disposition"],
         "ai_summary": call_doc["summary"],
-        "ai_transcript_ref": call_id,
-        "ai_intent_score": score,
-        "ai_temperature": temperature,
-        "ai_urgency_score": call_doc["urgency_score"],
-        "ai_property_type": req.get("property_type"),
-        "ai_bhk": req.get("bhk"),
-        "ai_parking": req.get("parking"),
-        "ai_location_preference": req.get("location_preference"),
-        "ai_possession_timeline": req.get("possession_timeline"),
-        "ai_callback_preference": req.get("callback_preference"),
-        "ai_wants_site_visit": call_doc["wants_site_visit"],
-        "ai_wants_brochure": call_doc["wants_brochure"],
-        "ai_whatsapp_opt_in": call_doc["whatsapp_opt_in"],
-        "ai_human_transfer_required": transfer_needed,
-        "ai_transfer_target_number": TRANSFER_TARGET_NUMBER if transfer_needed else None,
-        "ai_remarks": call_doc["remarks"],
-        "ai_next_followup_at": next_followup_at,
-        "updated_at": ts,
-        "last_contacted_at": ts,
+        "ai_last_call_id": call_id,
     }
+    req = result.get("requirements") or {}
     if req.get("budget"):
-        try:
-            lead_update["budget"] = float(req["budget"])
-        except (TypeError, ValueError):
-            pass
-    # Mirror temperature into the CRM's existing "tag" so existing filters light up
-    if temperature in ("hot", "warm", "cold"):
-        lead_update["tag"] = temperature
-    await db.leads.update_one({"_id": lead_id}, {"$set": lead_update})
+        lead_updates["budget"] = req["budget"]
+    if req.get("bhk"):
+        lead_updates["bhk_requirement"] = req["bhk"]
+    if req.get("location_preference"):
+        lead_updates["preferred_location"] = req["location_preference"]
+    if req.get("possession_timeline"):
+        lead_updates["timeline"] = req["possession_timeline"]
 
-    # Follow-up task
-    if next_followup_at:
-        await db.ai_followups.insert_one({
-            "lead_id": str(lead_id), "lead_name": lead.get("name"), "lead_phone": lead.get("phone"),
-            "campaign_id": call_doc["campaign_id"], "agent_name": agent.get("name"),
-            "due_at": next_followup_at, "reason": disposition, "prior_summary": call_doc["summary"],
-            "status": "pending", "created_at": ts,
-        })
+    if temp == "hot":
+        lead_updates["status"] = "hot"
+    elif temp == "warm" and lead.get("status") in ("new", None):
+        lead_updates["status"] = "contacted"
+    elif temp == "lost":
+        lead_updates["status"] = "lost"
 
-    # Human transfer / urgent callback task for Vranda
-    if transfer_needed:
-        await db.ai_transfers.insert_one({
-            "lead_id": str(lead_id), "lead_name": lead.get("name"), "lead_phone": lead.get("phone"),
-            "target_name": TRANSFER_TARGET_NAME, "target_number": TRANSFER_TARGET_NUMBER,
-            "reason": call_doc["summary"], "temperature": temperature, "intent_score": score,
-            "status": "pending", "created_at": ts,
-        })
+    act_text = f"AI call ({agent.get('name','Simran')}): {call_doc['disposition']} · {temp.upper()} ({intent_score} pts) — {call_doc['summary']}"
+    lead_activity = {
+        "type": "ai_call",
+        "description": act_text,
+        "created_at": ts,
+        "created_by": f"AI Agent ({agent.get('name','Simran')})",
+        "call_id": call_id,
+    }
+    await db.leads.update_one(
+        {"_id": lead["_id"]},
+        {"$set": lead_updates, "$push": {"activities": lead_activity}},
+    )
 
-    # WhatsApp follow-up log (simulated send)
-    if call_doc["whatsapp_opt_in"] or call_doc["wants_brochure"]:
-        kind = "brochure" if call_doc["wants_brochure"] else "project_details"
+    if call_doc["wants_brochure"] or call_doc["whatsapp_opt_in"]:
+        wa_text = (
+            f"Namaste {lead.get('name', '')}! Unique Prime Reality se Simran bol rahi hoon. "
+            f"Aapse baat karke accha laga. Hamare Gurgaon luxury projects ke details aur brochure "
+            f"aapke reference ke liye attach kar rahe hain. Koi query ho to isi number par reply karein!"
+        )
         await db.ai_whatsapp.insert_one({
-            "lead_id": str(lead_id), "lead_name": lead.get("name"), "lead_phone": lead.get("phone"),
-            "kind": kind,
-            "message": f"Namaste {lead.get('name','')}, Unique Prime Reality se {agent.get('name','Simran')}. "
-                       f"Sharing details of our Gurgaon projects as discussed.",
-            "status": "sent", "created_at": ts,
+            "lead_id": lead_id,
+            "lead_name": lead.get("name"),
+            "lead_phone": lead.get("phone"),
+            "call_id": call_id,
+            "kind": "brochure",
+            "message": wa_text,
+            "status": "queued",
+            "created_at": ts,
         })
-        await db.leads.update_one({"_id": lead_id}, {"$set": {"brochure_sent": True, "brochure_sent_at": ts,
-                                                              "ai_whatsapp_status": "sent"}})
+        await db.leads.update_one(
+            {"_id": lead["_id"]},
+            {"$set": {"ai_whatsapp_status": "queued", "brochure_sent": True, "brochure_sent_at": ts}},
+        )
 
-    return {"call_id": call_id, **call_doc}
+    fu_days = result.get("next_followup_days")
+    if fu_days and fu_days > 0 and temp in ("hot", "warm"):
+        try:
+            due = (datetime.now(timezone.utc) + timedelta(days=fu_days)).isoformat()
+        except Exception:
+            due = ts
+        await db.ai_followups.insert_one({
+            "lead_id": lead_id,
+            "lead_name": lead.get("name"),
+            "lead_phone": lead.get("phone"),
+            "call_id": call_id,
+            "reason": f"Follow up after AI call ({call_doc['disposition']}, {temp})",
+            "prior_summary": call_doc["summary"],
+            "due_at": due,
+            "status": "pending",
+            "created_at": ts,
+        })
+
+    if call_doc["human_transfer_required"] or temp == "hot" or call_doc["wants_site_visit"]:
+        await db.ai_transfers.insert_one({
+            "lead_id": lead_id,
+            "lead_name": lead.get("name"),
+            "lead_phone": lead.get("phone"),
+            "call_id": call_id,
+            "temperature": temp,
+            "intent_score": intent_score,
+            "reason": (
+                "Site visit requested" if call_doc["wants_site_visit"]
+                else ("Customer asked for human consultant" if "requested_human" in raw_signals
+                      else f"Hot lead ({intent_score} pts) needs closing")
+            ),
+            "target_number": TRANSFER_TARGET_NUMBER,
+            "target_name": TRANSFER_TARGET_NAME,
+            "status": "pending",
+            "created_at": ts,
+        })
+
+    return {
+        "call_id": call_id,
+        "temperature": temp,
+        "intent_score": intent_score,
+        "disposition": call_doc["disposition"],
+        "summary": call_doc["summary"],
+        "signals": signal_breakdown,
+        "wants_site_visit": call_doc["wants_site_visit"],
+        "human_transfer_required": call_doc["human_transfer_required"],
+        "transcript_turns": len(call_doc["transcript"]),
+    }
 
 
-# ---------------- Agent endpoints ----------------
+# ---------------- AI Agents CRUD ----------------
 @ai_router.get("/agents")
 async def list_agents(user: dict = Depends(get_current_user)):
-    docs = await db.ai_agents.find().to_list(100)
+    docs = await db.ai_agents.find().to_list(50)
+    if not docs:
+        d = dict(DEFAULT_AGENT)
+        d["created_at"] = now_iso()
+        ins = await db.ai_agents.insert_one(d)
+        d["id"] = str(ins.inserted_id)
+        return [d]
     return [_clean(d) for d in docs]
 
 
 @ai_router.post("/agents")
-async def create_agent(payload: AgentIn, user: dict = Depends(require_admin)):
-    doc = payload.model_dump()
-    doc["created_at"] = now_iso()
-    ins = await db.ai_agents.insert_one(doc)
+async def create_agent(payload: AgentIn, user: dict = Depends(require_vranda_only)):
+    d = payload.dict()
+    d["created_at"] = now_iso()
+    d["created_by"] = user.get("username")
+    ins = await db.ai_agents.insert_one(d)
     return _clean(await db.ai_agents.find_one({"_id": ins.inserted_id}))
 
 
 @ai_router.put("/agents/{agent_id}")
-async def update_agent(agent_id: str, payload: AgentIn, user: dict = Depends(require_admin)):
-    await db.ai_agents.update_one({"_id": ObjectId(agent_id)}, {"$set": payload.model_dump()})
+async def update_agent(agent_id: str, payload: AgentIn, user: dict = Depends(require_vranda_only)):
+    await db.ai_agents.update_one({"_id": ObjectId(agent_id)}, {"$set": payload.dict()})
     return _clean(await db.ai_agents.find_one({"_id": ObjectId(agent_id)}))
-
-
-@ai_router.delete("/agents/{agent_id}")
-async def delete_agent(agent_id: str, user: dict = Depends(require_admin)):
-    await db.ai_agents.delete_one({"_id": ObjectId(agent_id)})
-    return {"ok": True}
-
-
-# ---------------- Scoring rules ----------------
-@ai_router.get("/scoring-rules")
-async def get_scoring_rules(user: dict = Depends(get_current_user)):
-    return {"rules": await _get_scoring_rules(),
-            "temperature_bands": {"hot": "60+", "warm": "30-59", "cold": "0-29", "lost": "<0"}}
-
-
-@ai_router.put("/scoring-rules")
-async def update_scoring_rules(payload: ScoringRulesIn, user: dict = Depends(require_admin)):
-    await db.ai_settings.update_one({"_id": "scoring_rules"},
-                                    {"$set": {"rules": payload.rules, "updated_at": now_iso()}}, upsert=True)
-    return {"rules": payload.rules}
-
-
-# ---------------- Inventory ----------------
-@ai_router.get("/inventory")
-async def list_inventory(user: dict = Depends(get_current_user)):
-    docs = await db.ai_inventory.find().to_list(500)
-    return [_clean(d) for d in docs]
-
-
-@ai_router.post("/inventory")
-async def add_inventory(payload: InventoryIn, user: dict = Depends(require_admin)):
-    doc = payload.model_dump()
-    doc["created_at"] = now_iso()
-    ins = await db.ai_inventory.insert_one(doc)
-    return _clean(await db.ai_inventory.find_one({"_id": ins.inserted_id}))
-
-
-@ai_router.delete("/inventory/{item_id}")
-async def delete_inventory(item_id: str, user: dict = Depends(require_admin)):
-    await db.ai_inventory.delete_one({"_id": ObjectId(item_id)})
-    return {"ok": True}
 
 
 # ---------------- Campaigns ----------------
 @ai_router.get("/campaigns")
 async def list_campaigns(user: dict = Depends(get_current_user)):
-    docs = await db.ai_campaigns.find().sort("created_at", -1).to_list(200)
+    docs = await db.ai_campaigns.find().sort("created_at", -1).to_list(100)
     out = []
     for d in docs:
         cid = str(d["_id"])
-        d = _clean(d)
-        d["queued"] = await db.ai_queue.count_documents({"campaign_id": cid, "status": "queued"})
-        d["done"] = await db.ai_queue.count_documents({"campaign_id": cid, "status": "done"})
-        d["total"] = await db.ai_queue.count_documents({"campaign_id": cid})
-        out.append(d)
+        c_clean = _clean(d)
+        c_clean["total_leads"] = await db.ai_queue.count_documents({"campaign_id": cid})
+        c_clean["called_leads"] = await db.ai_queue.count_documents({"campaign_id": cid, "status": "done"})
+        c_clean["hot_count"] = await db.ai_queue.count_documents({"campaign_id": cid, "temperature": "hot"})
+        c_clean["warm_count"] = await db.ai_queue.count_documents({"campaign_id": cid, "temperature": "warm"})
+        out.append(c_clean)
     return out
 
 
 @ai_router.post("/campaigns")
-async def create_campaign(payload: CampaignIn, user: dict = Depends(require_admin)):
-    doc = payload.model_dump()
-    doc.update({"status": "active", "created_at": now_iso(), "created_by": user.get("username")})
-    ins = await db.ai_campaigns.insert_one(doc)
+async def create_campaign(payload: CampaignIn, user: dict = Depends(require_vranda_only)):
+    d = payload.dict()
+    d["created_at"] = now_iso()
+    d["created_by"] = user.get("username")
+    d["status"] = "draft"
+    ins = await db.ai_campaigns.insert_one(d)
     return _clean(await db.ai_campaigns.find_one({"_id": ins.inserted_id}))
 
 
-@ai_router.get("/campaigns/{campaign_id}")
-async def get_campaign(campaign_id: str, user: dict = Depends(get_current_user)):
-    c = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
+@ai_router.post("/campaigns/{cid}/assign-leads")
+async def assign_leads_to_campaign(cid: str, payload: AssignLeadsIn, user: dict = Depends(require_vranda_only)):
+    c = await db.ai_campaigns.find_one({"_id": ObjectId(cid)})
     if not c:
         raise HTTPException(404, "Campaign not found")
-    queue = await db.ai_queue.find({"campaign_id": campaign_id}).sort("created_at", 1).to_list(1000)
-    return {"campaign": _clean(c), "queue": [_clean(q) for q in queue]}
-
-
-@ai_router.delete("/campaigns/{campaign_id}")
-async def delete_campaign(campaign_id: str, user: dict = Depends(require_admin)):
-    await db.ai_campaigns.delete_one({"_id": ObjectId(campaign_id)})
-    await db.ai_queue.delete_many({"campaign_id": campaign_id})
-    return {"ok": True}
-
-
-@ai_router.post("/campaigns/{campaign_id}/assign")
-async def assign_leads(campaign_id: str, payload: AssignLeadsIn, user: dict = Depends(require_admin)):
-    c = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
-    if not c:
-        raise HTTPException(404, "Campaign not found")
-    added = 0
+    assigned = 0
     for lid in payload.lead_ids:
-        try:
-            lead = await db.leads.find_one({"_id": ObjectId(lid)})
-        except Exception:
-            continue
-        if not lead:
-            continue
-        exists = await db.ai_queue.find_one({"campaign_id": campaign_id, "lead_id": lid,
-                                             "status": {"$in": ["queued"]}})
-        if exists:
-            continue
-        await db.ai_queue.insert_one({
-            "campaign_id": campaign_id, "lead_id": lid, "lead_name": lead.get("name"),
-            "lead_phone": lead.get("phone"), "status": "queued", "attempts": 0, "created_at": now_iso(),
-        })
-        await db.leads.update_one({"_id": ObjectId(lid)},
-                                  {"$set": {"assigned_agent_type": "ai", "ai_call_status": "queued"}})
-        added += 1
-    return {"added": added}
+        existing = await db.ai_queue.find_one({"campaign_id": cid, "lead_id": lid})
+        if not existing:
+            await db.ai_queue.insert_one({
+                "campaign_id": cid,
+                "lead_id": lid,
+                "status": "queued",
+                "retries": 0,
+                "created_at": now_iso(),
+            })
+            assigned += 1
+    return {"ok": True, "assigned": assigned}
 
 
-@ai_router.post("/campaigns/{campaign_id}/run")
-async def run_campaign(campaign_id: str, payload: RunIn, user: dict = Depends(require_vranda_only)):
-    """Places REAL outbound calls (via LiveKit/Vobiz SIP or voice-agent) for the
-    next N queued leads in this campaign. This is asynchronous — a call
-    takes minutes to actually happen, so this endpoint STARTS the
-    dials and marks each queue item 'calling'. Each queue item is moved to
-    'done' automatically when the call finishes and reports back via /calls/ingest."""
-    c = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
+@ai_router.post("/campaigns/{cid}/run")
+async def run_campaign_queue(cid: str, payload: RunIn, user: dict = Depends(require_vranda_only)):
+    c = await db.ai_campaigns.find_one({"_id": ObjectId(cid)})
     if not c:
         raise HTTPException(404, "Campaign not found")
     agent = await _get_agent(c.get("agent_id"))
+    rules = await _get_scoring_rules()
     inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
 
-    limit = max(1, min(payload.limit, 20))
-    queued = await db.ai_queue.find({"campaign_id": campaign_id, "status": "queued"}).limit(limit).to_list(limit)
-
-    dialing, failed = [], []
-    for q in queued:
-        lead = await db.leads.find_one({"_id": ObjectId(q["lead_id"])})
-        if not lead or not lead.get("phone"):
-            await db.ai_queue.update_one({"_id": q["_id"]}, {"$set": {"status": "skipped"}})
+    queue_items = await db.ai_queue.find({"campaign_id": cid, "status": "queued"}).limit(payload.limit).to_list(payload.limit)
+    results = []
+    for item in queue_items:
+        lead = await db.leads.find_one({"_id": ObjectId(item["lead_id"])})
+        if not lead:
+            await db.ai_queue.update_one({"_id": item["_id"]}, {"$set": {"status": "skipped", "reason": "lead_deleted"}})
             continue
-        try:
-            res = await _dispatch_outbound_call(
-                lead=lead,
-                agent=agent,
-                inventory=inventory,
-                campaign_id=campaign_id,
-                user_prompt=c.get("script_template", ""),
-            )
-            call_uuid = res.get("call_uuid")
-            await db.ai_queue.update_one({"_id": q["_id"]}, {
-                "$set": {"status": "calling", "call_uuid": call_uuid, "dialed_at": now_iso()},
-                "$inc": {"attempts": 1},
-            })
-            await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
-                "assigned_agent_type": "ai", "ai_call_status": "dialing",
-                "ai_call_uuid": call_uuid, "updated_at": now_iso(),
-            }})
-            dialing.append({"lead_name": q.get("lead_name"), "call_uuid": call_uuid})
-        except Exception as e:
-            logger.error(f"campaign dial failed for lead {q.get('lead_id')}: {e}")
-            failed.append({"lead_name": q.get("lead_name"), "error": str(e)})
 
-    remaining = await db.ai_queue.count_documents({"campaign_id": campaign_id, "status": "queued"})
-    return {"dialing": len(dialing), "failed": len(failed), "remaining": remaining,
-            "results": dialing, "failures": failed}
+        prior_calls = await db.ai_calls.find({"lead_id": str(lead["_id"])}).sort("created_at", -1).limit(1).to_list(1)
+        prior_context = prior_calls[0].get("summary") if prior_calls else None
+
+        cfg = await _get_voice_agent_config()
+        if (cfg.get("livekit_url") and cfg.get("livekit_api_key")) or (cfg.get("voice_agent_url") and cfg.get("voice_agent_shared_secret")):
+            try:
+                dispatch_res = await _dispatch_outbound_call(
+                    lead=lead,
+                    agent=agent,
+                    inventory=inventory,
+                    campaign_id=cid,
+                    user_prompt="",
+                )
+                await db.ai_queue.update_one(
+                    {"_id": item["_id"]},
+                    {"$set": {"status": "calling", "call_uuid": dispatch_res.get("call_uuid"), "dialed_at": now_iso()}},
+                )
+                results.append({"lead_id": str(lead["_id"]), "status": "dialing", "method": dispatch_res.get("method")})
+                continue
+            except Exception as e:
+                logger.error(f"LiveKit/Vobiz dispatch failed, falling back to simulation: {e}")
+
+        res = await _run_single_call(lead, agent, rules, inventory, mood=None,
+                                     campaign=c, actor=user, prior_context=prior_context)
+        await db.ai_queue.update_one(
+            {"_id": item["_id"]},
+            {"$set": {"status": "done", "disposition": res["disposition"], "temperature": res["temperature"],
+                      "intent_score": res["intent_score"], "done_at": now_iso()}},
+        )
+        results.append({"lead_id": str(lead["_id"]), **res})
+
+    await db.ai_campaigns.update_one({"_id": ObjectId(cid)}, {"$set": {"status": "active", "last_run_at": now_iso()}})
+    return {"processed": len(results), "results": results}
 
 
-# ---------------- Single call / recall (SIMULATED) ----------------
-@ai_router.post("/calls/run")
-async def run_single(payload: CallRunIn, user: dict = Depends(require_admin)):
+@ai_router.post("/calls/run-single")
+async def run_single_lead_call(payload: CallRunIn, user: dict = Depends(require_vranda_only)):
     lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
     if not lead:
         raise HTTPException(404, "Lead not found")
@@ -739,123 +864,54 @@ async def run_single(payload: CallRunIn, user: dict = Depends(require_admin)):
     campaign = None
     if payload.campaign_id:
         campaign = await db.ai_campaigns.find_one({"_id": ObjectId(payload.campaign_id)})
-    res = await _run_single_call(lead, agent, rules, inventory, payload.mood, campaign, user)
-    return res
+    prior_calls = await db.ai_calls.find({"lead_id": payload.lead_id}).sort("created_at", -1).limit(1).to_list(1)
+    prior_context = prior_calls[0].get("summary") if prior_calls else None
+
+    return await _run_single_call(lead, agent, rules, inventory, mood=payload.mood,
+                                  campaign=campaign, actor=user, prior_context=prior_context)
 
 
-# ================================================================
-# REAL VOICE CALLING — talks to the separate voice-agent microservice
-# ================================================================
-# ================================================================
-# REAL VOICE CALLING — LiveKit + Vobiz SIP + Grok + Sarvam AI
-# ================================================================
-class RealCallTriggerIn(BaseModel):
-    lead_id: Optional[str] = None
-    phone: Optional[str] = None
-    lead_name: Optional[str] = None
-    prompt: Optional[str] = None
-    campaign_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    model_provider: Optional[str] = "grok"
-    voice: Optional[str] = "sarvam-meera"
-
-
-class CallIngestIn(BaseModel):
-    """Payload the voice-agent microservice POSTs back once a REAL phone
-    call has finished. Mirrors the schema _llm_simulate() produces, but
-    every field here is extracted from an ACTUAL recorded conversation."""
-    lead_id: str
-    campaign_id: Optional[str] = None
-    agent_name: Optional[str] = None
-    call_uuid: Optional[str] = None
-    recording_url: Optional[str] = None
-    duration_seconds: Optional[int] = None
-    transcript: List[dict] = Field(default_factory=list)
-    summary: str = ""
-    disposition: str = "connected"
-    requirements: dict = Field(default_factory=dict)
-    signals: List[str] = Field(default_factory=list)
-    urgency_score: Optional[int] = None
-    wants_site_visit: bool = False
-    wants_brochure: bool = False
-    whatsapp_opt_in: bool = False
-    human_transfer_required: bool = False
-    next_followup_days: Optional[int] = None
-    remarks: str = ""
-
-
-async def _get_voice_agent_config() -> dict:
-    """DB-stored config (settable from inside the CRM) wins over env vars."""
-    doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
-    return {
-        "livekit_url": doc.get("livekit_url") or LIVEKIT_URL_ENV or "",
-        "livekit_api_key": doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "",
-        "livekit_api_secret": doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "",
-        "livekit_agent_name": doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent",
-        "vobiz_sip_trunk_id": doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "",
-        "voice_agent_url": (doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
-        "voice_agent_shared_secret": doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "",
-        "grok_api_key": doc.get("grok_api_key") or GROK_API_KEY_ENV or "",
-        "sarvam_api_key": doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "",
-        "deepgram_api_key": doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "",
-        "sarvam_speaker": doc.get("sarvam_speaker") or "meera",
-        "sarvam_language": doc.get("sarvam_language") or "hi-IN",
-    }
-
-
-async def _check_voice_agent_secret(x_voice_agent_secret: Optional[str]):
-    cfg = await _get_voice_agent_config()
-    secret = cfg.get("voice_agent_shared_secret")
-    if not secret:
-        raise HTTPException(500, "Voice-agent shared secret is not configured on the CRM backend")
-    if not x_voice_agent_secret or x_voice_agent_secret != secret:
-        raise HTTPException(401, "Invalid or missing voice-agent shared secret")
-
-
-class VoiceAgentSettingsIn(BaseModel):
-    livekit_url: Optional[str] = None
-    livekit_api_key: Optional[str] = None
-    livekit_api_secret: Optional[str] = None
-    livekit_agent_name: Optional[str] = None
-    vobiz_sip_trunk_id: Optional[str] = None
-    voice_agent_url: Optional[str] = None
-    voice_agent_shared_secret: Optional[str] = None
-    grok_api_key: Optional[str] = None
-    sarvam_api_key: Optional[str] = None
-    deepgram_api_key: Optional[str] = None
-    sarvam_speaker: Optional[str] = None
-    sarvam_language: Optional[str] = None
-
-
+# ---------------- Telephony & Settings ----------------
 @ai_router.get("/calls/real/settings")
-async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
+async def get_real_call_settings(user: dict = Depends(require_vranda_only)):
     cfg = await _get_voice_agent_config()
     return {
-        "livekit_url": cfg.get("livekit_url", ""),
-        "livekit_agent_name": cfg.get("livekit_agent_name", "upr-calling-agent"),
-        "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id", ""),
-        "voice_agent_url": cfg.get("voice_agent_url", ""),
-        "sarvam_speaker": cfg.get("sarvam_speaker", "meera"),
-        "sarvam_language": cfg.get("sarvam_language", "hi-IN"),
+        "voice_agent_url": cfg.get("voice_agent_url") or "",
+        "has_shared_secret": bool(cfg.get("voice_agent_shared_secret")),
+        "livekit_url": cfg.get("livekit_url") or "",
+        "livekit_agent_name": cfg.get("livekit_agent_name") or "upr-calling-agent",
         "has_livekit_key": bool(cfg.get("livekit_api_key")),
         "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
-        "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
+        "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id") or "",
         "has_grok_key": bool(cfg.get("grok_api_key")),
         "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
         "has_deepgram_key": bool(cfg.get("deepgram_api_key")),
-        "secret_configured": bool(cfg.get("voice_agent_shared_secret") or cfg.get("livekit_api_secret")),
-        "source": "database" if cfg.get("livekit_url") else ("env" if LIVEKIT_URL_ENV else "unset"),
+        "sarvam_speaker": cfg.get("sarvam_speaker") or "meera",
+        "sarvam_language": cfg.get("sarvam_language") or "hi-IN",
+        "is_ready": bool(
+            (cfg.get("livekit_url") and cfg.get("livekit_api_key") and cfg.get("livekit_api_secret"))
+            or (cfg.get("voice_agent_url") and cfg.get("voice_agent_shared_secret"))
+        ),
     }
 
 
 @ai_router.post("/calls/real/settings")
-async def set_voice_agent_settings(payload: VoiceAgentSettingsIn, user: dict = Depends(require_vranda_only)):
-    update = {"updated_at": now_iso(), "updated_by": user.get("username")}
-    for field, val in payload.model_dump().items():
-        if val is not None and str(val).strip() != "":
-            update[field] = str(val).strip()
+async def set_real_call_settings(payload: TelephonySettingsIn, user: dict = Depends(require_vranda_only)):
+    doc = await db.ai_settings.find_one({"_id": "telephony_config"})
+    current = doc.get("config", {}) if doc else {}
+
+    updates = {}
+    for k, v in payload.dict().items():
+        if v is not None:
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            updates[k] = v.strip() if isinstance(v, str) else v
+
+    merged = {**current, **updates}
     await db.ai_settings.update_one(
-        {"_id": VOICE_AGENT_SETTINGS_DOC_ID}, {"$set": update}, upsert=True,
+        {"_id": "telephony_config"},
+        {"$set": {"config": merged, "updated_at": now_iso(), "updated_by": user.get("username")}},
+        upsert=True,
     )
     return {"ok": True}
 
@@ -911,6 +967,8 @@ async def _dispatch_outbound_call(
             "Content-Type": "application/json",
         }
 
+        kb = await _get_knowledge_base()
+
         metadata_dict = {
             "lead_id": lead_id,
             "lead_name": lead_name,
@@ -920,11 +978,33 @@ async def _dispatch_outbound_call(
             "model_provider": model_provider,
             "voice_id": voice,
             "agent_config": {
-                "agentName": agent.get("name", "Simran"),
-                "companyName": "Unique Prime Reality",
+                "agentName": kb.get("agent_name") or agent.get("name", "Simran"),
+                "companyName": kb.get("company_name", "Unique Prime Reality"),
+                "companyDescription": kb.get("company_description", ""),
+                "companyPhone": kb.get("company_phone", ""),
+                "companyWebsite": kb.get("company_website", ""),
+                "market": kb.get("market", ""),
+                "officeHours": kb.get("office_hours", ""),
+                "address": kb.get("address", ""),
+                "services": kb.get("services", ""),
+                "tone": kb.get("tone", ""),
+                "systemPrompt": kb.get("system_prompt") or agent.get("guardrails", ""),
+                "callObjective": kb.get("call_objective", ""),
+                "qualificationGoals": kb.get("qualification_goals", ""),
+                "offer": kb.get("offer", ""),
+                "successCriteria": kb.get("success_criteria", ""),
+                "objectionHandling": kb.get("objection_handling", ""),
+                "escalationRules": kb.get("escalation_rules", ""),
+                "complianceNotes": kb.get("compliance_notes", ""),
+                "customGreeting": kb.get("custom_greeting", ""),
+                "openingStyle": kb.get("opening_style", "permission"),
+                "transferNumber": kb.get("transfer_number", TRANSFER_TARGET_NUMBER),
+                "transferTargetName": kb.get("transfer_target_name", "Vranda Aggarwal"),
+                "transferEnabled": kb.get("transfer_enabled", True),
                 "leadName": lead_name,
-                "systemPrompt": agent.get("guardrails", ""),
-                "transferNumber": TRANSFER_TARGET_NUMBER,
+                "leadId": lead_id,
+                "phone": e164_phone,
+                "userPrompt": user_prompt,
             },
         }
         metadata_str = json.dumps(metadata_dict)
@@ -1056,11 +1136,6 @@ async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(req
 @ai_public_router.post("/calls/ingest")
 async def ingest_real_call(payload: CallIngestIn,
                            x_voice_agent_secret: Optional[str] = Header(None)):
-    """Called by the voice-agent microservice (NOT by a logged-in user —
-    authenticated via shared secret header instead of JWT, so this lives on
-    ai_public_router rather than the Vranda-only ai_router) once a REAL
-    phone call has ended. Reuses the exact same scoring/CRM-sync logic as
-    the simulated path via _finalize_call()."""
     await _check_voice_agent_secret(x_voice_agent_secret)
 
     lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
@@ -1102,9 +1177,6 @@ async def ingest_real_call(payload: CallIngestIn,
         )
     await db.leads.update_one({"_id": lead["_id"]}, {"$set": {"ai_call_status": "called"}})
 
-    # If this call came from a campaign queue, close the loop on that queue
-    # item now that we actually know the outcome (real calls are async, so
-    # /campaigns/{id}/run couldn't know this at dial time).
     if payload.campaign_id:
         await db.ai_queue.update_one(
             {"campaign_id": payload.campaign_id, "lead_id": payload.lead_id, "status": "calling"},
@@ -1112,7 +1184,6 @@ async def ingest_real_call(payload: CallIngestIn,
                       "intent_score": res["intent_score"], "done_at": now_iso()}},
         )
     return res
-
 
 
 @ai_router.get("/calls")
@@ -1154,8 +1225,6 @@ async def list_followups(status: Optional[str] = None, user: dict = Depends(get_
 
 @ai_router.post("/followups/{fu_id}/recall")
 async def recall_followup(fu_id: str, user: dict = Depends(require_vranda_only)):
-    """Places a REAL call back to a lead whose follow-up came due, carrying
-    forward the prior call's summary as context for the voice-agent."""
     fu = await db.ai_followups.find_one({"_id": ObjectId(fu_id)})
     if not fu:
         raise HTTPException(404, "Follow-up not found")
@@ -1281,6 +1350,135 @@ async def ai_dashboard(user: dict = Depends(get_current_user)):
     }
 
 
+# ---------------- Knowledge Base & Telephony Settings ----------------
+@ai_router.get("/knowledge-base")
+async def get_knowledge_base(user: dict = Depends(get_current_user)):
+    kb = await _get_knowledge_base()
+    return kb
+
+
+@ai_router.post("/knowledge-base")
+async def update_knowledge_base(payload: KnowledgeBaseIn, user: dict = Depends(require_vranda_only)):
+    current = await _get_knowledge_base()
+    updates = payload.dict(exclude_unset=True)
+    updated = {**current, **updates}
+    await db.ai_settings.update_one(
+        {"_id": "knowledge_base"},
+        {"$set": {"kb": updated, "updated_at": now_iso(), "updated_by": user.get("username")}},
+        upsert=True,
+    )
+    return {"ok": True, "kb": updated}
+
+
+# ---------------- Appointments & Site Visits ----------------
+@ai_router.get("/appointments")
+async def list_appointments(user: dict = Depends(get_current_user)):
+    docs = await db.ai_appointments.find().sort("created_at", -1).limit(300).to_list(300)
+    items = [_clean(d) for d in docs]
+    return {"items": items}
+
+
+@ai_router.post("/appointments")
+async def create_appointment(payload: AppointmentIn, user: dict = Depends(get_current_user)):
+    ts = now_iso()
+    doc = payload.dict()
+    doc["created_at"] = ts
+    doc["created_by"] = user.get("username", "system")
+    doc["status"] = "Scheduled"
+
+    clean_phone = (doc.get("phone") or "").strip()
+    lead = None
+    if doc.get("lead_id"):
+        try:
+            lead = await db.leads.find_one({"_id": ObjectId(doc["lead_id"])})
+        except Exception:
+            pass
+    if not lead and clean_phone:
+        lead = await db.leads.find_one({"phone": clean_phone})
+
+    if lead:
+        doc["lead_id"] = str(lead["_id"])
+        await db.leads.update_one(
+            {"_id": lead["_id"]},
+            {"$push": {
+                "activities": {
+                    "type": "appointment_booked",
+                    "description": f"Site visit / appointment booked for {doc['date']} at {doc['time']}: {doc['purpose']}",
+                    "created_at": ts,
+                    "created_by": user.get("name", "AI Calling System"),
+                }
+            }},
+        )
+
+    ins = await db.ai_appointments.insert_one(doc)
+    saved = await db.ai_appointments.find_one({"_id": ins.inserted_id})
+    return {"ok": True, "item": _clean(saved)}
+
+
+# ---------------- Bulk Outbound Calling ----------------
+@ai_router.post("/calls/bulk-dispatch")
+async def bulk_dispatch_calls(payload: BulkDispatchIn, user: dict = Depends(require_vranda_only)):
+    if not payload.numbers:
+        raise HTTPException(400, "No phone numbers provided")
+
+    agent = await _get_agent(None)
+    inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
+
+    results = []
+    for raw_phone in payload.numbers:
+        clean_phone = raw_phone.strip()
+        if not clean_phone:
+            continue
+        try:
+            lead = await db.leads.find_one({"phone": clean_phone})
+            if not lead:
+                new_lead = {
+                    "name": f"Lead {clean_phone[-4:]}",
+                    "phone": clean_phone,
+                    "status": "new",
+                    "source": "AI Bulk Dispatch",
+                    "created_at": now_iso(),
+                    "assigned_to": str(user.get("_id", "")),
+                    "assigned_to_name": user.get("name", "Vranda Aggarwal"),
+                }
+                ins = await db.leads.insert_one(new_lead)
+                lead = await db.leads.find_one({"_id": ins.inserted_id})
+
+            dispatch_res = await _dispatch_outbound_call(
+                lead=lead,
+                agent=agent,
+                inventory=inventory,
+                campaign_id=None,
+                user_prompt=payload.prompt or "",
+                model_provider=payload.model_provider or "grok",
+                voice=payload.voice or "sarvam-meera",
+            )
+
+            await db.leads.update_one(
+                {"_id": lead["_id"]},
+                {"$set": {
+                    "assigned_agent_type": "ai",
+                    "ai_call_status": "dialing",
+                    "ai_call_uuid": dispatch_res.get("call_uuid"),
+                    "updated_at": now_iso(),
+                }},
+            )
+            results.append({
+                "phoneNumber": clean_phone,
+                "status": "dispatched",
+                "call_uuid": dispatch_res.get("call_uuid"),
+            })
+        except Exception as e:
+            logger.error(f"Failed to dispatch bulk call to {clean_phone}: {e}")
+            results.append({
+                "phoneNumber": clean_phone,
+                "status": "failed",
+                "error": str(e),
+            })
+
+    return {"ok": True, "results": results}
+
+
 # ---------------- Startup seed ----------------
 async def seed_ai_defaults():
     if await db.ai_agents.count_documents({}) == 0:
@@ -1298,5 +1496,10 @@ async def seed_ai_defaults():
         await db.ai_settings.insert_one({"_id": "scoring_rules", "rules": DEFAULT_SCORING_RULES,
                                          "updated_at": now_iso()})
         logger.info("Seeded default scoring rules")
+    if not await db.ai_settings.find_one({"_id": "knowledge_base"}):
+        await db.ai_settings.insert_one({"_id": "knowledge_base", "kb": DEFAULT_KNOWLEDGE_BASE,
+                                         "updated_at": now_iso()})
+        logger.info("Seeded default knowledge base")
     await db.ai_queue.create_index([("campaign_id", 1), ("status", 1)])
     await db.ai_calls.create_index([("lead_id", 1), ("created_at", -1)])
+    await db.ai_appointments.create_index([("created_at", -1)])
