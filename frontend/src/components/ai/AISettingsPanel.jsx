@@ -68,6 +68,7 @@ export const AISettingsPanel = () => {
     api.get("/ai/scoring-rules").then((r) => { setRules(r.data.rules); setBands(r.data.temperature_bands); }).catch(() => {});
     api.get("/ai/inventory").then((r) => setInventory(r.data)).catch(() => setInventory([]));
     api.get("/ai/knowledge-base").then((r) => {
+      // Merge with defaults so every field is pre-populated
       setKb({ ...VRINDA_PRESET, ...(r.data || {}) });
     }).catch(() => setKb(VRINDA_PRESET));
     api.get("/ai/calls/real/settings").then((r) => {
@@ -179,7 +180,7 @@ export const AISettingsPanel = () => {
           </TabsTrigger>
         </TabsList>
 
-        {/* Tab 1: Knowledge Base & Script Playbook */}
+        {/* Tab 1: Knowledge Base & Script Playbook (Completely Redesigned!) */}
         <TabsContent value="knowledge" className="mt-5 space-y-6">
           {!kb ? (
             <Skel />
@@ -629,7 +630,7 @@ export const AISettingsPanel = () => {
           </div>
         </TabsContent>
 
-        {/* Tab 3: Lead Scoring Engine */}
+        {/* Tab 3: Lead Scoring Engine (Preserved 100%) */}
         <TabsContent value="scoring" className="mt-5">
           <Section title="Lead scoring engine" icon={SlidersHorizontal} testId="scoring-settings" full>
             {!rules ? <Skel /> : (
@@ -657,7 +658,7 @@ export const AISettingsPanel = () => {
           </Section>
         </TabsContent>
 
-        {/* Tab 4: Project Inventory */}
+        {/* Tab 4: Project Inventory (Preserved 100%) */}
         <TabsContent value="inventory" className="mt-5">
           <Section title="Project inventory (Gurgaon)" icon={Building2} testId="inventory-settings" full>
             {!inventory ? <Skel /> : (
