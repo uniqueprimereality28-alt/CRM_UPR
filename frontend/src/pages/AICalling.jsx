@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Bot, Phone, Flame, Snowflake, PhoneForwarded, AlarmClock, MessageCircle,
   Loader2, Eye, RefreshCw, Check, ListChecks, Megaphone, SlidersHorizontal,
-  Thermometer, ArrowUpRight, Link2, CheckCircle2, AlertTriangle,
+  Thermometer, ArrowUpRight, Link2, CheckCircle2, AlertTriangle, Users, CalendarDays
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -20,6 +20,9 @@ import { AICampaigns } from "../components/ai/AICampaigns";
 import { AISettingsPanel } from "../components/ai/AISettingsPanel";
 import { TranscriptDialog } from "../components/ai/TranscriptDialog";
 import { OutboundDialer } from "../components/ai/OutboundDialer";
+import { BulkDialer } from "../components/ai/BulkDialer";
+import { AppointmentsView } from "../components/ai/AppointmentsView";
+
 
 export default function AICalling() {
   const { isVranda } = useAuth();
@@ -73,16 +76,20 @@ export default function AICalling() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="flex h-auto flex-wrap gap-1 bg-slate-100 p-1">
           <TabsTrigger value="dialer" data-testid="tab-dialer" className="gap-1.5"><Phone className="h-3.5 w-3.5" /> Outbound Dialer</TabsTrigger>
+          <TabsTrigger value="bulk" data-testid="tab-bulk" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Bulk Dialer</TabsTrigger>
+          <TabsTrigger value="appointments" data-testid="tab-appointments" className="gap-1.5"><CalendarDays className="h-3.5 w-3.5" /> Appointments & Visits</TabsTrigger>
           <TabsTrigger value="overview" data-testid="tab-overview" className="gap-1.5"><Thermometer className="h-3.5 w-3.5" /> Overview</TabsTrigger>
           <TabsTrigger value="campaigns" data-testid="tab-campaigns" className="gap-1.5"><Megaphone className="h-3.5 w-3.5" /> Campaigns</TabsTrigger>
           <TabsTrigger value="calls" data-testid="tab-calls" className="gap-1.5"><ListChecks className="h-3.5 w-3.5" /> AI Calls</TabsTrigger>
           <TabsTrigger value="followups" data-testid="tab-followups" className="gap-1.5"><AlarmClock className="h-3.5 w-3.5" /> Follow-ups</TabsTrigger>
           <TabsTrigger value="transfers" data-testid="tab-transfers" className="gap-1.5"><PhoneForwarded className="h-3.5 w-3.5" /> Transfers</TabsTrigger>
           <TabsTrigger value="whatsapp" data-testid="tab-whatsapp" className="gap-1.5"><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</TabsTrigger>
-          <TabsTrigger value="settings" data-testid="tab-settings" className="gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Telephony & Settings</TabsTrigger>
+          <TabsTrigger value="settings" data-testid="tab-settings" className="gap-1.5"><SlidersHorizontal className="h-3.5 w-3.5" /> Knowledge Base & Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dialer" className="mt-5"><OutboundDialer onCallDispatched={loadStats} /></TabsContent>
+        <TabsContent value="bulk" className="mt-5"><BulkDialer onDispatched={loadStats} /></TabsContent>
+        <TabsContent value="appointments" className="mt-5"><AppointmentsView /></TabsContent>
         <TabsContent value="overview" className="mt-5"><Overview stats={stats} onOpenCall={setOpenCall} onOpenDialer={() => setActiveTab("dialer")} /></TabsContent>
         <TabsContent value="campaigns" className="mt-5"><AICampaigns isAdmin={isVranda} onChanged={loadStats} /></TabsContent>
         <TabsContent value="calls" className="mt-5"><CallsTab onOpenCall={setOpenCall} /></TabsContent>
