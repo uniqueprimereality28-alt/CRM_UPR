@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import {
   Loader2, Save, Plus, Trash2, Bot, SlidersHorizontal, Building2,
   PhoneCall, Cpu, CheckCircle2, AlertTriangle, KeyRound, BookOpen,
-  Headphones, ShieldAlert, Sparkles, Check, RotateCcw
+  Headphones, ShieldAlert, Sparkles, Check, RotateCcw, ArrowRight,
+  PhoneForwarded, MessageSquare, HelpCircle
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError } from "../../lib/api";
-import { LANG_STYLES } from "../../lib/ai";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -17,8 +17,29 @@ import {
 import { Badge } from "../ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 
+const VRINDA_PRESET = {
+  agent_name: "Vrinda",
+  company_name: "Unique Prime Reality",
+  market: "Gurgaon, Haryana (Dwarka Expressway, Golf Course Ext, Manesar Corridor, Sohna Road)",
+  custom_greeting: "Hello {name} ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se. {name} ji kya aap Gurgaon mein koi property plan kar rahe hain?",
+  gate_no_response: "Thank you for your time, have a nice day!",
+  purpose_question: "Sir aapki requirement ko better understand karne ke liye kya main jaan sakti hu yeh property purchase personal use ke liye hai ya investment purpose ke liye hai?",
+  budget_config_question: "Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain like studio apartment, 1 BHK, 2 BHK, 3 BHK, 4 BHK, or penthouse?",
+  best_now_answer: "We have different projects and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
+  location_question: "Is there any specific preferred location in mind?",
+  builders_options: "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
+  final_summary_template: "I have noted that you are looking for a residential 2 BHK configured property in Manesar Corridor under 3 Cr.",
+  ai_disclosure_answer: "Yes, I am an AI assistant and I am noting your requirement and will share it with my team, and they will find you with the best property at the earliest.",
+  transfer_number: "7351735035",
+  transfer_target_name: "Vrinda Aggarwal",
+  transfer_phrase: "Sure, let me connect you directly to our senior consultant right away. Please stay on the line.",
+  transfer_enabled: true,
+  tone: "Warm, polite, natural Hinglish. Always acknowledge with 'Noted' or 'Perfect' before asking the next question.",
+  call_objective: "Qualify property requirements (Purpose, Budget, Configuration, Location) and book site visits or WhatsApp brochures.",
+};
+
 export const AISettingsPanel = () => {
-  const [activeSubTab, setActiveSubTab] = useState("telephony");
+  const [activeSubTab, setActiveSubTab] = useState("knowledge");
   const [rules, setRules] = useState(null);
   const [bands, setBands] = useState(null);
   const [inventory, setInventory] = useState(null);
@@ -46,7 +67,9 @@ export const AISettingsPanel = () => {
   useEffect(() => {
     api.get("/ai/scoring-rules").then((r) => { setRules(r.data.rules); setBands(r.data.temperature_bands); }).catch(() => {});
     api.get("/ai/inventory").then((r) => setInventory(r.data)).catch(() => setInventory([]));
-    api.get("/ai/knowledge-base").then((r) => setKb(r.data)).catch(() => {});
+    api.get("/ai/knowledge-base").then((r) => {
+      setKb({ ...VRINDA_PRESET, ...(r.data || {}) });
+    }).catch(() => setKb(VRINDA_PRESET));
     api.get("/ai/calls/real/settings").then((r) => {
       setTelephonyStatus(r.data);
       setTelephony((prev) => ({
@@ -65,12 +88,17 @@ export const AISettingsPanel = () => {
     setSavingKb(true);
     try {
       await api.post("/ai/knowledge-base", kb);
-      toast.success("AI Knowledge Base & Playbook saved!");
+      toast.success("Vrinda's AI Telecalling Script & Playbook saved!");
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
     } finally {
       setSavingKb(false);
     }
+  };
+
+  const loadVrindaPreset = () => {
+    setKb(VRINDA_PRESET);
+    toast.success("Loaded Vrinda's exact telecalling script preset!");
   };
 
   const updateKb = (key, value) => {
@@ -137,11 +165,11 @@ export const AISettingsPanel = () => {
     <div className="space-y-6">
       <Tabs value={activeSubTab} onValueChange={setActiveSubTab} className="w-full">
         <TabsList className="grid grid-cols-2 md:grid-cols-4 bg-slate-100 p-1 rounded-xl">
+          <TabsTrigger value="knowledge" className="gap-1.5 text-xs font-semibold">
+            <BookOpen className="h-3.5 w-3.5" /> Call Script & Playbook
+          </TabsTrigger>
           <TabsTrigger value="telephony" className="gap-1.5 text-xs font-semibold">
             <PhoneCall className="h-3.5 w-3.5" /> Telephony & API Keys
-          </TabsTrigger>
-          <TabsTrigger value="knowledge" className="gap-1.5 text-xs font-semibold">
-            <BookOpen className="h-3.5 w-3.5" /> Knowledge Base & Strategy
           </TabsTrigger>
           <TabsTrigger value="scoring" className="gap-1.5 text-xs font-semibold">
             <SlidersHorizontal className="h-3.5 w-3.5" /> Lead Scoring Engine
@@ -151,7 +179,323 @@ export const AISettingsPanel = () => {
           </TabsTrigger>
         </TabsList>
 
-        {/* Tab 1: Telephony Credentials */}
+        {/* Tab 1: Knowledge Base & Script Playbook */}
+        <TabsContent value="knowledge" className="mt-5 space-y-6">
+          {!kb ? (
+            <Skel />
+          ) : (
+            <div className="space-y-6">
+              {/* Header Action Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand">
+                    <Bot className="h-4 w-4" /> Telecalling Dialogue Builder
+                  </div>
+                  <h2 className="text-xl font-bold text-slate-900 mt-1">{"Vrinda's"} Outbound Calling Script & Knowledge Flow</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Controls exactly what Vrinda says on the phone, how she qualifies leads, handles questions, and escalates to humans.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={loadVrindaPreset}
+                    className="gap-1.5 border-slate-200 text-slate-700 hover:bg-slate-50 text-xs"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> Reset to {"Vrinda's"} Preset
+                  </Button>
+                  <Button
+                    onClick={saveKnowledgeBase}
+                    disabled={savingKb}
+                    className="gap-2 bg-brand hover:bg-brand-dark text-white text-xs px-4"
+                  >
+                    {savingKb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    Save Script & Playbook
+                  </Button>
+                </div>
+              </div>
+
+              {/* Visual Flow Indicator */}
+              <div className="rounded-xl border border-brand/20 bg-brand/5 p-4">
+                <div className="text-xs font-semibold text-brand-dark mb-2 flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5" /> Live Conversation Roadmap
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-xs">
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <span className="font-bold text-brand block mb-1">1. Opening Hook</span>
+                    Greeting & check if planning property in Gurgaon.
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <span className="font-bold text-rose-600 block mb-1">2. Exit if "No"</span>
+                    Ends politely: "Thank you for your time, have a nice day!"
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <span className="font-bold text-emerald-600 block mb-1">3. If "Yes": Purpose</span>
+                    Personal use vs. Investment purpose.
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <span className="font-bold text-sky-600 block mb-1">4. Budget & Location</span>
+                    BHK config, Dwarka Exp advice, & top builder portfolio.
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs">
+                    <span className="font-bold text-purple-600 block mb-1">5. Confirm & Repeat</span>
+                    Repeats requirement, notes key points, & scores lead.
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 1: Persona & Identity */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                  <Bot className="h-4 w-4 text-brand" />
+                  <h3 className="text-base font-semibold text-slate-900">1. Agent Persona & Identity</h3>
+                </div>
+                <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">Agent Name Spoken</Label>
+                    <Input
+                      value={kb.agent_name || ""}
+                      onChange={(e) => updateKb("agent_name", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="Vrinda"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">Company Name</Label>
+                    <Input
+                      value={kb.company_name || ""}
+                      onChange={(e) => updateKb("company_name", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="Unique Prime Reality"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">Target Market & Region</Label>
+                    <Input
+                      value={kb.market || ""}
+                      onChange={(e) => updateKb("market", e.target.value)}
+                      className="mt-1 text-sm"
+                      placeholder="Gurgaon, Haryana"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <Label className="text-xs font-medium text-slate-700 flex items-center justify-between">
+                      <span>Response if Customer asks: "Are you an AI agent? / Kya aap AI ho?"</span>
+                      <Badge variant="outline" className="text-[10px] text-brand border-brand/30">AI Transparency Rule</Badge>
+                    </Label>
+                    <Input
+                      value={kb.ai_disclosure_answer || ""}
+                      onChange={(e) => updateKb("ai_disclosure_answer", e.target.value)}
+                      className="mt-1 text-sm bg-slate-50 font-medium text-slate-800"
+                      placeholder="Yes, I am an AI assistant and I am noting your requirement..."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 2: Opening Hook & Drop-Off Rule */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <PhoneCall className="h-4 w-4 text-brand" />
+                    <h3 className="text-base font-semibold text-slate-900">2. Opening Hook & Graceful Exit</h3>
+                  </div>
+                  <span className="text-xs text-slate-400">First 10 seconds of call</span>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Initial Greeting & Opening Hook (Supports <code className="text-brand font-bold">{"{name}"}</code> variable)
+                    </Label>
+                    <Textarea
+                      rows={2}
+                      value={kb.custom_greeting || ""}
+                      onChange={(e) => updateKb("custom_greeting", e.target.value)}
+                      className="mt-1 text-sm font-mono text-slate-800"
+                      placeholder="Hello {name} ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se..."
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Spoken immediately when customer answers. If lead name is "Rahul", it automatically says "Hello Rahul ji...".
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-rose-700 flex items-center gap-1">
+                      <span>If Customer replies "NO" / Not Interested (Graceful Exit):</span>
+                      <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-[10px]">Auto Disconnect</Badge>
+                    </Label>
+                    <Input
+                      value={kb.gate_no_response || ""}
+                      onChange={(e) => updateKb("gate_no_response", e.target.value)}
+                      className="mt-1 text-sm border-rose-200 bg-rose-50/40 text-rose-900 font-medium"
+                      placeholder="Thank you for your time, have a nice day!"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 3: Qualification Flow (If YES) */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-brand" />
+                    <h3 className="text-base font-semibold text-slate-900">3. Lead Qualification Sequence (If YES)</h3>
+                  </div>
+                  <span className="text-xs text-slate-400">Step-by-step buyer qualification</span>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Step A: Purpose Question (Personal Use vs. Investment)
+                    </Label>
+                    <Textarea
+                      rows={2}
+                      value={kb.purpose_question || ""}
+                      onChange={(e) => updateKb("purpose_question", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="Sir aapki requirement ko better understand karne ke liye kya main jaan sakti hu..."
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Step B: Budget & Configuration Plan Question
+                    </Label>
+                    <Textarea
+                      rows={2}
+                      value={kb.budget_config_question || ""}
+                      onChange={(e) => updateKb("budget_config_question", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain..."
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Step C: Preferred Location Question
+                    </Label>
+                    <Input
+                      value={kb.location_question || ""}
+                      onChange={(e) => updateKb("location_question", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="Is there any specific preferred location in mind?"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 4: Dynamic Market Advice & Builder Network */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-brand" />
+                    <h3 className="text-base font-semibold text-slate-900">4. Market Advice & Builder Network</h3>
+                  </div>
+                  <span className="text-xs text-slate-400">Objection handling & recommendations</span>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Response when customer asks: "Best kya hai abhi?" (Consultant Advice)
+                    </Label>
+                    <Textarea
+                      rows={2}
+                      value={kb.best_now_answer || ""}
+                      onChange={(e) => updateKb("best_now_answer", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="We have different projects and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now."
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Reputed Builders Portfolio (When customer asks for options or builder names)
+                    </Label>
+                    <Textarea
+                      rows={2}
+                      value={kb.builders_options || ""}
+                      onChange={(e) => updateKb("builders_options", e.target.value)}
+                      className="mt-1 text-sm font-medium"
+                      placeholder="We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 5: Summary, Confirmation & Human Escalation */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <PhoneForwarded className="h-4 w-4 text-brand" />
+                    <h3 className="text-base font-semibold text-slate-900">5. Closing Confirmation & Human Transfer</h3>
+                  </div>
+                  <span className="text-xs text-slate-400">Wrap-up & live handoff</span>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Final Requirement Confirmation Template (Repeated back before ending)
+                    </Label>
+                    <Input
+                      value={kb.final_summary_template || ""}
+                      onChange={(e) => updateKb("final_summary_template", e.target.value)}
+                      className="mt-1 text-sm font-mono text-slate-800"
+                      placeholder="I have noted that you are looking for a residential 2 BHK configured property in Manesar Corridor under 3 Cr."
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Vrinda repeats this back, says "Noted", and tells the customer her team will share the best properties at the earliest.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <Label className="text-xs font-medium text-slate-700">Human Escalation Target Phone Number</Label>
+                      <Input
+                        value={kb.transfer_number || ""}
+                        onChange={(e) => updateKb("transfer_number", e.target.value)}
+                        className="mt-1 text-sm font-mono"
+                        placeholder="7351735035"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium text-slate-700">Senior Consultant Name</Label>
+                      <Input
+                        value={kb.transfer_target_name || ""}
+                        onChange={(e) => updateKb("transfer_target_name", e.target.value)}
+                        className="mt-1 text-sm"
+                        placeholder="Vrinda Aggarwal"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-xs font-medium text-slate-700">
+                      Response when customer asks: "Transfer my call to a human / manager se baat karao"
+                    </Label>
+                    <Input
+                      value={kb.transfer_phrase || ""}
+                      onChange={(e) => updateKb("transfer_phrase", e.target.value)}
+                      className="mt-1 text-sm"
+                      placeholder="Sure, let me connect you directly to our senior consultant right away. Please stay on the line."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Action */}
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={saveKnowledgeBase}
+                  disabled={savingKb}
+                  className="gap-2 bg-brand px-6 py-2.5 hover:bg-brand-dark text-white"
+                >
+                  {savingKb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  Save {"Vrinda's"} Script & Playbook
+                </Button>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Tab 2: Telephony Credentials */}
         <TabsContent value="telephony" className="mt-5 space-y-5">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
@@ -178,8 +522,8 @@ export const AISettingsPanel = () => {
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <div className="sm:col-span-2">
-                <Label className="text-xs font-medium text-slate-700">LiveKit Cloud WebSocket URL *</Label>
+              <div>
+                <Label className="text-xs font-medium text-slate-700">LiveKit WebSocket URL (Cloud)</Label>
                 <Input
                   placeholder="wss://your-project.livekit.cloud"
                   value={telephony.livekit_url}
@@ -189,10 +533,20 @@ export const AISettingsPanel = () => {
               </div>
 
               <div>
+                <Label className="text-xs font-medium text-slate-700">LiveKit Agent Name</Label>
+                <Input
+                  placeholder="upr-calling-agent"
+                  value={telephony.livekit_agent_name}
+                  onChange={(e) => setTelephony({ ...telephony, livekit_agent_name: e.target.value })}
+                  className="mt-1 font-mono text-xs"
+                />
+              </div>
+
+              <div>
                 <Label className="text-xs font-medium text-slate-700">LiveKit API Key</Label>
                 <Input
                   type="password"
-                  placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API key..."}
+                  placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key..."}
                   value={telephony.livekit_api_key}
                   onChange={(e) => setTelephony({ ...telephony, livekit_api_key: e.target.value })}
                   className="mt-1 font-mono text-xs"
@@ -203,7 +557,7 @@ export const AISettingsPanel = () => {
                 <Label className="text-xs font-medium text-slate-700">LiveKit API Secret</Label>
                 <Input
                   type="password"
-                  placeholder={telephonyStatus?.has_livekit_secret ? "•••••••••••• (Configured)" : "API secret..."}
+                  placeholder={telephonyStatus?.has_livekit_secret ? "•••••••••••• (Configured)" : "API Secret..."}
                   value={telephony.livekit_api_secret}
                   onChange={(e) => setTelephony({ ...telephony, livekit_api_secret: e.target.value })}
                   className="mt-1 font-mono text-xs"
@@ -213,19 +567,9 @@ export const AISettingsPanel = () => {
               <div>
                 <Label className="text-xs font-medium text-slate-700">Vobiz Outbound SIP Trunk ID</Label>
                 <Input
-                  placeholder="ST_xxxxxxxxx"
+                  placeholder="ST_xxxxxx from LiveKit SIP Trunk"
                   value={telephony.vobiz_sip_trunk_id}
                   onChange={(e) => setTelephony({ ...telephony, vobiz_sip_trunk_id: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-medium text-slate-700">LiveKit Agent Worker Name</Label>
-                <Input
-                  placeholder="upr-calling-agent"
-                  value={telephony.livekit_agent_name}
-                  onChange={(e) => setTelephony({ ...telephony, livekit_agent_name: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
               </div>
@@ -285,167 +629,7 @@ export const AISettingsPanel = () => {
           </div>
         </TabsContent>
 
-        {/* Tab 2: Full Knowledge Base & Strategy (Zero Backend Edits!) */}
-        <TabsContent value="knowledge" className="mt-5 space-y-5">
-          {!kb ? (
-            <Skel />
-          ) : (
-            <div className="space-y-6">
-              {/* Identity & Contact */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <Bot className="h-4 w-4 text-brand" />
-                  <h3 className="text-base font-semibold text-slate-900">Identity & Company Facts</h3>
-                </div>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">AI Agent Name *</Label>
-                    <Input value={kb.agent_name || ""} onChange={(e) => updateKb("agent_name", e.target.value)} className="mt-1 text-sm" placeholder="Simran" />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Company Name *</Label>
-                    <Input value={kb.company_name || ""} onChange={(e) => updateKb("company_name", e.target.value)} className="mt-1 text-sm" placeholder="Unique Prime Reality" />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Company Phone</Label>
-                    <Input value={kb.company_phone || ""} onChange={(e) => updateKb("company_phone", e.target.value)} className="mt-1 text-sm" placeholder="+91 7351735035" />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Company Website</Label>
-                    <Input value={kb.company_website || ""} onChange={(e) => updateKb("company_website", e.target.value)} className="mt-1 text-sm" placeholder="https://uniqueprimereality.com" />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <Label className="text-xs font-medium text-slate-700">Company Description</Label>
-                    <Textarea rows={2} value={kb.company_description || ""} onChange={(e) => updateKb("company_description", e.target.value)} className="mt-1 text-sm" placeholder="A premier real estate consultancy selling luxury homes in Gurgaon..." />
-                  </div>
-                </div>
-              </div>
-
-              {/* Market & Business Knowledge */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <Building2 className="h-4 w-4 text-brand" />
-                  <h3 className="text-base font-semibold text-slate-900">Market & Operational Knowledge</h3>
-                </div>
-                <div className="mt-4 space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Target Real Estate Market / Locations</Label>
-                      <Input value={kb.market || ""} onChange={(e) => updateKb("market", e.target.value)} className="mt-1 text-sm" placeholder="Gurgaon (Golf Course Ext, Sector 79, Sohna Road)..." />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Office Hours</Label>
-                      <Input value={kb.office_hours || ""} onChange={(e) => updateKb("office_hours", e.target.value)} className="mt-1 text-sm" placeholder="Monday–Saturday, 10:00 AM–7:00 PM IST" />
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Office Address</Label>
-                    <Input value={kb.address || ""} onChange={(e) => updateKb("address", e.target.value)} className="mt-1 text-sm" placeholder="Gurgaon, Haryana, India" />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Services & Products Offered</Label>
-                    <Textarea rows={2} value={kb.services || ""} onChange={(e) => updateKb("services", e.target.value)} className="mt-1 text-sm" placeholder="Residential apartment sales, luxury builder floors, investment consultation, site visit coordination..." />
-                  </div>
-                </div>
-              </div>
-
-              {/* Strategy & Call Playbook */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <Sparkles className="h-4 w-4 text-brand" />
-                  <h3 className="text-base font-semibold text-slate-900">Call Strategy & Playbook</h3>
-                </div>
-                <div className="mt-4 space-y-4">
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Primary Call Objective *</Label>
-                    <Textarea rows={2} value={kb.call_objective || ""} onChange={(e) => updateKb("call_objective", e.target.value)} className="mt-1 text-sm" placeholder="Qualify buyer requirement (BHK, budget, location, timeline) and book site visits or WhatsApp brochure follow-ups." />
-                  </div>
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Qualification Goals (Information to Gather)</Label>
-                    <Textarea rows={2} value={kb.qualification_goals || ""} onChange={(e) => updateKb("qualification_goals", e.target.value)} className="mt-1 text-sm" placeholder="Confirm customer name, preferred BHK, budget range in Lakhs/Crores, preferred Gurgaon sector, buying timeline." />
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Special Pitch / Offer</Label>
-                      <Textarea rows={2} value={kb.offer || ""} onChange={(e) => updateKb("offer", e.target.value)} className="mt-1 text-sm" placeholder="Exclusive pre-launch pricing on Sector 79 Prime Elmwood Residences, and special payment plans for Skyline Towers." />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Success Criteria</Label>
-                      <Textarea rows={2} value={kb.success_criteria || ""} onChange={(e) => updateKb("success_criteria", e.target.value)} className="mt-1 text-sm" placeholder="Leave the customer with a confirmed site visit, WhatsApp project details, or scheduled senior consultant callback." />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Guardrails, Objections & Human Transfer */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <ShieldAlert className="h-4 w-4 text-brand" />
-                  <h3 className="text-base font-semibold text-slate-900">Behavior, Objections & Safe Handoff</h3>
-                </div>
-                <div className="mt-4 space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Opening Greeting Style</Label>
-                      <Select value={kb.opening_style || "permission"} onValueChange={(v) => updateKb("opening_style", v)}>
-                        <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="permission">Ask Permission First ("Kya aapse 2 minute baat ho sakti hai?")</SelectItem>
-                          <SelectItem value="direct">Direct Introduction ("Main new residential projects ke regarding call kar rahi hoon")</SelectItem>
-                          <SelectItem value="warm">Warm Relationship Opening ("Aapse baat karke bahut khushi hui")</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Voice Tone</Label>
-                      <Input value={kb.tone || ""} onChange={(e) => updateKb("tone", e.target.value)} className="mt-1 text-sm" placeholder="Warm, polite, respectful, and never pushy. Fluent Hinglish." />
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Custom Opening Greeting (Overrides default if set)</Label>
-                    <Input value={kb.custom_greeting || ""} onChange={(e) => updateKb("custom_greeting", e.target.value)} className="mt-1 text-sm" placeholder="Namaste! Main {agentName} bol rahi hoon, {companyName} Gurgaon se..." />
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Objection Handling Playbook</Label>
-                    <Textarea rows={2} value={kb.objection_handling || ""} onChange={(e) => updateKb("objection_handling", e.target.value)} className="mt-1 text-sm" placeholder="Acknowledge concerns respectfully, provide confirmed facts on location/metro/pricing, and offer a WhatsApp brochure or consultant callback if unsure." />
-                  </div>
-
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Human Escalation & Handoff Target</Label>
-                      <Input value={kb.transfer_number || ""} onChange={(e) => updateKb("transfer_number", e.target.value)} className="mt-1 text-sm" placeholder="7351735035" />
-                    </div>
-                    <div>
-                      <Label className="text-xs font-medium text-slate-700">Senior Consultant Name</Label>
-                      <Input value={kb.transfer_target_name || ""} onChange={(e) => updateKb("transfer_target_name", e.target.value)} className="mt-1 text-sm" placeholder="Vranda Aggarwal" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Escalation Trigger Rules</Label>
-                    <Textarea rows={2} value={kb.escalation_rules || ""} onChange={(e) => updateKb("escalation_rules", e.target.value)} className="mt-1 text-sm" placeholder="Offer immediate human transfer to Vranda Aggarwal (+91 7351735035) if customer demands human, asks for legal/bank details, or requests an on-the-spot price commitment." />
-                  </div>
-
-                  <div>
-                    <Label className="text-xs font-medium text-slate-700">Compliance & Boundaries</Label>
-                    <Textarea rows={2} value={kb.compliance_notes || ""} onChange={(e) => updateKb("compliance_notes", e.target.value)} className="mt-1 text-sm" placeholder="Disclose that you are an AI assistant from Unique Prime Reality if asked directly. Never promise guaranteed investment returns." />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <Button onClick={saveKnowledgeBase} disabled={savingKb} className="gap-2 bg-brand px-6 py-2.5 hover:bg-brand-dark">
-                  {savingKb ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  Save AI Knowledge Base & Playbook
-                </Button>
-              </div>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* Tab 3: Lead Scoring Engine (Preserved 100%) */}
+        {/* Tab 3: Lead Scoring Engine */}
         <TabsContent value="scoring" className="mt-5">
           <Section title="Lead scoring engine" icon={SlidersHorizontal} testId="scoring-settings" full>
             {!rules ? <Skel /> : (
@@ -473,7 +657,7 @@ export const AISettingsPanel = () => {
           </Section>
         </TabsContent>
 
-        {/* Tab 4: Project Inventory (Preserved 100%) */}
+        {/* Tab 4: Project Inventory */}
         <TabsContent value="inventory" className="mt-5">
           <Section title="Project inventory (Gurgaon)" icon={Building2} testId="inventory-settings" full>
             {!inventory ? <Skel /> : (
@@ -518,7 +702,7 @@ export const AISettingsPanel = () => {
 };
 
 const Section = ({ title, icon: Icon, children, testId, full }) => (
-  <div className={`rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ${full ? "" : ""}`} data-testid={testId}>
+  <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm" data-testid={testId}>
     <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
       <Icon className="h-4 w-4 text-brand" />
       <h3 className="text-base font-semibold text-slate-900">{title}</h3>
@@ -528,3 +712,4 @@ const Section = ({ title, icon: Icon, children, testId, full }) => (
 );
 
 const Skel = () => <div className="grid h-40 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>;
+export default AISettingsPanel;
