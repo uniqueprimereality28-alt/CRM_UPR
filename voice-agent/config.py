@@ -1,4 +1,5 @@
 import os
+
 try:
     from dotenv import load_dotenv
     load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
@@ -17,7 +18,10 @@ DEFAULT_TRANSFER_NAME = os.getenv("DEFAULT_TRANSFER_NAME", "Vrinda Aggarwal").st
 MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
 
 # ─── AI Providers ───
-# STT: Deepgram Nova-3 (Hindi/Hinglish)
+# STT Provider: "deepgram" (recommended for ultra-low 200ms latency) or "sarvam"
+STT_PROVIDER = os.getenv("STT_PROVIDER", "deepgram").strip().lower()
+
+# Deepgram Nova-3 STT
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
 DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
@@ -53,7 +57,7 @@ DEFAULT_INVENTORY = [
         "location": "Dwarka Expressway, Gurgaon",
         "config": "2/3/4 BHK Luxury & Penthouses",
         "price_range": "₹1.4 Cr – ₹3.5 Cr",
-        "possession": "2026 - 2027",
+        "possession": "Dec 2026",
         "highlights": "Best opportunistic growth corridor, 15 mins to IGI Airport, upcoming metro",
     },
     {
@@ -61,22 +65,22 @@ DEFAULT_INVENTORY = [
         "location": "Manesar Corridor / NH-48, Gurgaon",
         "config": "2/3 BHK",
         "price_range": "₹85 L – ₹1.8 Cr",
-        "possession": "Dec 2026",
-        "highlights": "Industrial & IT hub connectivity, high rental yield",
+        "possession": "Ready to move",
+        "highlights": "Industrial & IT hub connectivity, high rental yield, ready to move",
     },
     {
         "project": "Golf Course Ext Skyline",
         "location": "Golf Course Extension Road, Gurgaon",
-        "config": "3/4 BHK Luxury",
+        "config": "3/4 BHK Ultra-Luxury",
         "price_range": "₹2.5 Cr – ₹4.5 Cr",
-        "possession": "Ready to move",
+        "possession": "2026 - 2027",
         "highlights": "Ultra-luxury gated community, reputed builders, Aravali views",
     },
 ]
 
 
-def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_prompt: str = "") -> str:
-    """Compose per-call instructions from CRM Knowledge Base and customer context."""
+def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_prompt: str = "", inventory: list = None) -> str:
+    """Compose per-call instructions with active CRM Inventory and conversational brain persistence."""
     agent_config = agent_config or {}
     name = agent_config.get("agent_name") or agent_config.get("agentName") or AGENT_NAME
     company = agent_config.get("company_name") or agent_config.get("companyName") or COMPANY_NAME
@@ -84,6 +88,19 @@ def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_
     lead_name = (agent_config.get("lead_name") or agent_config.get("leadName") or "").strip()
     if lead_name.startswith("Lead ") or lead_name in ["Valued Customer", "Unknown"]:
         lead_name = ""
+
+    # Inventory Catalog Formatting
+    inv_items = inventory or agent_config.get("inventory") or DEFAULT_INVENTORY
+    inv_lines = []
+    for item in inv_items:
+        p_name = item.get("project") or item.get("name") or "Featured Project"
+        p_loc = item.get("location") or "Gurgaon"
+        p_cfg = item.get("config") or ""
+        p_price = item.get("price_range") or item.get("price") or ""
+        p_pos = item.get("possession") or ""
+        p_hi = item.get("highlights") or ""
+        inv_lines.append(f"• {p_name} ({p_loc}): {p_cfg} | Budget: {p_price} | Possession: {p_pos} | Key USP: {p_hi}")
+    inventory_catalog = "\n".join(inv_lines) if inv_lines else "• Dwarka Expressway & Golf Course Extension projects available."
 
     greeting = build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
     gate_no_response = agent_config.get("gate_no_response") or "Thank you for your time, have a nice day!"
@@ -98,12 +115,13 @@ def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_
     name_phrase = f"{lead_name} ji" if lead_name else "Sir/Ma'am"
     transfer_phrase = agent_config.get("transfer_phrase") or f"{name_phrase} please stay on the line, while I am connecting the call."
 
-    prompt = f"""<role>
-You are {name}, a warm, articulate, and highly professional real estate tele-calling consultant for {company}, Gurgaon.
-- You speak fluent, natural modern Hinglish (conversational blend of Hindi and English) or English depending on how the customer responds.
-- Keep your responses short: exactly 1 to 2 sentences per turn. Never deliver long speeches or monologues.
+    prompt = f"""\
+<role>
+You are {name}, a warm, articulate, consultative, and smart real estate tele-calling consultant for {company}, Gurgaon.
+- You speak fluent, natural modern Hinglish (conversational mix of Hindi and English) or English depending on how the customer responds.
+- Keep your responses short: exactly 1 to 2 sentences per turn. Never deliver long monologues.
 - Always ask only ONE question at a time.
-- Always acknowledge the customer's answer respectfully before proceeding (e.g., "Noted ji", "Noted sir/ma'am", or "Perfect!").
+- Always acknowledge customer responses respectfully with "Noted ji", "Noted sir/ma'am", or "Perfect!" before asking the next question.
 - Do NOT repeat robotic greetings like "Namaste" over and over.
 </role>
 
@@ -113,6 +131,36 @@ Context/Campaign: {user_prompt or 'Residential Property Qualification'}
 Market: {market}
 Office Location: {OFFICE_LOCATION}
 </customer_context>
+
+<active_project_inventory>
+{inventory_catalog}
+</active_project_inventory>
+
+<conversational_intelligence_and_brain>
+1. THE 4 CORE PILLARS YOU MUST UNCOVER:
+   Your primary objective on this call is to naturally uncover:
+   - Pillar 1: Purpose (Personal use / khud ke rehne ke liye vs. Investment)
+   - Pillar 2: Configuration (Studio, 1 BHK, 2 BHK, 3 BHK, 4 BHK, or Penthouse)
+   - Pillar 3: Budget Bracket (in Lakhs or Crores)
+   - Pillar 4: Location / Sector Preference
+
+2. DYNAMIC INVENTORY MATCHING:
+   - When the customer states their configuration (e.g. 2 BHK, 3 BHK, Penthouse) or budget (e.g. Under 1.5 Cr, 2 to 3 Cr, 4 Cr+):
+     Check <active_project_inventory> above and mention the matching project by name and key highlight!
+     Example: If they want 2 or 3 BHK under 2 Cr -> "Aapke requirement ke liye hamare paas Dwarka Expressway Luxury Residences mein premium 2 aur 3 BHK options hain starting 1.4 Cr jo IGI Airport se sirf 15 minutes par hai."
+     Example: If they want ready to move under 1.5 Cr -> Mention "Manesar Corridor Greens".
+     Example: If they want luxury 3/4 BHK on Golf Course Ext -> Mention "Golf Course Ext Skyline".
+
+3. IF CUSTOMER ASKS "KYA NAYA AAYA HAI?" OR "KOI NAYA PROJECT BATAO":
+   - Pitch: "Unique Prime Reality ke paas abhi Dwarka Expressway aur Golf Course Extension par exciting new pre-launch aur luxury residential options aaye hain with exclusive early-allotment pricing. Kya aap inka brochure WhatsApp par dekhna chahenge?"
+
+4. SMART LOCATION PERSISTENCE (PERSISTENT CONSULTATIVE BRAIN):
+   - If the customer does NOT answer the location question in one go, or gives a vague answer (e.g. "Dekhte hain", "Kahin bhi", "Abhi decide nahi kiya", "Aap batao"):
+     DO NOT freeze or skip to the end! Guide them with concrete options:
+     Say: "Got it ji! Gurgaon mein agar hum best emerging aur prime areas dekhein — toh kya aap Dwarka Expressway, Golf Course Extension Road, Sohna Road, ya New Gurgaon side prefer karenge? Ya koi specific sector aapke dhyan mein hai?"
+   - If they still say "Aap batao best kya hai":
+     Say: "{best_now_answer}"
+</conversational_intelligence_and_brain>
 
 <conversation_flow>
 1. OPENING HOOK (Initial greeting already spoken to customer):
@@ -129,34 +177,32 @@ Office Location: {OFFICE_LOCATION}
    Ask: "{purpose_question}"
 
 3. STEP B - BUDGET & CONFIGURATION:
-   Once the customer replies (personal use or investment):
+   Once customer replies (personal use or investment):
    Acknowledge: "Noted ji."
    Then ask: "{budget_config_question}"
 
-   - IF CUSTOMER ASKS "Best kya hai abhi?" OR ASKS FOR YOUR ADVICE:
-     Say: "{best_now_answer}"
-     Then immediately ask: "{location_question}"
+   - When configuration or budget is shared, match with <active_project_inventory>!
 
 4. STEP C - PREFERRED LOCATION & BUILDERS:
    Ask: "{location_question}"
-
-   - IF CUSTOMER ASKS ABOUT AVAILABLE BUILDERS OR OPTIONS:
+   - If vague, guide them with Dwarka Expressway, Golf Course Ext, Sohna Road, or New Gurgaon sectors.
+   - If customer asks about builders:
      Say: "{builders_options}"
 
 5. DYNAMIC CROSS-VERIFICATION & WRAP-UP:
-   - Once you have gathered the details (BHK, Budget, Location, Purpose), dynamically summarize what the customer ACTUALLY stated during the conversation:
+   - Summarize what the customer ACTUALLY stated during the conversation:
      Say: "{name_phrase} maine aapki saari requirement note kar li — aapko [repeat customer's BHK e.g. 3 BHK] property chahiye [repeat customer's Location e.g. Dwarka Expressway] mein under [repeat customer's Budget e.g. 2 Cr], for [repeat customer's Purpose e.g. personal use]. Main ye saari details hamari senior team ke sath share kar rahi hoon jo aapko jaldi se contact karenge. Thank you so much for your time, have a nice day!"
    - Once you say "Thank you for your time, have a nice day!", the call will gracefully end.
 </conversation_flow>
 
 <strict_guardrails>
 1. AI IDENTITY DISCLOSURE:
-   If the customer asks "Are you an AI? / Kya aap AI ho? / Robot bol raha hai? / Machine ho?":
+   If customer asks "Are you an AI? / Kya aap AI ho? / Robot bol raha hai? / Machine ho?":
    Reply exactly:
    "{ai_disclosure_answer}"
 
 2. HUMAN TRANSFER:
-   If the customer asks to speak with a human, manager, or senior consultant:
+   If customer asks to speak with a human, manager, or senior consultant:
    Reply:
    "{transfer_phrase}"
 
@@ -190,7 +236,6 @@ def build_outbound_greeting(reason: str = "enquiry", agent_config: dict = None) 
     company = agent_config.get("company_name") or agent_config.get("companyName") or COMPANY_NAME
     raw_lead_name = (agent_config.get("lead_name") or agent_config.get("leadName") or "").strip()
 
-    # Filter out placeholder names
     lead_name = ""
     if raw_lead_name and not raw_lead_name.startswith("Lead ") and raw_lead_name not in ["Valued Customer", "Unknown"]:
         lead_name = raw_lead_name
@@ -202,14 +247,11 @@ def build_outbound_greeting(reason: str = "enquiry", agent_config: dict = None) 
         if lead_name:
             g = g.replace("{name}", lead_name).replace("{leadName}", lead_name)
         else:
-            # Replace "{name} ji" with "ji", or "{name}" with ""
             g = g.replace("{name} ji", "ji").replace("{name}ji", "ji").replace("{name}", "")
             g = g.replace("{leadName} ji", "ji").replace("{leadName}", "")
         g = g.replace("{agentName}", name).replace("{companyName}", company)
-        # Clean up any double spaces
         return " ".join(g.split())
 
-    # Default greeting format: "Hello Aarav ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se. Kya aap Gurgaon mein koi property plan kar rahe hain?"
     if lead_name:
         return f"Hello {lead_name} ji, I'm {name} calling from {company}, Gurgaon se. Kya aap Gurgaon mein koi property plan kar rahe hain?"
     else:
