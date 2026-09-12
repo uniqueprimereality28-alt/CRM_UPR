@@ -22,6 +22,7 @@ import { TranscriptDialog } from "../components/ai/TranscriptDialog";
 import { OutboundDialer } from "../components/ai/OutboundDialer";
 import { BulkDialer } from "../components/ai/BulkDialer";
 import { AppointmentsView } from "../components/ai/AppointmentsView";
+import { LiveTest } from "../components/ai/LiveTest";
 
 
 export default function AICalling() {
@@ -76,6 +77,7 @@ export default function AICalling() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="flex h-auto flex-wrap gap-1 bg-slate-100 p-1">
           <TabsTrigger value="overview" data-testid="tab-overview" className="gap-1.5"><Thermometer className="h-3.5 w-3.5" /> Overview</TabsTrigger>
+          <TabsTrigger value="livetest" data-testid="tab-livetest" className="gap-1.5 bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100 font-medium"><Headphones className="h-3.5 w-3.5 text-amber-600" /> Live Test</TabsTrigger>
           <TabsTrigger value="dialer" data-testid="tab-dialer" className="gap-1.5"><Phone className="h-3.5 w-3.5" /> Outbound Dialer</TabsTrigger>
           <TabsTrigger value="bulk" data-testid="tab-bulk" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Bulk Dialer</TabsTrigger>
           <TabsTrigger value="campaigns" data-testid="tab-campaigns" className="gap-1.5"><Megaphone className="h-3.5 w-3.5" /> Campaigns</TabsTrigger>
