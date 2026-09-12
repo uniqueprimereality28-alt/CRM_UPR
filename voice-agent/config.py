@@ -26,7 +26,7 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
 DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
 
-# LLM: Grok (xAI) or Groq (100% Free) / OpenAI fallback
+# LLM: Grok (xAI) or Groq / OpenAI fallback
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
@@ -36,7 +36,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
 # TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
-SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "meera").strip()  # meera, bulbul, amit
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "bulbul").strip()  # meera, bulbul, amit
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()
 
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
