@@ -15,5 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
+ENV PORT=10000
 
-CMD ["python", "agent.py", "start"]
+CMD ["python", "run.py"]
