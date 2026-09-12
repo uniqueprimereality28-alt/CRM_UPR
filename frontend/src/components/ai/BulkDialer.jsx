@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import {
   Users, FileText, Loader2, CheckCircle2, AlertCircle, PhoneCall,
-  Sparkles, Cpu, Mic, RefreshCw, Upload, FileSpreadsheet
+  Sparkles, Cpu, Mic, RefreshCw, Upload, FileSpreadsheet, User
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError } from "../../lib/api";
@@ -14,6 +14,52 @@ import {
 } from "../ui/select";
 import { Badge } from "../ui/badge";
 
+// Helper to extract contacts with both Name and Phone from text lines
+function parseContacts(text) {
+  if (!text) return [];
+  const lines = text.split(/\r?\n/);
+  const contacts = [];
+  const seen = new Set();
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    let name = "";
+    let phone = "";
+
+    // Check if line contains a phone number (10 to 13 digits, optional + or country code)
+    const phoneMatch = line.match(/(?:\+?91[\s-]?)?[6-9]\d{9}/) || line.match(/\+?\d{10,13}/);
+    if (phoneMatch) {
+      phone = phoneMatch[0].replace(/[\s-]/g, "");
+      // Name is the rest of the line without punctuation
+      const remainder = line.replace(phoneMatch[0], "").replace(/^[\t,;|\-–—:\s]+|[\t,;|\-–—:\s]+$/g, "").trim();
+      if (remainder && !/^\d+$/.test(remainder)) {
+        name = remainder;
+      }
+    } else {
+      const parts = line.split(/[\t,;|]+/).map((p) => p.trim()).filter(Boolean);
+      for (const p of parts) {
+        const clean = p.replace(/[^0-9+]/g, "");
+        if (clean.length >= 10 && clean.length <= 13) {
+          phone = clean;
+        } else if (!name && p.length >= 2) {
+          name = p;
+        }
+      }
+    }
+
+    if (phone && phone.length >= 8) {
+      const pKey = phone.replace(/[^0-9]/g, "").slice(-10);
+      if (!seen.has(pKey)) {
+        seen.add(pKey);
+        contacts.push({ name: name || "", phone: phone });
+      }
+    }
+  }
+  return contacts;
+}
+
 export const BulkDialer = ({ onDispatched }) => {
   const [numbersText, setNumbersText] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -24,10 +70,7 @@ export const BulkDialer = ({ onDispatched }) => {
   const [errorMessage, setErrorMessage] = useState("");
   const fileInputRef = useRef(null);
 
-  const parsedNumbers = numbersText
-    .split(/[\n,;]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 8);
+  const parsedContacts = parseContacts(numbersText);
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
@@ -36,36 +79,94 @@ export const BulkDialer = ({ onDispatched }) => {
     const reader = new FileReader();
     reader.onload = (evt) => {
       const text = evt.target.result || "";
-      // Extract phone numbers (look for 10-13 digit sequences or full lines)
-      const lines = text.split(/\r?\n/);
-      const extracted = [];
-      for (const line of lines) {
-        const parts = line.split(/[\t,;]/);
-        for (const part of parts) {
-          const clean = part.trim().replace(/[^0-9+]/g, "");
-          if (clean.length >= 10 && clean.length <= 13) {
-            extracted.push(clean);
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+      if (lines.length === 0) {
+        toast.error("The selected file is empty.");
+        return;
+      }
+
+      // Check for CSV header row
+      const firstLineLower = lines[0].toLowerCase();
+      const hasHeader =
+        firstLineLower.includes("name") ||
+        firstLineLower.includes("phone") ||
+        firstLineLower.includes("mobile") ||
+        firstLineLower.includes("contact");
+
+      let nameCol = -1;
+      let phoneCol = -1;
+
+      if (hasHeader) {
+        const headers = lines[0].split(/[\t,;|]/).map((h) => h.trim().toLowerCase());
+        headers.forEach((h, idx) => {
+          if (phoneCol === -1 && (h.includes("phone") || h.includes("mobile") || h.includes("contact") || h.includes("number"))) {
+            phoneCol = idx;
           }
+          if (nameCol === -1 && (h.includes("name") || h.includes("customer") || h.includes("client") || h.includes("lead"))) {
+            nameCol = idx;
+          }
+        });
+      }
+
+      const dataLines = hasHeader ? lines.slice(1) : lines;
+      const extracted = [];
+
+      for (const line of dataLines) {
+        const parts = line.split(/[\t,;|]/).map((p) => p.trim());
+        if (parts.length === 0 || (parts.length === 1 && !parts[0])) continue;
+
+        let name = "";
+        let phone = "";
+
+        if (nameCol !== -1 && phoneCol !== -1 && parts[phoneCol]) {
+          phone = parts[phoneCol].replace(/[^0-9+]/g, "");
+          name = parts[nameCol] || "";
+        } else {
+          const matched = parseContacts(line);
+          if (matched.length > 0) {
+            extracted.push(matched[0]);
+            continue;
+          }
+        }
+
+        if (phone.length >= 10 && phone.length <= 13) {
+          extracted.push({ name: name.trim(), phone: phone.trim() });
         }
       }
 
       if (extracted.length > 0) {
-        const combined = Array.from(new Set([...(parsedNumbers || []), ...extracted])).join("\n");
-        setNumbersText(combined);
-        toast.success(`Extracted ${extracted.length} phone numbers from ${file.name}!`);
+        // Merge with existing contacts in textarea
+        const existing = parseContacts(numbersText);
+        const seen = new Set();
+        const combined = [];
+
+        for (const c of [...existing, ...extracted]) {
+          const key = c.phone.replace(/[^0-9]/g, "").slice(-10);
+          if (!seen.has(key)) {
+            seen.add(key);
+            combined.push(c);
+          }
+        }
+
+        const formatted = combined
+          .map((c) => (c.name ? `${c.name}, ${c.phone}` : c.phone))
+          .join("\n");
+
+        setNumbersText(formatted);
+        toast.success(`Loaded ${extracted.length} contacts with names from ${file.name}!`);
       } else {
-        toast.error("No valid phone numbers found in file. Please check columns.");
+        toast.error("No valid contacts found in file. Ensure phone numbers have 10-13 digits.");
       }
     };
+
     reader.readAsText(file);
-    // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleBulkDispatch = async (e) => {
     e.preventDefault();
-    if (parsedNumbers.length === 0) {
-      toast.error("Please enter at least one valid phone number");
+    if (parsedContacts.length === 0) {
+      toast.error("Please enter at least one contact with a valid phone number");
       return;
     }
 
@@ -75,7 +176,8 @@ export const BulkDialer = ({ onDispatched }) => {
 
     try {
       const payload = {
-        numbers: parsedNumbers,
+        numbers: parsedContacts.map((c) => c.phone),
+        contacts: parsedContacts,
         prompt: prompt.trim() || undefined,
         model_provider: modelProvider,
         voice: voice,
@@ -87,7 +189,7 @@ export const BulkDialer = ({ onDispatched }) => {
       setStatus("success");
 
       const successCount = resResults.filter((r) => r.status === "dispatched").length;
-      toast.success(`Successfully dispatched ${successCount} of ${resResults.length} calls!`);
+      toast.success(`Successfully dispatched ${successCount} of ${resResults.length} AI calls!`);
       if (onDispatched) onDispatched();
     } catch (err) {
       setStatus("error");
@@ -114,7 +216,7 @@ export const BulkDialer = ({ onDispatched }) => {
           </div>
           <h2 className="brand-font mt-1 text-xl font-bold text-slate-900">Reach Multiple Contacts</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Upload CSV/Excel or paste contacts to dispatch AI telecalls using your knowledge base and playbook.
+            Upload CSV/Excel or paste contacts (with Name & Phone) to dispatch AI telecalls using your knowledge base and playbook.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -135,7 +237,7 @@ export const BulkDialer = ({ onDispatched }) => {
             <Upload className="h-3.5 w-3.5" /> Upload CSV / TXT
           </Button>
           <Badge variant="outline" className="bg-slate-50 text-slate-700">
-            {parsedNumbers.length} {parsedNumbers.length === 1 ? "number" : "numbers"} ready
+            {parsedContacts.length} {parsedContacts.length === 1 ? "contact" : "contacts"} ready
           </Badge>
           {results.length > 0 && (
             <Button variant="ghost" size="sm" onClick={clearForm} className="gap-1 text-xs text-slate-500">
@@ -149,10 +251,10 @@ export const BulkDialer = ({ onDispatched }) => {
         <div>
           <Label className="flex items-center justify-between text-xs font-medium text-slate-700">
             <span className="flex items-center gap-1.5">
-              <Users className="h-3.5 w-3.5 text-slate-500" /> Phone Numbers List *
+              <Users className="h-3.5 w-3.5 text-slate-500" /> Contacts List (Name & Phone) *
             </span>
             <span className="text-[11px] font-normal text-slate-400">
-              One number per line, comma separated, or upload CSV above
+              Format: <code className="text-brand font-semibold">Aarav, 9876543210</code> or just phone number
             </span>
           </Label>
           <Textarea
@@ -160,9 +262,12 @@ export const BulkDialer = ({ onDispatched }) => {
             rows={5}
             value={numbersText}
             onChange={(e) => setNumbersText(e.target.value)}
-            placeholder={"+91 9876543210\n+91 7351735035\n+91 9911223344"}
+            placeholder={"Aarav, +91 9876543210\nRohan, 9811223344\n+91 9911223344"}
             className="mt-2 font-mono text-xs leading-relaxed placeholder:font-mono"
           />
+          <p className="mt-1 text-[11px] text-slate-400">
+            When a name is provided (e.g. <b>Aarav</b>), Vrinda will greet them personally: <i>"Hello Aarav ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se..."</i>
+          </p>
         </div>
 
         <div>
@@ -217,16 +322,16 @@ export const BulkDialer = ({ onDispatched }) => {
         <div className="pt-2">
           <Button
             type="submit"
-            disabled={status === "loading" || parsedNumbers.length === 0}
+            disabled={status === "loading" || parsedContacts.length === 0}
             className="w-full gap-2 bg-brand py-2.5 text-sm font-semibold hover:bg-brand-dark"
           >
             {status === "loading" ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Dispatching {parsedNumbers.length} Calls via LiveKit & Vobiz...
+                <Loader2 className="h-4 w-4 animate-spin" /> Dispatching {parsedContacts.length} Calls via LiveKit & Vobiz...
               </>
             ) : (
               <>
-                <PhoneCall className="h-4 w-4" /> Launch Bulk AI Campaign ({parsedNumbers.length} Numbers)
+                <PhoneCall className="h-4 w-4" /> Launch Bulk AI Campaign ({parsedContacts.length} Contacts)
               </>
             )}
           </Button>
@@ -256,7 +361,11 @@ export const BulkDialer = ({ onDispatched }) => {
                   key={`${res.phoneNumber}-${i}`}
                   className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs"
                 >
-                  <span className="font-mono text-slate-800">{res.phoneNumber}</span>
+                  <div className="flex items-center gap-2">
+                    <User className="h-3.5 w-3.5 text-slate-400" />
+                    <span className="font-medium text-slate-900">{res.name || "Contact"}</span>
+                    <span className="font-mono text-slate-500">({res.phoneNumber})</span>
+                  </div>
                   <div className="flex items-center gap-2">
                     {res.status === "dispatched" ? (
                       <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">
