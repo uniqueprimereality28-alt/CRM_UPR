@@ -136,7 +136,7 @@ DEFAULT_KNOWLEDGE_BASE = {
     "best_now_answer": "We have different projects and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
     "location_question": "Is there any specific preferred location in mind?",
     "builders_options": "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
-    "final_summary_template": "I have noted that you are looking for a residential 2 BHK configured property in Manesar Corridor under 3 Cr.",
+    "final_summary_template": "Maine aapki saari requirement note kar li hai — aapko {config} property chahiye {location} mein under {budget} for {purpose}.",
     "ai_disclosure_answer": "Yes, I am an AI assistant working for Unique Prime reality . and please aap Nishchint rahiye main aapki sari requiremnts note kar rahi hu and i will share it with my team, so they can find you with the best property at the earliest.",
     "transfer_number": "7351735035",
     "transfer_target_name": "Vrinda Aggarwal",
@@ -967,7 +967,9 @@ async def _dispatch_outbound_call(
 ) -> dict:
     cfg = await _get_voice_agent_config()
     lead_id = str(lead["_id"])
-    lead_name = lead.get("name") or "Valued Customer"
+    raw_name = (lead.get("name") or "").strip()
+    spoken_name = raw_name if (raw_name and not raw_name.startswith("Lead ") and raw_name not in ["Valued Customer", "Unknown"]) else ""
+    lead_name = spoken_name or raw_name or "Valued Customer"
     phone = lead.get("phone")
     if not phone:
         raise HTTPException(400, "Lead has no phone number")
@@ -1555,4 +1557,3 @@ async def seed_ai_defaults():
     await db.ai_queue.create_index([("campaign_id", 1), ("status", 1)])
     await db.ai_calls.create_index([("lead_id", 1), ("created_at", -1)])
     await db.ai_appointments.create_index([("created_at", -1)])
-
