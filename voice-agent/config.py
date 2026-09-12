@@ -26,7 +26,7 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
 DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
 
-# LLM: Grok (xAI) or Groq / OpenAI fallback
+# LLM: Grok (xAI) or Groq (100% Free) / OpenAI fallback
 GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
