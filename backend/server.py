@@ -68,6 +68,27 @@ DEFAULT_PWD = os.environ.get("DEFAULT_USER_PASSWORD", "Welcome@123")
 app = FastAPI(title="Unique Prime Reality CRM")
 api = APIRouter(prefix="/api")
 
+@api.get("/ping")
+@app.get("/ping")
+@app.get("/api/ping")
+async def ping_keep_alive():
+    return {"status": "ok", "service": "crm-backend", "alive": True}
+
+@app.on_event("startup")
+async def start_self_keep_alive():
+    async def _self_ping_loop():
+        await asyncio.sleep(60)
+        import httpx
+        target = "https://crm-upr.onrender.com/api/ping"
+        while True:
+            await asyncio.sleep(600)  # Ping every 10 minutes to stay awake
+            try:
+                async with httpx.AsyncClient(timeout=10) as cl:
+                    await cl.get(target)
+            except Exception:
+                pass
+    asyncio.create_task(_self_ping_loop())
+
 
 # ---------------- Mongo helpers ----------------
 def _to_str(v: Any) -> Any:
