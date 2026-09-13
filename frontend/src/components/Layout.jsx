@@ -56,14 +56,17 @@ export const Layout = ({ children }) => {
     navigate("/login");
   };
 
-  const roleLabel = ({
-    superadmin: "Administrator",
-    admin: "Administrator",
-    team_lead: "Team Leader",
-    sales: "Sales Executive",
-    employee: "Employee",
-    hr: "HR",
-  })[user?.role] || user?.role;
+  const isTechnicalHead = user?.role === "superadmin" || (user?.name || "").toLowerCase().includes("vranda") || (user?.name || "").toLowerCase().includes("vrinda");
+  const roleLabel = isTechnicalHead
+    ? "Technical Head"
+    : ({
+        superadmin: "Administrator",
+        admin: "Administrator",
+        team_lead: "Team Leader",
+        sales: "Sales Executive",
+        employee: "Employee",
+        hr: "HR",
+      })[user?.role] || user?.role;
 
   return (
     <div className="flex min-h-screen bg-background">
