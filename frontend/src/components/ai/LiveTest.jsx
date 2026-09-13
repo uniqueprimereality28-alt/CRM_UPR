@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import {
-  Volume2, Play, Square, Loader2, Headphones, Sparkles, RefreshCw
+  Volume2, Play, Square, Loader2, Headphones, Sparkles, AlertCircle, RefreshCw
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -23,6 +23,7 @@ export function LiveTest() {
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
 
+  // Pre-configured script templates
   const scriptTemplates = {
     greeting: `Hello ${customerName || "Aarav"} ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se. Kya aap Gurgaon mein koi property plan kar rahe hain?`,
     purpose: `Sir aapki requirement ko better understand karne ke liye kya main jaan sakti hu yeh property purchase personal use ke liye hai ya investment purpose ke liye hai?`,
@@ -61,8 +62,11 @@ export function LiveTest() {
         { responseType: "blob" }
       );
 
-      const blob = new Blob([res.data], { type: "audio/wav" });
-      const url = URL.createObjectURL(blob);
+      if (!res.data || res.data.size < 50) {
+        throw new Error("Empty audio response received.");
+      }
+
+      const url = URL.createObjectURL(res.data);
       setAudioUrl(url);
 
       if (audioRef.current) {
@@ -84,22 +88,50 @@ export function LiveTest() {
 
       await audio.play();
     } catch (err) {
-      try {
-        if ("speechSynthesis" in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(textToSpeak);
-          utterance.rate = 0.95;
-          utterance.pitch = 1.05;
-          utterance.onstart = () => setPlaying(true);
-          utterance.onend = () => setPlaying(false);
-          utterance.onerror = () => setPlaying(false);
-          window.speechSynthesis.speak(utterance);
-          toast.info("Playing audio via browser preview.");
-        } else {
-          toast.error(apiError(err));
+      let msg = apiError(err);
+      if (err.response && err.response.data instanceof Blob) {
+        try {
+          const errText = await err.response.data.text();
+          const parsed = JSON.parse(errText);
+          if (parsed.detail) msg = parsed.detail;
+        } catch {}
+      }
+
+      if (msg && (msg.includes("Sarvam") || msg.includes("API Key") || msg.includes("not configured"))) {
+        toast.error(msg, { duration: 6000 });
+      } else {
+        // Fallback: Browser Web Speech API with explicit Indian Female voice selection
+        try {
+          if ("speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.rate = 0.92;
+            utterance.pitch = 1.18; // Distinctly female pitch
+
+            const voices = window.speechSynthesis.getVoices() || [];
+            const femaleVoice = voices.find(
+              (v) =>
+                v.name.includes("Female") ||
+                v.name.includes("Zira") ||
+                v.name.includes("Kalpana") ||
+                v.name.includes("Heera") ||
+                v.name.includes("India") ||
+                v.lang.startsWith("hi") ||
+                v.lang === "en-IN"
+            );
+            if (femaleVoice) utterance.voice = femaleVoice;
+
+            utterance.onstart = () => setPlaying(true);
+            utterance.onend = () => setPlaying(false);
+            utterance.onerror = () => setPlaying(false);
+            window.speechSynthesis.speak(utterance);
+            toast.info("Browser voice fallback (Enter Sarvam API Key in Settings to hear Bulbul).");
+          } else {
+            toast.error(msg || "Could not synthesize audio.");
+          }
+        } catch {
+          toast.error(msg || "Could not synthesize audio.");
         }
-      } catch {
-        toast.error(apiError(err));
       }
     } finally {
       setLoading(false);
@@ -108,13 +140,14 @@ export function LiveTest() {
 
   return (
     <div className="space-y-6" data-testid="live-test-studio">
+      {/* Header Banner */}
       <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-amber-50/30 p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand">
-              <Headphones className="h-4 w-4" /> Speech &amp; Pronunciation Studio
+              <Headphones className="h-4 w-4" /> Speech & Pronunciation Studio
             </div>
-            <h2 className="brand-font mt-1 text-2xl font-bold text-slate-900">Voice &amp; Speech Quality Tester</h2>
+            <h2 className="brand-font mt-1 text-2xl font-bold text-slate-900">Voice & Speech Quality Tester</h2>
             <p className="mt-1 text-xs text-slate-600 max-w-2xl">
               Verify how Vrinda speaks, test Indian accents, check project inventory pitches, and tune pronunciation before dispatching live calls to customers.
             </p>
@@ -130,11 +163,12 @@ export function LiveTest() {
         </div>
       </div>
 
+      {/* Main Pronunciation Card */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6 max-w-4xl mx-auto">
         <div className="border-b border-slate-100 pb-4 flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand">
-              <Volume2 className="h-3.5 w-3.5" /> Speech &amp; Pronunciation Tester
+              <Volume2 className="h-3.5 w-3.5" /> Speech & Pronunciation Tester
             </div>
             <h3 className="brand-font text-lg font-bold text-slate-900 mt-1">Hear Vrinda Speak Any Script</h3>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -246,7 +280,7 @@ export function LiveTest() {
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 fill-current" /> Play Speech &amp; Pronunciation
+                <Play className="h-4 w-4 fill-current" /> Play Speech & Pronunciation
               </>
             )}
           </Button>
