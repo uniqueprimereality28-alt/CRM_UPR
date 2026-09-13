@@ -32,6 +32,12 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 
 # --- NEW IMPORT for PDF report generation ---
 from reports_pdf import generate_daily_report_pdf, generate_period_report_pdf
+from attendance_export import (
+    mask_role,
+    build_attendance_report_data,
+    generate_attendance_excel_bytes,
+    generate_attendance_pdf_bytes,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("crm")
@@ -475,6 +481,8 @@ async def get_current_user(request: Request) -> dict:
         header = request.headers.get("Authorization", "")
         if header.startswith("Bearer "):
             token = header[7:]
+    if not token:
+        token = request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
@@ -2111,7 +2119,7 @@ async def attendance_today(user: dict = Depends(get_current_user)):
             "user_id": str(u["_id"]),
             "user_name": u.get("name"),
             "username": u.get("username"),
-            "role": u.get("role"),
+            "role": mask_role(u.get("name"), u.get("role")),
             "team_lead_name": u.get("team_lead_name"),
             "wfh": bool(u.get("wfh")),
             "avatar_url": u.get("avatar_url"),
@@ -2283,7 +2291,7 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
         worked = sum(r.get("worked_seconds", 0) for r in user_rows)
         per_user.append({
             "user_id": uid, "name": u.get("name"), "username": u.get("username"),
-            "role": u.get("role"), "team_lead_name": u.get("team_lead_name"),
+            "role": mask_role(u.get("name"), u.get("role")), "team_lead_name": u.get("team_lead_name"),
             "present_days": present, "absent_days": absent, "late_days": late_days,
             "overtime_seconds": overtime, "late_seconds": late, "worked_seconds": worked,
         })
@@ -2302,6 +2310,144 @@ async def attendance_stats(actor: dict = Depends(get_current_user), period: str 
         "top_late": top_late,
         "on_time_count": len(on_time),
     }
+
+
+
+
+async def _get_attendance_report(actor: dict, month: Optional[str] = None,
+                                 start_date: Optional[str] = None,
+                                 end_date: Optional[str] = None,
+                                 user_id: str = "all") -> dict:
+    import calendar
+    today = ist_now().date()
+    if month:
+        try:
+            y, m = map(int, month.split("-"))
+            last_day = calendar.monthrange(y, m)[1]
+            start_str = f"{y:04d}-{m:02d}-01"
+            end_str = f"{y:04d}-{m:02d}-{last_day:02d}"
+        except Exception:
+            start_str = f"{today.year:04d}-{today.month:02d}-01"
+            end_str = today.isoformat()
+    elif start_date and end_date:
+        start_str = start_date
+        end_str = end_date
+    else:
+        start_str = f"{today.year:04d}-{today.month:02d}-01"
+        end_str = today.isoformat()
+
+    if can_view_all(actor):
+        users = await db.users.find({"active": True, "attendance_exempt": {"$ne": True}}).to_list(2000)
+    elif actor.get("role") == ROLE_TL:
+        ids = await _team_member_ids(actor)
+        users = await db.users.find({"_id": {"$in": [ObjectId(i) for i in ids]},
+                                     "active": True, "attendance_exempt": {"$ne": True}}).to_list(500)
+    else:
+        users = [actor]
+
+    user_ids = [str(u["_id"]) for u in users]
+    q = {"date": {"$gte": start_str, "$lte": end_str}}
+    if user_id and user_id != "all":
+        q["user_id"] = user_id
+    else:
+        q["user_id"] = {"$in": user_ids}
+
+    records = await db.attendance.find(q).to_list(10000)
+    for r in records:
+        r["_id"] = str(r["_id"])
+
+    # Fallback to local backup if database has 0 records for requested range
+    if not records:
+        try:
+            import json
+            backup_path = Path(__file__).resolve().parent.parent / "backups" / "latest" / "attendance.json"
+            if backup_path.exists():
+                with open(backup_path, "r", encoding="utf-8") as bf:
+                    b_recs = json.load(bf)
+                records = [r for r in b_recs if start_str <= r.get("date", "") <= end_str]
+                if user_id and user_id != "all":
+                    records = [r for r in records if str(r.get("user_id")) == user_id]
+        except Exception as e:
+            logger.warning(f"Could not load backup attendance fallback: {e}")
+
+    return build_attendance_report_data(
+        attendance_records=records,
+        users=users,
+        start_date_str=start_str,
+        end_date_str=end_str,
+        target_user_id=user_id if user_id != "all" else None,
+    )
+
+
+@api.get("/attendance/report/preview")
+async def attendance_report_preview(month: Optional[str] = None,
+                                    start_date: Optional[str] = None,
+                                    end_date: Optional[str] = None,
+                                    user_id: str = "all",
+                                    actor: dict = Depends(get_current_user)):
+    if not (can_view_all(actor) or actor.get("role") == ROLE_TL):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    report_data = await _get_attendance_report(actor, month, start_date, end_date, user_id)
+    return {
+        "period_label": report_data["period_label"],
+        "start_date": report_data["start_date"],
+        "end_date": report_data["end_date"],
+        "total_tracked": report_data["total_tracked"],
+        "summary_rows": report_data["summary_rows"],
+        "totals": report_data["totals"],
+        "emp_details": report_data.get("emp_details", {}) if user_id != "all" else {},
+        "is_single_user": report_data["is_single_user"],
+    }
+
+
+@api.get("/attendance/export/excel")
+async def export_attendance_excel(month: Optional[str] = None,
+                                  start_date: Optional[str] = None,
+                                  end_date: Optional[str] = None,
+                                  user_id: str = "all",
+                                  actor: dict = Depends(get_current_user)):
+    if not (can_view_all(actor) or actor.get("role") == ROLE_TL):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    report_data = await _get_attendance_report(actor, month, start_date, end_date, user_id)
+    excel_bytes = generate_attendance_excel_bytes(report_data)
+
+    clean_period = report_data["period_label"].replace(" ", "_")
+    if user_id != "all" and report_data.get("summary_rows"):
+        user_clean = report_data["summary_rows"][0]["name"].replace(" ", "_")
+        filename = f"UPR_Attendance_{user_clean}_{clean_period}.xlsx"
+    else:
+        filename = f"UPR_Attendance_{clean_period}.xlsx"
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.get("/attendance/export/pdf")
+async def export_attendance_pdf(month: Optional[str] = None,
+                                start_date: Optional[str] = None,
+                                end_date: Optional[str] = None,
+                                user_id: str = "all",
+                                actor: dict = Depends(get_current_user)):
+    if not (can_view_all(actor) or actor.get("role") == ROLE_TL):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    report_data = await _get_attendance_report(actor, month, start_date, end_date, user_id)
+    pdf_bytes = generate_attendance_pdf_bytes(report_data)
+
+    clean_period = report_data["period_label"].replace(" ", "_")
+    if user_id != "all" and report_data.get("summary_rows"):
+        user_clean = report_data["summary_rows"][0]["name"].replace(" ", "_")
+        filename = f"UPR_Attendance_{user_clean}_{clean_period}.pdf"
+    else:
+        filename = f"UPR_Attendance_{clean_period}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------- Team chat / groups / direct messages ----------------
