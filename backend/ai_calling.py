@@ -132,7 +132,7 @@ DEFAULT_KNOWLEDGE_BASE = {
     "custom_greeting": "Hello {name} ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se. Kya aap Gurgaon mein koi property plan kar rahe hain?",
     "gate_no_response": "Thank you for your time, have a nice day!",
     "purpose_question": "Sir aapki requirement ko better understand karne ke liye kya main jaan sakti hu yeh property purchase personal use ke liye hai ya investment purpose ke liye hai?",
-    "budget_config_question": "Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain like studio apartment, 1 BHK, 2 BHK, 3 BHK, 4 BHK, or penthouse?",
+    "budget_config_question": "Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain like studio apartment, one BHK, two BHK, three BHK, four BHK, or penthouse?",
     "best_now_answer": "We have different projects and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
     "location_question": "Is there any specific preferred location in mind?",
     "builders_options": "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
@@ -1351,28 +1351,36 @@ async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
     cfg = await _get_voice_agent_config()
     sarvam_key = cfg.get("sarvam_api_key") or os.getenv("SARVAM_API_KEY", "").strip()
 
-    if sarvam_key:
-        import httpx
-        url = "https://api.sarvam.ai/text-to-speech"
-        headers = {"api-subscription-key": sarvam_key, "Content-Type": "application/json"}
-        body = {
-            "inputs": [payload.text[:500]],
-            "target_language_code": payload.language or "hi-IN",
-            "speaker": payload.speaker or "bulbul",
-            "model": "bulbul:v1",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                res = await client.post(url, headers=headers, json=body)
-                if res.status_code == 200:
-                    data = res.json()
-                    audios = data.get("audios") or []
-                    if audios:
-                        return {"audio_base64": audios[0], "format": "wav", "provider": "sarvam"}
-        except Exception as e:
-            logger.warning(f"Sarvam TTS test failed: {e}")
+    if not sarvam_key:
+        raise HTTPException(400, "Sarvam API Key is not configured yet. Please add your Sarvam API Key in Settings to hear Bulbul's voice.")
 
-    return {"text": payload.text, "use_browser_speech": True, "provider": "browser"}
+    import httpx
+    import base64
+    from fastapi.responses import Response
+
+    url = "https://api.sarvam.ai/text-to-speech"
+    headers = {"api-subscription-key": sarvam_key, "Content-Type": "application/json"}
+    body = {
+        "inputs": [payload.text[:500]],
+        "target_language_code": payload.language or "hi-IN",
+        "speaker": payload.speaker or "bulbul",
+        "model": "bulbul:v1",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            res = await client.post(url, headers=headers, json=body)
+            if res.status_code == 200:
+                data = res.json()
+                audios = data.get("audios") or []
+                if audios:
+                    audio_bytes = base64.b64decode(audios[0])
+                    return Response(content=audio_bytes, media_type="audio/wav")
+            raise HTTPException(res.status_code, f"Sarvam API error ({res.status_code}): {res.text[:200]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Sarvam TTS test failed: {e}")
+        raise HTTPException(502, f"Failed to connect to Sarvam AI: {e}")
 
 
 @ai_router.post("/followups/auto-dial-due")
@@ -1628,3 +1636,4 @@ async def seed_ai_defaults():
     await db.ai_queue.create_index([("campaign_id", 1), ("status", 1)])
     await db.ai_calls.create_index([("lead_id", 1), ("created_at", -1)])
     await db.ai_appointments.create_index([("created_at", -1)])
+
