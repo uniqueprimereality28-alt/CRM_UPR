@@ -77,6 +77,7 @@ LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "").strip()
 LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "").strip()
 LIVEKIT_AGENT_NAME_ENV = os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
 VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "").strip()
+GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "").strip()
 GROK_API_KEY_ENV = os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY", "").strip()
 SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "").strip()
 DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "").strip()
@@ -287,7 +288,7 @@ class BulkDispatchIn(BaseModel):
     numbers: Optional[List[str]] = None
     contacts: Optional[List[dict]] = None
     prompt: Optional[str] = ""
-    model_provider: Optional[str] = "grok"
+    model_provider: Optional[str] = "groq"
     voice: Optional[str] = "sarvam-bulbul"
     campaign_name: Optional[str] = "Direct Bulk Dispatch"
 
@@ -843,7 +844,7 @@ async def run_single(payload: CallRunIn, user: dict = Depends(require_admin)):
 # REAL VOICE CALLING — talks to the separate voice-agent microservice
 # ================================================================
 # ================================================================
-# REAL VOICE CALLING — LiveKit + Vobiz SIP + Grok + Sarvam AI
+# REAL VOICE CALLING — LiveKit + Vobiz SIP + Groq + Sarvam AI
 # ================================================================
 class RealCallTriggerIn(BaseModel):
     lead_id: Optional[str] = None
@@ -852,7 +853,7 @@ class RealCallTriggerIn(BaseModel):
     prompt: Optional[str] = None
     campaign_id: Optional[str] = None
     agent_id: Optional[str] = None
-    model_provider: Optional[str] = "grok"
+    model_provider: Optional[str] = "groq"
     voice: Optional[str] = "sarvam-bulbul"
 
 
@@ -891,6 +892,7 @@ async def _get_voice_agent_config() -> dict:
         "vobiz_sip_trunk_id": doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "",
         "voice_agent_url": (doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
         "voice_agent_shared_secret": doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "",
+        "groq_api_key": doc.get("groq_api_key") or GROQ_API_KEY_ENV or "",
         "grok_api_key": doc.get("grok_api_key") or GROK_API_KEY_ENV or "",
         "sarvam_api_key": doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "",
         "deepgram_api_key": doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "",
@@ -916,6 +918,7 @@ class VoiceAgentSettingsIn(BaseModel):
     vobiz_sip_trunk_id: Optional[str] = None
     voice_agent_url: Optional[str] = None
     voice_agent_shared_secret: Optional[str] = None
+    groq_api_key: Optional[str] = None
     grok_api_key: Optional[str] = None
     sarvam_api_key: Optional[str] = None
     deepgram_api_key: Optional[str] = None
@@ -936,6 +939,7 @@ async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
         "has_livekit_key": bool(cfg.get("livekit_api_key")),
         "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
         "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
+        "has_groq_key": bool(cfg.get("groq_api_key") or cfg.get("grok_api_key")),
         "has_grok_key": bool(cfg.get("grok_api_key")),
         "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
         "has_deepgram_key": bool(cfg.get("deepgram_api_key")),
@@ -962,7 +966,7 @@ async def _dispatch_outbound_call(
     inventory: list,
     campaign_id: Optional[str] = None,
     user_prompt: str = "",
-    model_provider: str = "grok",
+    model_provider: str = "groq",
     voice: str = "sarvam-bulbul",
 ) -> dict:
     cfg = await _get_voice_agent_config()
@@ -1154,7 +1158,7 @@ async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(req
         inventory=inventory,
         campaign_id=payload.campaign_id,
         user_prompt=payload.prompt or "",
-        model_provider=payload.model_provider or "grok",
+        model_provider=payload.model_provider or "groq",
         voice=payload.voice or "sarvam-bulbul",
     )
 
@@ -1583,7 +1587,7 @@ async def bulk_dispatch_calls(payload: BulkDispatchIn, user: dict = Depends(requ
                 inventory=inventory,
                 campaign_id=None,
                 user_prompt=payload.prompt or "",
-                model_provider=payload.model_provider or "grok",
+                model_provider=payload.model_provider or "groq",
                 voice=payload.voice or "sarvam-bulbul",
             )
 
