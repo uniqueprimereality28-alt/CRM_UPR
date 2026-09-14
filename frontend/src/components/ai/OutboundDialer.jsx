@@ -20,7 +20,7 @@ export const OutboundDialer = ({ onCallDispatched }) => {
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [modelProvider, setModelProvider] = useState("groq");
-  const [voice, setVoice] = useState("sarvam-anushka");
+  const [voice, setVoice] = useState("sarvam-simran");
   const [status, setStatus] = useState("idle"); // idle | dispatching | success | error
   const [statusMessage, setStatusMessage] = useState("");
   const [recentLeads, setRecentLeads] = useState([]);
@@ -210,10 +210,11 @@ export const OutboundDialer = ({ onCallDispatched }) => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="sarvam-anushka">Sarvam AI · Anushka (Indian Female - Natural)</SelectItem>
-                <SelectItem value="sarvam-priya">Sarvam AI · Priya (Indian Female - Warm)</SelectItem>
-                <SelectItem value="sarvam-neha">Sarvam AI · Neha (Indian Female - Expressive)</SelectItem>
+                <SelectItem value="sarvam-simran">Sarvam AI · Simran (Indian Female - Natural Telecaller)</SelectItem>
+                <SelectItem value="sarvam-priya">Sarvam AI · Priya (Indian Female - Warm & Engaging)</SelectItem>
+                <SelectItem value="sarvam-kavya">Sarvam AI · Kavya (Indian Female - Expressive)</SelectItem>
                 <SelectItem value="sarvam-aditya">Sarvam AI · Aditya (Indian Male - Professional)</SelectItem>
+                <SelectItem value="sarvam-amit">Sarvam AI · Amit (Indian Male - Confident)</SelectItem>
                 <SelectItem value="aura-2-thalia-en">Deepgram Aura · Thalia (English)</SelectItem>
               </SelectContent>
             </Select>
