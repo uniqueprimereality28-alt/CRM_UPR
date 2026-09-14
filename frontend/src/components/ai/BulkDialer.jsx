@@ -64,7 +64,7 @@ export const BulkDialer = ({ onDispatched }) => {
   const [numbersText, setNumbersText] = useState("");
   const [prompt, setPrompt] = useState("");
   const [modelProvider, setModelProvider] = useState("groq");
-  const [voice, setVoice] = useState("sarvam-bulbul");
+  const [voice, setVoice] = useState("sarvam-anushka");
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [results, setResults] = useState([]);
   const [errorMessage, setErrorMessage] = useState("");
@@ -310,9 +310,9 @@ export const BulkDialer = ({ onDispatched }) => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="sarvam-meera">Sarvam AI · Meera (Hindi/Hinglish Natural)</SelectItem>
-                <SelectItem value="sarvam-bulbul">Sarvam AI · Bulbul (Conversational)</SelectItem>
-                <SelectItem value="sarvam-amit">Sarvam AI · Amit (Male Professional)</SelectItem>
+                <SelectItem value="sarvam-anushka">Sarvam AI · Anushka (Natural Real Estate Voice)</SelectItem>
+                <SelectItem value="sarvam-priya">Sarvam AI · Priya (Conversational Female)</SelectItem>
+                <SelectItem value="sarvam-aditya">Sarvam AI · Aditya (Male Professional)</SelectItem>
                 <SelectItem value="deepgram-aura">Deepgram · Aura (English)</SelectItem>
               </SelectContent>
             </Select>
