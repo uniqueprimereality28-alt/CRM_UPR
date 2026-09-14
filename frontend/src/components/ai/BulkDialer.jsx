@@ -63,7 +63,7 @@ function parseContacts(text) {
 export const BulkDialer = ({ onDispatched }) => {
   const [numbersText, setNumbersText] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [modelProvider, setModelProvider] = useState("grok");
+  const [modelProvider, setModelProvider] = useState("groq");
   const [voice, setVoice] = useState("sarvam-bulbul");
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [results, setResults] = useState([]);
@@ -294,9 +294,9 @@ export const BulkDialer = ({ onDispatched }) => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="grok">Grok (xAI) · Ultra-Fast Reasoning</SelectItem>
-                <SelectItem value="openai">OpenAI · GPT-4o Realtime</SelectItem>
-                <SelectItem value="groq">Groq · Llama 3.3 (High Speed)</SelectItem>
+                <SelectItem value="groq">Groq · Llama 3.3 70B (Ultra-Fast &lt;200ms)</SelectItem>
+                <SelectItem value="openai">OpenAI · GPT-4o mini</SelectItem>
+                <SelectItem value="grok">Grok (xAI) · Grok 2</SelectItem>
               </SelectContent>
             </Select>
           </div>
