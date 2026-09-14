@@ -1392,7 +1392,7 @@ async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
         "inputs": [payload.text[:500]],
         "target_language_code": payload.language or "hi-IN",
         "speaker": selected_speaker,
-        "model": "bulbul:v2",
+        "model": "bulbul:v3",
     }
     try:
         async with httpx.AsyncClient(timeout=20) as client:
