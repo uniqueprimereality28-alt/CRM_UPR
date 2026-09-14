@@ -1,6 +1,6 @@
 """
 Unique Prime Reality - AI Outbound Calling Agent (Vrinda)
-Powered by LiveKit + Vobiz SIP + Deepgram STT + Grok LLM + Sarvam AI TTS
+Powered by LiveKit + Vobiz SIP + Deepgram STT + Groq LLM + Sarvam AI TTS
 """
 
 import asyncio
@@ -64,7 +64,7 @@ def normalize_e164(phone: str) -> str:
 # ─── CRM Sync & Structured Key-Points Extraction ───
 
 async def extract_call_signals_with_llm(transcript: str) -> dict:
-    """Use Grok / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
+    """Use Groq / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
     fallback_result = {
         "summary": "Call completed with customer.",
         "disposition": "connected",
@@ -112,9 +112,9 @@ Extract the following information in pure JSON format with no markdown wrappers:
 }}"""
 
     try:
-        api_key = config.GROK_API_KEY or config.GROQ_API_KEY or config.OPENAI_API_KEY
-        base_url = "https://api.x.ai/v1" if config.GROK_API_KEY else ("https://api.groq.com/openai/v1" if config.GROQ_API_KEY else "https://api.openai.com/v1")
-        model = config.GROK_MODEL if config.GROK_API_KEY else (config.GROQ_MODEL if config.GROQ_API_KEY else config.OPENAI_MODEL)
+        api_key = config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
+        base_url = "https://api.groq.com/openai/v1" if config.GROQ_API_KEY else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
+        model = config.GROQ_MODEL if config.GROQ_API_KEY else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
 
         if not api_key:
             return fallback_result
@@ -251,8 +251,23 @@ async def entrypoint(ctx: JobContext) -> None:
         activation_threshold=0.65,
     )
 
-    # 1. Initialize LLM (Grok xAI -> Groq -> OpenAI)
-    if config.GROK_API_KEY:
+    # 1. Initialize LLM (Groq -> OpenAI -> Grok fallback)
+    if config.GROQ_API_KEY:
+        llm_instance = openai.LLM(
+            model=config.GROQ_MODEL,
+            base_url="https://api.groq.com/openai/v1",
+            api_key=config.GROQ_API_KEY,
+            temperature=0.3,
+        )
+        logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", config.GROQ_MODEL)
+    elif config.OPENAI_API_KEY:
+        llm_instance = openai.LLM(
+            model=config.OPENAI_MODEL,
+            api_key=config.OPENAI_API_KEY,
+            temperature=0.3,
+        )
+        logger.info("LLM initialized with OpenAI fallback: %s", config.OPENAI_MODEL)
+    elif config.GROK_API_KEY:
         llm_instance = openai.LLM(
             model=config.GROK_MODEL,
             base_url="https://api.x.ai/v1",
@@ -260,21 +275,13 @@ async def entrypoint(ctx: JobContext) -> None:
             temperature=0.3,
         )
         logger.info("LLM initialized with Grok (xAI): %s", config.GROK_MODEL)
-    elif config.GROQ_API_KEY:
-        llm_instance = openai.LLM(
-            model=config.GROQ_MODEL,
-            base_url="https://api.groq.com/openai/v1",
-            api_key=config.GROQ_API_KEY,
-            temperature=0.3,
-        )
-        logger.info("LLM initialized with Groq: %s", config.GROQ_MODEL)
     else:
         llm_instance = openai.LLM(
-            model=config.OPENAI_MODEL,
-            api_key=config.OPENAI_API_KEY or None,
+            model="llama-3.3-70b-versatile",
+            base_url="https://api.groq.com/openai/v1",
             temperature=0.3,
         )
-        logger.info("LLM initialized with OpenAI fallback: %s", config.OPENAI_MODEL)
+        logger.info("LLM initialized with default Groq configuration")
 
     # 2. Initialize STT (Deepgram Nova-3)
     stt_instance = deepgram.STT(
