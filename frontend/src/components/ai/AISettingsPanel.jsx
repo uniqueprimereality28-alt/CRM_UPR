@@ -24,7 +24,7 @@ const VRINDA_PRESET = {
   custom_greeting: "Hello {name} ji, I'm Vrinda calling from Unique Prime Reality, Gurgaon se. Kya aap Gurgaon mein koi property plan kar rahe hain?",
   gate_no_response: "Thank you for your time, have a nice day!",
   purpose_question: "Sir aapki requirement ko better understand karne ke liye kya main jaan sakti hu yeh property purchase personal use ke liye hai ya investment purpose ke liye hai?",
-  budget_config_question: "Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain like studio apartment, 1 BHK, 2 BHK, 3 BHK, 4 BHK, or penthouse?",
+  budget_config_question: "Perfect, and aap kitne budget main and konsi configuration main yeh property plan kar rahe hain like studio apartment, one BHK, two BHK, three BHK, four BHK, or penthouse?",
   best_now_answer: "Hamare paas different projects available hain and every project has its own USP. Agar aap meri advice consider karein, toh best opportunistic location is Dwarka Expressway right now.",
   location_question: "Is there any specific preferred location in mind?",
   builders_options: "We have almost every reputed builder's projects like from Godrej, ATS, Whiteland / Wal Developer, Hero Homes, M3M, Elan, Emaar, and many others.",
@@ -56,6 +56,7 @@ export const AISettingsPanel = () => {
     livekit_api_secret: "",
     livekit_agent_name: "upr-calling-agent",
     vobiz_sip_trunk_id: "",
+    groq_api_key: "",
     grok_api_key: "",
     sarvam_api_key: "",
     deepgram_api_key: "",
@@ -129,7 +130,8 @@ export const AISettingsPanel = () => {
         ...prev,
         livekit_api_key: "",
         livekit_api_secret: "",
-        grok_api_key: "",
+        groq_api_key: "",
+    grok_api_key: "",
         sarvam_api_key: "",
         deepgram_api_key: "",
       }));
@@ -576,12 +578,12 @@ export const AISettingsPanel = () => {
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">Grok (xAI) API Key</Label>
+                <Label className="text-xs font-medium text-slate-700">Groq API Key (Recommended for Zero-Lag Calling)</Label>
                 <Input
                   type="password"
-                  placeholder={telephonyStatus?.has_grok_key ? "•••••••••••• (Configured)" : "xai-..."}
-                  value={telephony.grok_api_key}
-                  onChange={(e) => setTelephony({ ...telephony, grok_api_key: e.target.value })}
+                  placeholder={telephonyStatus?.has_groq_key ? "•••••••••••• (Configured)" : "gsk_..."}
+                  value={telephony.groq_api_key || telephony.grok_api_key || ""}
+                  onChange={(e) => setTelephony({ ...telephony, groq_api_key: e.target.value, grok_api_key: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
               </div>
