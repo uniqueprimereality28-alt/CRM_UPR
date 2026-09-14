@@ -60,7 +60,7 @@ export const AISettingsPanel = () => {
     grok_api_key: "",
     sarvam_api_key: "",
     deepgram_api_key: "",
-    sarvam_speaker: "bulbul",
+    sarvam_speaker: "anushka",
     sarvam_language: "hi-IN",
   });
   const [telephonyStatus, setTelephonyStatus] = useState(null);
@@ -615,9 +615,12 @@ export const AISettingsPanel = () => {
                 <Select value={telephony.sarvam_speaker} onValueChange={(v) => setTelephony({ ...telephony, sarvam_speaker: v })}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="meera">Meera (Female · Natural Hindi/Hinglish)</SelectItem>
-                    <SelectItem value="bulbul">Bulbul (Female · Warm Conversational)</SelectItem>
-                    <SelectItem value="amit">Amit (Male · Professional)</SelectItem>
+                    <SelectItem value="anushka">Anushka (Female · Natural Real Estate Accent)</SelectItem>
+                    <SelectItem value="priya">Priya (Female · Warm Conversational)</SelectItem>
+                    <SelectItem value="neha">Neha (Female · Clear & Expressive)</SelectItem>
+                    <SelectItem value="pooja">Pooja (Female · Polite)</SelectItem>
+                    <SelectItem value="aditya">Aditya (Male · Professional Executive)</SelectItem>
+                    <SelectItem value="rahul">Rahul (Male · Friendly & Clear)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
