@@ -289,7 +289,7 @@ class BulkDispatchIn(BaseModel):
     contacts: Optional[List[dict]] = None
     prompt: Optional[str] = ""
     model_provider: Optional[str] = "groq"
-    voice: Optional[str] = "sarvam-bulbul"
+    voice: Optional[str] = "sarvam-anushka"
     campaign_name: Optional[str] = "Direct Bulk Dispatch"
 
 
@@ -854,7 +854,7 @@ class RealCallTriggerIn(BaseModel):
     campaign_id: Optional[str] = None
     agent_id: Optional[str] = None
     model_provider: Optional[str] = "groq"
-    voice: Optional[str] = "sarvam-bulbul"
+    voice: Optional[str] = "sarvam-anushka"
 
 
 class CallIngestIn(BaseModel):
@@ -896,7 +896,7 @@ async def _get_voice_agent_config() -> dict:
         "grok_api_key": doc.get("grok_api_key") or GROK_API_KEY_ENV or "",
         "sarvam_api_key": doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "",
         "deepgram_api_key": doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "",
-        "sarvam_speaker": doc.get("sarvam_speaker") or "bulbul",
+        "sarvam_speaker": doc.get("sarvam_speaker") or "anushka",
         "sarvam_language": doc.get("sarvam_language") or "hi-IN",
     }
 
@@ -967,7 +967,7 @@ async def _dispatch_outbound_call(
     campaign_id: Optional[str] = None,
     user_prompt: str = "",
     model_provider: str = "groq",
-    voice: str = "sarvam-bulbul",
+    voice: str = "sarvam-anushka",
 ) -> dict:
     cfg = await _get_voice_agent_config()
     lead_id = str(lead["_id"])
@@ -1159,7 +1159,7 @@ async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(req
         campaign_id=payload.campaign_id,
         user_prompt=payload.prompt or "",
         model_provider=payload.model_provider or "groq",
-        voice=payload.voice or "sarvam-bulbul",
+        voice=payload.voice or "sarvam-anushka",
     )
 
     await db.leads.update_one(
@@ -1346,8 +1346,27 @@ async def complete_followup(fu_id: str, user: dict = Depends(get_current_user)):
 
 class TTSTestIn(BaseModel):
     text: str
-    speaker: Optional[str] = "bulbul"
+    speaker: Optional[str] = "anushka"
     language: Optional[str] = "hi-IN"
+
+
+VALID_SARVAM_SPEAKERS = {
+    "anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh",
+    "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan"
+}
+SARVAM_SPEAKER_ALIAS = {
+    "bulbul": "anushka",
+    "meera": "priya",
+    "amit": "aditya",
+    "pavithra": "pooja",
+    "arvind": "rahul",
+    "sarvam-bulbul": "anushka",
+    "sarvam-meera": "priya",
+    "sarvam-amit": "aditya",
+    "sarvam-anushka": "anushka",
+    "sarvam-priya": "priya",
+    "sarvam-aditya": "aditya",
+}
 
 
 @ai_router.post("/tts/test")
@@ -1356,18 +1375,23 @@ async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
     sarvam_key = cfg.get("sarvam_api_key") or os.getenv("SARVAM_API_KEY", "").strip()
 
     if not sarvam_key:
-        raise HTTPException(400, "Sarvam API Key is not configured yet. Please add your Sarvam API Key in Settings to hear Bulbul's voice.")
+        raise HTTPException(400, "Sarvam API Key is not configured yet. Please add your Sarvam API Key in Settings.")
 
     import httpx
     import base64
     from fastapi.responses import Response
+
+    raw_spk = (payload.speaker or "anushka").strip().lower()
+    selected_speaker = SARVAM_SPEAKER_ALIAS.get(raw_spk, raw_spk)
+    if selected_speaker not in VALID_SARVAM_SPEAKERS:
+        selected_speaker = "anushka"
 
     url = "https://api.sarvam.ai/text-to-speech"
     headers = {"api-subscription-key": sarvam_key, "Content-Type": "application/json"}
     body = {
         "inputs": [payload.text[:500]],
         "target_language_code": payload.language or "hi-IN",
-        "speaker": payload.speaker or "bulbul",
+        "speaker": selected_speaker,
         "model": "bulbul:v1",
     }
     try:
@@ -1588,7 +1612,7 @@ async def bulk_dispatch_calls(payload: BulkDispatchIn, user: dict = Depends(requ
                 campaign_id=None,
                 user_prompt=payload.prompt or "",
                 model_provider=payload.model_provider or "groq",
-                voice=payload.voice or "sarvam-bulbul",
+                voice=payload.voice or "sarvam-anushka",
             )
 
             await db.leads.update_one(
