@@ -52,7 +52,7 @@ export default function AICalling() {
           </div>
           <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Telecalling</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Outbound voice agent for Unique Prime Reality — dials leads via Vobiz SIP, uses Sarvam AI voice & Grok LLM, scores requirements, and updates CRM leads in real time.
+            Outbound voice agent for Unique Prime Reality — dials leads via Vobiz SIP, uses Sarvam AI voice & Groq LLM, scores requirements, and updates CRM leads in real time.
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={loadStats} data-testid="refresh-stats-btn">
@@ -71,7 +71,7 @@ export default function AICalling() {
       ) : (
         <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-          <span>Telephony active — LiveKit Cloud & Vobiz SIP connected with Sarvam AI Indian voice & Grok reasoning.</span>
+          <span>Telephony active — LiveKit Cloud & Vobiz SIP connected with Sarvam AI Indian voice & Groq reasoning.</span>
         </div>
       )}
 
@@ -124,7 +124,7 @@ const Overview = ({ stats, onOpenCall, onOpenDialer }) => {
           </div>
           <div>
             <div className="text-sm font-bold text-slate-900">Start an Outbound AI Call</div>
-            <div className="text-xs text-slate-500">Auto-dial any lead via LiveKit + Vobiz SIP with Sarvam AI Indian voice & Grok LLM</div>
+            <div className="text-xs text-slate-500">Auto-dial any lead via LiveKit + Vobiz SIP with Sarvam AI Indian voice & Groq LLM</div>
           </div>
         </div>
         <Button onClick={onOpenDialer} className="gap-1.5 bg-brand hover:bg-brand-dark" size="sm">
