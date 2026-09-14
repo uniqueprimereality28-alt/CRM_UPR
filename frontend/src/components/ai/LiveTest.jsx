@@ -15,7 +15,7 @@ import { toast } from "sonner";
 
 export function LiveTest() {
   const [customerName, setCustomerName] = useState("Aarav");
-  const [speaker, setSpeaker] = useState("bulbul");
+  const [speaker, setSpeaker] = useState("anushka");
   const [activeSegment, setActiveSegment] = useState("budget");
   const [customText, setCustomText] = useState("");
   const [audioUrl, setAudioUrl] = useState(null);
@@ -98,54 +98,31 @@ export function LiveTest() {
       }
 
       if (msg && (msg.includes("Sarvam") || msg.includes("API Key") || msg.includes("not configured"))) {
-        toast.error(msg, { duration: 6000 });
+        toast.error(msg);
       } else {
-        // Fallback: Browser Web Speech API with explicit Indian Female voice selection
-        try {
-          if ("speechSynthesis" in window) {
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(textToSpeak);
-            utterance.rate = 0.92;
-            utterance.pitch = 1.18; // Distinctly female pitch
-
-            const voices = window.speechSynthesis.getVoices() || [];
-            const femaleVoice = voices.find(
-              (v) =>
-                v.name.includes("Female") ||
-                v.name.includes("Zira") ||
-                v.name.includes("Kalpana") ||
-                v.name.includes("Heera") ||
-                v.name.includes("India") ||
-                v.lang.startsWith("hi") ||
-                v.lang === "en-IN"
-            );
-            if (femaleVoice) utterance.voice = femaleVoice;
-
-            utterance.onstart = () => setPlaying(true);
-            utterance.onend = () => setPlaying(false);
-            utterance.onerror = () => setPlaying(false);
-            window.speechSynthesis.speak(utterance);
-            toast.info("Browser voice fallback (Enter Sarvam API Key in Settings to hear Bulbul).");
-          } else {
-            toast.error(msg || "Could not synthesize audio.");
-          }
-        } catch {
-          toast.error(msg || "Could not synthesize audio.");
-        }
+        toast.error(msg || "Failed to generate speech. Please check your Sarvam AI API Key in Settings.");
       }
     } finally {
       setLoading(false);
     }
   };
 
+  const handleStop = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setPlaying(false);
+  };
+
   return (
-    <div className="space-y-6" data-testid="live-test-studio">
-      {/* Header Banner */}
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-amber-50/30 p-6 shadow-sm">
+    <div className="space-y-6">
+      {/* Header Info Banner */}
+      <div className="rounded-2xl border border-brand/20 bg-gradient-to-r from-brand-light/60 via-brand-light/30 to-white p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand">
-              <Headphones className="h-4 w-4" /> Speech & Pronunciation Studio
+              <Headphones className="h-4 w-4" /> Real-time Speech Quality Monitor
             </div>
             <h2 className="brand-font mt-1 text-2xl font-bold text-slate-900">Voice & Speech Quality Tester</h2>
             <p className="mt-1 text-xs text-slate-600 max-w-2xl">
@@ -154,7 +131,7 @@ export function LiveTest() {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="bg-white text-slate-700 border-slate-300">
-              Voice: Sarvam AI ({speaker === "bulbul" ? "Bulbul Conversational" : speaker === "meera" ? "Meera Warm" : "Amit Male"})
+              Voice: Sarvam AI ({speaker === "anushka" ? "Anushka Natural" : speaker === "priya" ? "Priya Warm" : speaker === "neha" ? "Neha Expressive" : speaker === "pooja" ? "Pooja Polite" : speaker === "aditya" ? "Aditya Male" : "Rahul Male"})
             </Badge>
             <Badge className="bg-brand/10 text-brand border-brand/20">
               Active Audio Channel
@@ -198,9 +175,12 @@ export function LiveTest() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="bulbul">Sarvam AI - Bulbul (Default Conversational)</SelectItem>
-                <SelectItem value="meera">Sarvam AI - Meera (Warm Hindi/Hinglish)</SelectItem>
-                <SelectItem value="amit">Sarvam AI - Amit (Male Executive)</SelectItem>
+                <SelectItem value="anushka">Sarvam AI · Anushka (Recommended · Natural Hindi/Hinglish)</SelectItem>
+                <SelectItem value="priya">Sarvam AI · Priya (Warm & Conversational Female)</SelectItem>
+                <SelectItem value="neha">Sarvam AI · Neha (Expressive & Engaging Female)</SelectItem>
+                <SelectItem value="pooja">Sarvam AI · Pooja (Polite Consultant Female)</SelectItem>
+                <SelectItem value="aditya">Sarvam AI · Aditya (Male Corporate Executive)</SelectItem>
+                <SelectItem value="rahul">Sarvam AI · Rahul (Male Clear & Confident)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -218,21 +198,19 @@ export function LiveTest() {
               { key: "wrapup", label: "6. Final Confirmation Wrap-up" },
               { key: "ai_disclosure", label: "7. AI Disclosure" },
             ].map((seg) => (
-              <button
+              <Button
                 key={seg.key}
                 type="button"
+                variant={activeSegment === seg.key && !customText ? "default" : "outline"}
+                size="sm"
                 onClick={() => {
                   setActiveSegment(seg.key);
                   setCustomText("");
                 }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                  activeSegment === seg.key && !customText
-                    ? "bg-brand text-white shadow-xs"
-                    : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
-                }`}
+                className={`text-xs h-8 ${activeSegment === seg.key && !customText ? "bg-brand text-white" : "hover:bg-slate-50"}`}
               >
                 {seg.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -242,48 +220,58 @@ export function LiveTest() {
             <Label className="text-xs font-medium text-slate-700">Script Content to Speak</Label>
             {customText && (
               <button
-                type="button"
                 onClick={() => setCustomText("")}
-                className="text-xs text-brand hover:underline"
+                className="text-[11px] text-brand hover:underline font-medium"
               >
-                Reset to standard template
+                Reset to default segment
               </button>
             )}
           </div>
           <Textarea
+            rows={4}
             value={currentScript}
             onChange={(e) => setCustomText(e.target.value)}
-            rows={4}
-            className="mt-1.5 text-xs leading-relaxed font-sans"
-            placeholder="Type any custom sentence in Hinglish to test Vrinda's pronunciation..."
+            className="mt-1.5 text-xs font-mono leading-relaxed"
           />
-          <p className="mt-1 text-[11px] text-slate-400">
+          <span className="mt-1 block text-[11px] text-slate-400">
             Tip: You can edit this text directly to test how specific project names or numbers sound.
-          </p>
+          </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 pt-2">
+        <div className="pt-2 flex flex-wrap items-center gap-3">
           <Button
             onClick={() => handlePlayVoice()}
             disabled={loading}
-            className={`flex-1 gap-2 py-3 text-sm font-semibold transition-all ${
-              playing ? "bg-rose-600 hover:bg-rose-700 text-white" : "bg-brand hover:bg-brand-dark text-white"
-            }`}
+            className="flex-1 gap-2 bg-brand py-2.5 text-sm font-semibold hover:bg-brand-dark"
           >
             {loading ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Synthesizing Audio...
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Synthesizing Speech via Sarvam AI...
               </>
             ) : playing ? (
               <>
-                <Square className="h-4 w-4" /> Stop Audio
+                <Square className="h-4 w-4 fill-current" />
+                Stop Playing
               </>
             ) : (
               <>
-                <Play className="h-4 w-4 fill-current" /> Play Speech & Pronunciation
+                <Play className="h-4 w-4 fill-current" />
+                Play Speech & Pronunciation
               </>
             )}
           </Button>
+
+          {playing && (
+            <Button
+              variant="outline"
+              size="default"
+              onClick={handleStop}
+              className="gap-1.5 text-xs border-rose-200 text-rose-700 hover:bg-rose-50"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" /> Stop Audio
+            </Button>
+          )}
         </div>
       </div>
     </div>
