@@ -295,11 +295,12 @@ async def entrypoint(ctx: JobContext) -> None:
     if config.SARVAM_API_KEY and HAS_SARVAM:
         try:
             tts_instance = sarvam.TTS(
+                model=config.SARVAM_MODEL,
                 target_language_code=config.SARVAM_LANGUAGE_CODE,
                 speaker=config.SARVAM_SPEAKER,
                 api_key=config.SARVAM_API_KEY,
             )
-            logger.info("TTS initialized with Sarvam AI: speaker=%s, lang=%s", config.SARVAM_SPEAKER, config.SARVAM_LANGUAGE_CODE)
+            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, config.SARVAM_SPEAKER, config.SARVAM_LANGUAGE_CODE)
         except Exception as e:
             logger.warning("Failed to initialize Sarvam TTS (%s). Falling back to Deepgram.", e)
 
@@ -460,3 +461,4 @@ if __name__ == "__main__":
         worker_kwargs["api_secret"] = config.LIVEKIT_API_SECRET
 
     cli.run_app(WorkerOptions(**worker_kwargs))
+
