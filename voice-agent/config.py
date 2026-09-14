@@ -36,7 +36,8 @@ GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 
 # TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
-SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "bulbul").strip()  # meera, bulbul, amit
+SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3").strip()
+SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "anushka").strip()  # anushka, priya, neha, pooja, aditya, rahul
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()
 
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
