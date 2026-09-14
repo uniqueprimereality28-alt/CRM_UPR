@@ -26,13 +26,13 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
 DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
 
-# LLM: Grok (xAI) or Groq / OpenAI fallback
-GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
-GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
+# ─── LLM Brain: Groq (Ultra-Fast 600+ tokens/sec, Recommended) or OpenAI / Grok fallback ───
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
+GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 
 # TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
