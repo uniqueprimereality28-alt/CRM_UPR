@@ -1,7 +1,7 @@
 # Unique Prime Reality - AI Outbound Calling Agent
 
 Real-time AI telecalling service for Unique Prime Reality CRM (`CRM_UPR`).
-Powered by **LiveKit Cloud**, **Vobiz SIP Trunk**, **Deepgram STT**, **Grok (xAI) LLM**, and **Sarvam AI TTS**.
+Powered by **LiveKit Cloud**, **Vobiz SIP Trunk**, **Deepgram STT**, **Groq LLM** (Llama 3.3 70B, ~600 tok/s), and **Sarvam AI TTS**.
 
 ---
 
@@ -9,7 +9,7 @@ Powered by **LiveKit Cloud**, **Vobiz SIP Trunk**, **Deepgram STT**, **Grok (xAI
 
 1. **Telephony**: Outbound calls dialed via your **Vobiz SIP trunk** managed by LiveKit Cloud.
 2. **STT**: **Deepgram Nova-3** for ultra-low latency transcription of Indian speech (Hindi & English).
-3. **LLM Brain**: **Grok (xAI)** for natural, intelligent Gurgaon real estate conversations.
+3. **LLM Brain**: **Groq** (LPU-accelerated Llama 3.3 70B) for instant, natural real estate conversations with zero awkward pauses.
 4. **TTS Voice**: **Sarvam AI** with natural Indian accents (*Meera*, *Arvind*, etc.).
 5. **Zero VPS Needed**: The worker connects outbound over WebSockets to LiveKit Cloud. It requires **no static IP, no open ports, and no Linux VPS**.
 
@@ -35,38 +35,39 @@ Powered by **LiveKit Cloud**, **Vobiz SIP Trunk**, **Deepgram STT**, **Grok (xAI
 ---
 
 ## Step 2: Get Your AI API Keys
-
+ 
+- **Groq** (LLM Brain): Free API key at [console.groq.com](https://console.groq.com)
 - **Deepgram** (STT): Get a key at [console.deepgram.com](https://console.deepgram.com)
-- **Grok / xAI** (LLM): Get a key at [console.x.ai](https://console.x.ai)
 - **Sarvam AI** (TTS): Get an API subscription key at [sarvam.ai](https://www.sarvam.ai)
 
 ---
 
 ## Step 3: Deployment (Zero VPS Required!)
 
-### Option A: Deploy on Railway (Recommended — Already hosts your CRM!)
+### Option A: Deploy on Render (Web Service)
 
-Since your CRM (`backend/` and `frontend/`) is already running on Railway:
-
-1. Open your existing **Railway Project**.
-2. Click **+ New** → **GitHub Repo** → select `CRM_UPR`.
-3. In the new service settings:
-   - Go to **Settings** → **Root Directory** → set to `/voice-agent`.
-   - Railway will automatically detect the `Dockerfile` and build it.
-4. Go to the **Variables** tab and set:
+1. Go to your [Render Dashboard](https://dashboard.render.com).
+2. Click **New +** → **Web Service** → connect `https://github.com/uniqueprimereality28-alt/CRM_UPR.git`.
+3. In settings:
+   - **Root Directory**: `voice-agent`
+   - **Runtime**: `Docker` (Render detects `Dockerfile` automatically)
+   - **Instance Type**: Free or Starter
+4. In the **Environment** tab, add these variables (CRITICAL: if these are not set, the agent cannot connect to LiveKit Cloud):
    ```env
    LIVEKIT_URL=wss://your-project.livekit.cloud
    LIVEKIT_API_KEY=your-livekit-api-key
    LIVEKIT_API_SECRET=your-livekit-api-secret
    LIVEKIT_AGENT_NAME=upr-calling-agent
-   VOBIZ_SIP_TRUNK_ID=ST_your_trunk_id
+   VOBIZ_SIP_TRUNK_ID=ST_your_vobiz_trunk_id
+   GROQ_API_KEY=gsk_your-groq-key
    DEEPGRAM_API_KEY=your-deepgram-key
-   GROK_API_KEY=your-grok-key
    SARVAM_API_KEY=your-sarvam-key
-   CRM_BACKEND_URL=https://your-crm-backend.up.railway.app
+   CRM_BACKEND_URL=https://your-crm-backend.onrender.com
    VOICE_AGENT_SHARED_SECRET=your-secure-secret
    ```
-5. Deploy! The worker is now running 24/7 in the cloud without needing a VPS.
+5. Click **Deploy**.
+   - Render will bind to `$PORT` (10000) for health checks (`GET /health` returns 200 OK).
+   - The LiveKit agent worker will automatically start in the background and connect to LiveKit Cloud.
 
 ---
 
@@ -91,7 +92,7 @@ Whenever you click **Initiate Call** in the CRM, LiveKit Cloud routes the call t
 ## CRM Integration & Scoring Sync
 
 When the call concludes:
-1. The agent uses Grok to extract customer requirement signals:
+1. The agent uses Groq (Llama 3.3 70B) to extract customer requirement signals:
    - Budget, BHK, location preference, timeline
    - High-intent signals: `wants_site_visit`, `whatsapp_details`, `urgent_30_days`, `investor_intent`
    - Negative signals: `not_interested`, `wrong_number`
