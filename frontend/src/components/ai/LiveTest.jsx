@@ -15,7 +15,7 @@ import { toast } from "sonner";
 
 export function LiveTest() {
   const [customerName, setCustomerName] = useState("Aarav");
-  const [speaker, setSpeaker] = useState("anushka");
+  const [speaker, setSpeaker] = useState("simran");
   const [activeSegment, setActiveSegment] = useState("budget");
   const [customText, setCustomText] = useState("");
   const [audioUrl, setAudioUrl] = useState(null);
@@ -154,7 +154,7 @@ export function LiveTest() {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="bg-white text-slate-700 border-slate-300">
-              Voice: Sarvam AI ({speaker === "anushka" ? "Anushka Natural" : speaker === "priya" ? "Priya Warm" : speaker === "neha" ? "Neha Expressive" : speaker === "pooja" ? "Pooja Polite" : speaker === "aditya" ? "Aditya Male" : "Rahul Male"})
+              Voice: Sarvam AI ({speaker === "simran" ? "Simran Telecaller" : speaker === "priya" ? "Priya Warm" : speaker === "kavya" ? "Kavya Natural" : speaker === "neha" ? "Neha Expressive" : speaker === "pooja" ? "Pooja Polite" : speaker === "aditya" ? "Aditya Male" : "Amit Male"})
             </Badge>
             <Badge className="bg-brand/10 text-brand border-brand/20">
               Active Audio Channel
@@ -198,11 +198,13 @@ export function LiveTest() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="anushka">Sarvam AI · Anushka (Recommended · Natural Hindi/Hinglish)</SelectItem>
-                <SelectItem value="priya">Sarvam AI · Priya (Warm & Conversational Female)</SelectItem>
+                <SelectItem value="simran">Sarvam AI · Simran (Recommended · Indian Female Telecaller)</SelectItem>
+                <SelectItem value="priya">Sarvam AI · Priya (Warm & Engaging Female)</SelectItem>
+                <SelectItem value="kavya">Sarvam AI · Kavya (Natural Hindi Female)</SelectItem>
                 <SelectItem value="neha">Sarvam AI · Neha (Expressive & Engaging Female)</SelectItem>
                 <SelectItem value="pooja">Sarvam AI · Pooja (Polite Consultant Female)</SelectItem>
                 <SelectItem value="aditya">Sarvam AI · Aditya (Male Corporate Executive)</SelectItem>
+                <SelectItem value="amit">Sarvam AI · Amit (Male Professional)</SelectItem>
                 <SelectItem value="rahul">Sarvam AI · Rahul (Male Clear & Confident)</SelectItem>
               </SelectContent>
             </Select>
