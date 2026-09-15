@@ -213,6 +213,9 @@ async def entrypoint(ctx: JobContext) -> None:
     call_type = "outbound"
     user_prompt = ""
     agent_config: dict = {}
+    inventory: list = config.DEFAULT_INVENTORY
+    sip_trunk_id: Optional[str] = None
+    meta: dict = {}
 
     if ctx.job.metadata:
         try:
@@ -222,6 +225,7 @@ async def entrypoint(ctx: JobContext) -> None:
             campaign_id = meta.get("campaign_id")
             call_type = meta.get("call_type", "outbound")
             user_prompt = meta.get("user_prompt") or meta.get("prompt") or ""
+            sip_trunk_id = meta.get("sip_trunk_id") or meta.get("vobiz_sip_trunk_id")
             raw_cfg = meta.get("agent_config", {})
             if isinstance(raw_cfg, dict):
                 agent_config = raw_cfg
@@ -292,15 +296,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # 3. Initialize TTS (Sarvam AI Indian voices -> Deepgram Aura fallback)
     tts_instance = None
-    if config.SARVAM_API_KEY and HAS_SARVAM:
+    sarvam_key = meta.get("sarvam_api_key") or config.SARVAM_API_KEY
+    sarvam_speaker = meta.get("sarvam_speaker") or config.SARVAM_SPEAKER
+    sarvam_lang = meta.get("sarvam_language") or config.SARVAM_LANGUAGE_CODE
+
+    if sarvam_key and HAS_SARVAM:
         try:
             tts_instance = sarvam.TTS(
                 model=config.SARVAM_MODEL,
-                target_language_code=config.SARVAM_LANGUAGE_CODE,
-                speaker=config.SARVAM_SPEAKER,
-                api_key=config.SARVAM_API_KEY,
+                target_language_code=sarvam_lang,
+                speaker=sarvam_speaker,
+                api_key=sarvam_key,
             )
-            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, config.SARVAM_SPEAKER, config.SARVAM_LANGUAGE_CODE)
+            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, sarvam_speaker, sarvam_lang)
         except Exception as e:
             logger.warning("Failed to initialize Sarvam TTS (%s). Falling back to Deepgram.", e)
 
@@ -381,7 +389,7 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("Voice pipeline ready.")
 
     # 6. Outbound Telephony: Dial lead via Vobiz SIP Trunk
-    outbound_trunk_id = config.VOBIZ_SIP_TRUNK_ID
+    outbound_trunk_id = sip_trunk_id or config.VOBIZ_SIP_TRUNK_ID
     if call_type == "outbound" and phone_number and outbound_trunk_id:
         e164_phone = normalize_e164(phone_number)
         logger.info("Dialling %s via Vobiz SIP trunk %s ...", e164_phone, outbound_trunk_id)
@@ -461,4 +469,3 @@ if __name__ == "__main__":
         worker_kwargs["api_secret"] = config.LIVEKIT_API_SECRET
 
     cli.run_app(WorkerOptions(**worker_kwargs))
-
