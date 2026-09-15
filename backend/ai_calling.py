@@ -17,6 +17,7 @@ require_vranda_only() below. This is deliberate: the AI voice agent is
 not a general admin feature.
 """
 import os
+import re
 import json
 import random
 import uuid
@@ -985,6 +986,9 @@ async def _dispatch_outbound_call(
     clean_digits = re.sub(r"[^0-9]", "", e164_phone)
     call_uuid = f"call-{clean_digits}-{uuid.uuid4().hex[:6]}"
 
+    # Clean inventory documents (convert ObjectId to str) so they are safely JSON-serializable
+    clean_inventory = [_clean(p) for p in (inventory or [])]
+
     # 1. Direct LiveKit Cloud dispatch
     livekit_url = cfg.get("livekit_url")
     livekit_api_key = cfg.get("livekit_api_key")
@@ -1023,6 +1027,10 @@ async def _dispatch_outbound_call(
             "user_prompt": user_prompt or lead.get("remark") or "",
             "model_provider": model_provider,
             "voice_id": voice,
+            "sip_trunk_id": cfg.get("vobiz_sip_trunk_id") or "",
+            "sarvam_speaker": cfg.get("sarvam_speaker") or "simran",
+            "sarvam_language": cfg.get("sarvam_language") or "hi-IN",
+            "inventory": clean_inventory,
             "agent_config": {
                 "agentName": kb.get("agent_name") or agent.get("name", "Simran"),
                 "companyName": kb.get("company_name", "Unique Prime Reality"),
@@ -1051,9 +1059,10 @@ async def _dispatch_outbound_call(
                 "leadId": lead_id,
                 "phone": e164_phone,
                 "userPrompt": user_prompt,
+                "inventory": clean_inventory,
             },
         }
-        metadata_str = json.dumps(metadata_dict)
+        metadata_str = json.dumps(metadata_dict, default=str)
 
         import httpx
         async with httpx.AsyncClient(timeout=20) as client:
@@ -1101,7 +1110,7 @@ async def _dispatch_outbound_call(
                 "intro_line": agent.get("intro_line"),
                 "guardrails": agent.get("guardrails"),
             },
-            "inventory": inventory,
+            "inventory": clean_inventory,
         }
         async with httpx.AsyncClient(timeout=20) as client:
             try:
@@ -1290,49 +1299,37 @@ async def recall_followup(fu_id: str, user: dict = Depends(require_vranda_only))
         raise HTTPException(404, "Lead not found")
     if not lead.get("phone"):
         raise HTTPException(400, "Lead has no phone number")
-    voice_agent_url, voice_agent_secret = await _get_voice_agent_config()
-    if not voice_agent_url or not voice_agent_secret:
-        raise HTTPException(
-            500,
-            "Real calling is not configured yet. Go to Settings and paste the "
-            "voice-agent URL + shared secret first.",
-        )
+
     agent = await _get_agent(None)
     inventory = await db.ai_inventory.find().to_list(500) or DEFAULT_INVENTORY
 
-    import httpx
-    body = {
-        "lead_id": str(lead["_id"]), "lead_name": lead.get("name"), "phone": lead.get("phone"),
-        "city": lead.get("city"), "property_interest": lead.get("property_interest"),
-        "budget": lead.get("budget"), "remark": lead.get("remark"),
-        "prior_summary": fu.get("prior_summary"),
-        "agent": {
-            "name": agent.get("name"), "voice_gender": agent.get("voice_gender", "female"),
-            "voice_accent": agent.get("voice_accent"), "language_style": agent.get("language_style", "formal_hinglish"),
-            "personality": agent.get("personality"), "intro_line": agent.get("intro_line"),
-            "guardrails": agent.get("guardrails"),
-        },
-        "inventory": inventory,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(f"{voice_agent_url}/trigger", json=body,
-                                     headers={"X-Voice-Agent-Secret": voice_agent_secret})
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as e:
-        logger.error(f"followup recall dial failed: {e}")
-        raise HTTPException(502, f"Could not reach voice-agent service: {e}")
+    prior_summary = fu.get("prior_summary", "")
+    callback_prompt = f"Scheduled follow-up callback. Previous call context: {prior_summary}" if prior_summary else "Scheduled follow-up callback."
 
+    res = await _dispatch_outbound_call(
+        lead=lead,
+        agent=agent,
+        inventory=inventory,
+        campaign_id=fu.get("campaign_id"),
+        user_prompt=callback_prompt,
+    )
+
+    now_str = now_iso()
+    call_uuid = res.get("call_uuid")
     await db.ai_followups.update_one(
         {"_id": ObjectId(fu_id)},
-        {"$set": {"status": "calling", "dialed_at": now_iso(), "call_uuid": data.get("call_uuid")}},
+        {"$set": {"status": "calling", "dialed_at": now_str, "call_uuid": call_uuid}},
     )
-    await db.leads.update_one({"_id": lead["_id"]}, {"$set": {
-        "assigned_agent_type": "ai", "ai_call_status": "dialing",
-        "ai_call_uuid": data.get("call_uuid"), "updated_at": now_iso(),
-    }})
-    return {"ok": True, "call_uuid": data.get("call_uuid"), "status": "dialing"}
+    await db.leads.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {
+            "assigned_agent_type": "ai",
+            "ai_call_status": "dialing",
+            "ai_call_uuid": call_uuid,
+            "updated_at": now_str,
+        }}
+    )
+    return {"ok": True, "call_uuid": call_uuid, "status": "dialing"}
 
 
 @ai_router.post("/followups/{fu_id}/done")
