@@ -468,19 +468,36 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
+    try:
+        from livekit.agents.job import JobExecutorType
+        job_exec = JobExecutorType.THREAD
+    except Exception:
+        try:
+            from livekit.agents import JobExecutorType
+            job_exec = JobExecutorType.THREAD
+        except Exception:
+            job_exec = None
+
     worker_kwargs = {
         "entrypoint_fnc": entrypoint,
         "prewarm_fnc": prewarm,
         "agent_name": config.LIVEKIT_AGENT_NAME,
-        "num_idle_processes": int(os.getenv("LIVEKIT_NUM_IDLE_PROCESSES", "0")),
+        "num_idle_processes": 0,
         "job_memory_warn_mb": 260,
         "job_memory_limit_mb": 380,
     }
+    if job_exec is not None:
+        worker_kwargs["job_executor_type"] = job_exec
     if config.LIVEKIT_URL:
         worker_kwargs["ws_url"] = config.LIVEKIT_URL
     if config.LIVEKIT_API_KEY:
         worker_kwargs["api_key"] = config.LIVEKIT_API_KEY
     if config.LIVEKIT_API_SECRET:
         worker_kwargs["api_secret"] = config.LIVEKIT_API_SECRET
-
+    logger.info(
+        "Connecting worker '%s' to %s with Key '%s...'",
+        config.LIVEKIT_AGENT_NAME,
+        config.LIVEKIT_URL,
+        config.LIVEKIT_API_KEY[:6] if config.LIVEKIT_API_KEY else "NONE",
+    )
     cli.run_app(WorkerOptions(**worker_kwargs))
