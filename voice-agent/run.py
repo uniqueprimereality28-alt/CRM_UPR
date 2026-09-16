@@ -16,6 +16,12 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("PYTHONMALLOC", "malloc")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "0")
 import uvicorn
 from dotenv import load_dotenv
 
@@ -76,7 +82,9 @@ def launch_worker_process():
         worker_env["OMP_NUM_THREADS"] = "1"
         worker_env["MKL_NUM_THREADS"] = "1"
         worker_env["NUMEXPR_NUM_THREADS"] = "1"
-        worker_env["LIVEKIT_NUM_IDLE_PROCESSES"] = "1"
+        worker_env["MALLOC_ARENA_MAX"] = "2"
+        worker_env["PYTHONMALLOC"] = "malloc"
+        worker_env["LIVEKIT_NUM_IDLE_PROCESSES"] = "0"
         worker_process = subprocess.Popen(
             [sys.executable, agent_script, "start"],
             stdout=sys.stdout,
