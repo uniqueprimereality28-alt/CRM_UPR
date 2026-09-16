@@ -460,6 +460,9 @@ if __name__ == "__main__":
         "entrypoint_fnc": entrypoint,
         "prewarm_fnc": prewarm,
         "agent_name": config.LIVEKIT_AGENT_NAME,
+        "num_idle_processes": int(os.getenv("LIVEKIT_NUM_IDLE_PROCESSES", "1")),
+        "job_memory_warn_mb": 350,
+        "job_memory_limit_mb": 450,
     }
     if config.LIVEKIT_URL:
         worker_kwargs["ws_url"] = config.LIVEKIT_URL
