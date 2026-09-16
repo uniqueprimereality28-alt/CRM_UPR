@@ -3,7 +3,7 @@ import {
   Loader2, Save, Plus, Trash2, Bot, SlidersHorizontal, Building2,
   PhoneCall, Cpu, CheckCircle2, AlertTriangle, KeyRound, BookOpen,
   Headphones, ShieldAlert, Sparkles, Check, RotateCcw, ArrowRight,
-  PhoneForwarded, MessageSquare, HelpCircle
+  PhoneForwarded, MessageSquare, HelpCircle, Eye, EyeOff
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError } from "../../lib/api";
@@ -66,6 +66,11 @@ export const AISettingsPanel = () => {
   const [telephonyStatus, setTelephonyStatus] = useState(null);
   const [testingLivekit, setTestingLivekit] = useState(false);
   const [livekitTestResult, setLivekitTestResult] = useState(null);
+  const [showLivekitKey, setShowLivekitKey] = useState(false);
+  const [showLivekitSecret, setShowLivekitSecret] = useState(false);
+  const [showGroqKey, setShowGroqKey] = useState(false);
+  const [showSarvamKey, setShowSarvamKey] = useState(false);
+  const [showDeepgramKey, setShowDeepgramKey] = useState(false);
 
   useEffect(() => {
     api.get("/ai/scoring-rules").then((r) => { setRules(r.data.rules); setBands(r.data.temperature_bands); }).catch(() => {});
@@ -549,6 +554,36 @@ export const AISettingsPanel = () => {
               </div>
             </div>
 
+            {/* Warning if masked dummy string is saved */}
+            {(telephonyStatus?.livekit_secret_is_masked_dummy || telephonyStatus?.livekit_key_is_masked_dummy) && (
+              <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-900">
+                <div className="font-bold flex items-center gap-1.5 text-rose-800 text-sm">
+                  <AlertTriangle className="h-4 w-4 text-rose-600" />
+                  Literal Masked Dots ('••••') Detected in Saved Credentials!
+                </div>
+                <p className="mt-1 text-slate-700">
+                  Aapki saved LiveKit Key ya Secret mein actual alphanumeric string ki jagah literal bullet dots (<code className="font-mono bg-white px-1.5 py-0.5 rounded border border-rose-200">••••••••</code>) saved hain. 
+                  Is wajah se LiveKit Cloud ne token ko <strong>401 invalid token</strong> kehkar reject kiya!
+                </p>
+                <p className="mt-2 font-semibold text-rose-700">
+                  Fix: Go to <a href="https://cloud.livekit.io" target="_blank" rel="noreferrer" className="underline font-bold">cloud.livekit.io</a> &gt; Settings &gt; Keys &gt; Click <strong>"+ Generate key"</strong> &gt; Click the <strong>Copy icon (📋)</strong> next to the Secret, aur yahan paste karo. (Mouse se dots select mat karna).
+                </p>
+              </div>
+            )}
+
+            {/* Quick helper instruction card */}
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-600">
+              <div className="font-semibold text-slate-800 flex items-center gap-1.5 mb-1">
+                <KeyRound className="h-3.5 w-3.5 text-brand" /> LiveKit Credentials Copy Karne Ka Sahi Tareeqa (cloud.livekit.io)
+              </div>
+              <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-slate-600">
+                <li>LiveKit Cloud Console kholo: <strong>cloud.livekit.io</strong> &gt; Select Project &gt; <strong>Settings &gt; Keys</strong></li>
+                <li>Naya key banane ke liye <strong>"+ Generate key"</strong> button dabao.</li>
+                <li>Popup aayega jisme <strong>API Key</strong> aur <strong>Secret</strong> dikhenge. Dono ke bagal mein bane <strong>📋 Copy icon</strong> par click karo.</li>
+                <li>Yahan neeche fields mein paste karke <strong>👁️ Eye icon</strong> dabakar confirm kar lo ki letters/numbers dikh rahe hain (dots nahi).</li>
+              </ol>
+            </div>
+
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div>
                 <Label className="text-xs font-medium text-slate-700">LiveKit WebSocket URL (Cloud)</Label>
@@ -571,35 +606,73 @@ export const AISettingsPanel = () => {
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">
-                  LiveKit API Key
-                  {telephonyStatus?.livekit_key_prefix && (
-                    <span className={`ml-2 text-[10px] font-normal ${telephonyStatus?.livekit_key_valid_format ? 'text-emerald-600' : 'text-amber-600'}`}>
-                      ({telephonyStatus.livekit_key_prefix} {telephonyStatus?.livekit_key_valid_format ? '✓ Valid format' : '⚠ Must start with API'})
-                    </span>
-                  )}
-                </Label>
-                <Input
-                  type="password"
-                  placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key (starts with API...)"}
-                  value={telephony.livekit_api_key}
-                  onChange={(e) => setTelephony({ ...telephony, livekit_api_key: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-slate-700">
+                    LiveKit API Key
+                    {telephonyStatus?.livekit_key_prefix && (
+                      <span className={`ml-2 text-[10px] font-normal ${telephonyStatus?.livekit_key_valid_format ? 'text-emerald-600' : 'text-amber-600'}`}>
+                        ({telephonyStatus.livekit_key_prefix} {telephonyStatus?.livekit_key_valid_format ? '✓ Valid format' : '⚠ Must start with API'})
+                      </span>
+                    )}
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowLivekitKey(!showLivekitKey)}
+                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
+                  >
+                    {showLivekitKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showLivekitKey ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                <div className="relative mt-1">
+                  <Input
+                    type={showLivekitKey ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key (starts with API...)"}
+                    value={telephony.livekit_api_key}
+                    onChange={(e) => setTelephony({ ...telephony, livekit_api_key: e.target.value })}
+                    className="pr-9 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLivekitKey(!showLivekitKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showLivekitKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
                 <p className="mt-1 text-[11px] text-slate-400">
                   Must start with <span className="font-mono font-semibold text-slate-600">API</span> from LiveKit Cloud Console.
                 </p>
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">LiveKit API Secret</Label>
-                <Input
-                  type="password"
-                  placeholder={telephonyStatus?.has_livekit_secret ? "•••••••••••• (Configured)" : "API Secret..."}
-                  value={telephony.livekit_api_secret}
-                  onChange={(e) => setTelephony({ ...telephony, livekit_api_secret: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-slate-700">LiveKit API Secret</Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowLivekitSecret(!showLivekitSecret)}
+                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
+                  >
+                    {showLivekitSecret ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showLivekitSecret ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                <div className="relative mt-1">
+                  <Input
+                    type={showLivekitSecret ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_livekit_secret ? "•••••••••••• (Configured)" : "API Secret..."}
+                    value={telephony.livekit_api_secret}
+                    onChange={(e) => setTelephony({ ...telephony, livekit_api_secret: e.target.value })}
+                    className="pr-9 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLivekitSecret(!showLivekitSecret)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showLivekitSecret ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
                 <p className="mt-1 text-[11px] text-slate-400">
                   The secret corresponding to the API Key above (from same project).
                 </p>
@@ -629,36 +702,93 @@ export const AISettingsPanel = () => {
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">Groq API Key (Recommended for Zero-Lag Calling)</Label>
-                <Input
-                  type="password"
-                  placeholder={telephonyStatus?.has_groq_key ? "•••••••••••• (Configured)" : "gsk_..."}
-                  value={telephony.groq_api_key || telephony.grok_api_key || ""}
-                  onChange={(e) => setTelephony({ ...telephony, groq_api_key: e.target.value, grok_api_key: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-slate-700">Groq API Key (Recommended for Zero-Lag Calling)</Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowGroqKey(!showGroqKey)}
+                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
+                  >
+                    {showGroqKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showGroqKey ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                <div className="relative mt-1">
+                  <Input
+                    type={showGroqKey ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_groq_key ? "•••••••••••• (Configured)" : "gsk_..."}
+                    value={telephony.groq_api_key || telephony.grok_api_key || ""}
+                    onChange={(e) => setTelephony({ ...telephony, groq_api_key: e.target.value, grok_api_key: e.target.value })}
+                    className="pr-9 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGroqKey(!showGroqKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showGroqKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">Sarvam AI API Subscription Key</Label>
-                <Input
-                  type="password"
-                  placeholder={telephonyStatus?.has_sarvam_key ? "•••••••••••• (Configured)" : "Sarvam key..."}
-                  value={telephony.sarvam_api_key}
-                  onChange={(e) => setTelephony({ ...telephony, sarvam_api_key: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-slate-700">Sarvam AI API Subscription Key</Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowSarvamKey(!showSarvamKey)}
+                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
+                  >
+                    {showSarvamKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showSarvamKey ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                <div className="relative mt-1">
+                  <Input
+                    type={showSarvamKey ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_sarvam_key ? "•••••••••••• (Configured)" : "Sarvam key..."}
+                    value={telephony.sarvam_api_key}
+                    onChange={(e) => setTelephony({ ...telephony, sarvam_api_key: e.target.value })}
+                    className="pr-9 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSarvamKey(!showSarvamKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showSarvamKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">Deepgram STT API Key</Label>
-                <Input
-                  type="password"
-                  placeholder={telephonyStatus?.has_deepgram_key ? "•••••••••••• (Configured)" : "Deepgram key..."}
-                  value={telephony.deepgram_api_key}
-                  onChange={(e) => setTelephony({ ...telephony, deepgram_api_key: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-medium text-slate-700">Deepgram STT API Key</Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeepgramKey(!showDeepgramKey)}
+                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
+                  >
+                    {showDeepgramKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showDeepgramKey ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                <div className="relative mt-1">
+                  <Input
+                    type={showDeepgramKey ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_deepgram_key ? "•••••••••••• (Configured)" : "Deepgram key..."}
+                    value={telephony.deepgram_api_key}
+                    onChange={(e) => setTelephony({ ...telephony, deepgram_api_key: e.target.value })}
+                    className="pr-9 font-mono text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowDeepgramKey(!showDeepgramKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    {showDeepgramKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
               </div>
 
               <div>
