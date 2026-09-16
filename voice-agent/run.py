@@ -33,11 +33,16 @@ logger = logging.getLogger("upr-voice-agent.runner")
 app = FastAPI(title="Unique Prime Reality - Voice Agent Service")
 
 PORT = int(os.getenv("PORT", 10000))
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip()
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "").strip()
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "").strip()
-LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
-VOBIZ_SIP_TRUNK_ID = os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID", "").strip()
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip().strip('"').strip("'")
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "").strip().strip('"').strip("'")
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "").strip().strip('"').strip("'")
+
+# Auto-detect swapped LiveKit API Key and Secret
+if LIVEKIT_API_SECRET.startswith("API") and not LIVEKIT_API_KEY.startswith("API"):
+    LIVEKIT_API_KEY, LIVEKIT_API_SECRET = LIVEKIT_API_SECRET, LIVEKIT_API_KEY
+
+LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip().strip('"').strip("'")
+VOBIZ_SIP_TRUNK_ID = (os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID", "")).strip().strip('"').strip("'")
 VOICE_AGENT_SHARED_SECRET = os.getenv("VOICE_AGENT_SHARED_SECRET", "").strip()
 
 worker_process: Optional[subprocess.Popen] = None
@@ -85,6 +90,12 @@ def launch_worker_process():
         worker_env["MALLOC_ARENA_MAX"] = "2"
         worker_env["PYTHONMALLOC"] = "malloc"
         worker_env["LIVEKIT_NUM_IDLE_PROCESSES"] = "0"
+        if LIVEKIT_URL:
+            worker_env["LIVEKIT_URL"] = LIVEKIT_URL
+        if LIVEKIT_API_KEY:
+            worker_env["LIVEKIT_API_KEY"] = LIVEKIT_API_KEY
+        if LIVEKIT_API_SECRET:
+            worker_env["LIVEKIT_API_SECRET"] = LIVEKIT_API_SECRET
         worker_process = subprocess.Popen(
             [sys.executable, agent_script, "start"],
             stdout=sys.stdout,
@@ -131,8 +142,13 @@ def health():
         "service": "upr-voice-agent",
         "livekit_configured": configured,
         "worker_running": running,
-        "livekit_agent_name": os.getenv("LIVEKIT_AGENT_NAME", "upr-calling-agent"),
-        "vobiz_sip_trunk_id": bool(os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID")),
+        "livekit_agent_name": LIVEKIT_AGENT_NAME,
+        "livekit_url": LIVEKIT_URL,
+        "livekit_key_prefix": (LIVEKIT_API_KEY[:6] + "...") if LIVEKIT_API_KEY else "not_set",
+        "livekit_key_length": len(LIVEKIT_API_KEY),
+        "livekit_secret_length": len(LIVEKIT_API_SECRET),
+        "livekit_key_starts_with_api": LIVEKIT_API_KEY.startswith("API") if LIVEKIT_API_KEY else False,
+        "vobiz_sip_trunk_id": bool(VOBIZ_SIP_TRUNK_ID),
         "message": (
             "Voice agent is live and ready for calls."
             if running
@@ -143,6 +159,64 @@ def health():
             )
         ),
     }
+
+
+@app.get("/test-agent-ws")
+async def test_agent_ws():
+    import jwt
+    import aiohttp
+    
+    livekit_url = LIVEKIT_URL
+    api_key = LIVEKIT_API_KEY
+    api_secret = LIVEKIT_API_SECRET
+    
+    if not livekit_url or not api_key or not api_secret:
+        return {"ok": False, "error": "Missing LIVEKIT_URL, LIVEKIT_API_KEY, or LIVEKIT_API_SECRET"}
+    
+    now_ts = int(time.time())
+    token_payload = {
+        "iss": api_key,
+        "sub": "test_agent_worker",
+        "iat": now_ts - 10,
+        "exp": now_ts + 3600,
+        "video": {
+            "agent": True,
+        },
+    }
+    token = jwt.encode(token_payload, api_secret, algorithm="HS256")
+    
+    ws_scheme = "wss" if "https" in livekit_url or "wss" in livekit_url else "ws"
+    netloc = livekit_url.replace("wss://", "").replace("ws://", "").replace("https://", "").replace("http://", "").rstrip("/")
+    target_url = f"{ws_scheme}://{netloc}/agent"
+    
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(target_url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as ws:
+                return {
+                    "ok": True,
+                    "message": "Successfully connected to LiveKit Cloud /agent WebSocket!",
+                    "target_url": target_url,
+                    "key_prefix": api_key[:6] + "...",
+                }
+    except aiohttp.WSServerHandshakeError as e:
+        return {
+            "ok": False,
+            "error": f"WSServerHandshakeError: {e.status} {e.message}",
+            "response_headers": dict(e.headers) if hasattr(e, "headers") else {},
+            "target_url": target_url,
+            "key_prefix": api_key[:6] + "...",
+            "key_len": len(api_key),
+            "secret_len": len(api_secret),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"Connection error: {str(e)}",
+            "target_url": target_url,
+            "key_prefix": api_key[:6] + "...",
+        }
 
 
 # ─── HTTP /trigger Endpoint (for CRM Backend) ───
