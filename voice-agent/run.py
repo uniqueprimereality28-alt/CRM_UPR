@@ -72,11 +72,16 @@ def launch_worker_process():
     logger.info("Launching LiveKit Agent Worker (python agent.py start)...")
     agent_script = os.path.join(os.path.dirname(__file__), "agent.py")
     try:
+        worker_env = os.environ.copy()
+        worker_env["OMP_NUM_THREADS"] = "1"
+        worker_env["MKL_NUM_THREADS"] = "1"
+        worker_env["NUMEXPR_NUM_THREADS"] = "1"
+        worker_env["LIVEKIT_NUM_IDLE_PROCESSES"] = "1"
         worker_process = subprocess.Popen(
             [sys.executable, agent_script, "start"],
             stdout=sys.stdout,
             stderr=sys.stderr,
-            env=os.environ.copy(),
+            env=worker_env,
         )
         logger.info("LiveKit Agent Worker started successfully (PID: %d)", worker_process.pid)
         return True
@@ -109,6 +114,7 @@ def health():
     configured = is_livekit_configured()
     running = is_worker_alive()
 
+    # If configured but worker died, try to restart
     if configured and not running:
         running = launch_worker_process()
 
