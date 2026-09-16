@@ -64,6 +64,8 @@ export const AISettingsPanel = () => {
     sarvam_language: "hi-IN",
   });
   const [telephonyStatus, setTelephonyStatus] = useState(null);
+  const [testingLivekit, setTestingLivekit] = useState(false);
+  const [livekitTestResult, setLivekitTestResult] = useState(null);
 
   useEffect(() => {
     api.get("/ai/scoring-rules").then((r) => { setRules(r.data.rules); setBands(r.data.temperature_bands); }).catch(() => {});
@@ -123,6 +125,9 @@ export const AISettingsPanel = () => {
     setSavingTelephony(true);
     try {
       await api.post("/ai/calls/real/settings", telephony);
+      if (kb) {
+        await api.post("/ai/knowledge-base", kb).catch(() => {});
+      }
       toast.success("Telephony & AI keys saved!");
       const res = await api.get("/ai/calls/real/settings");
       setTelephonyStatus(res.data);
@@ -131,7 +136,7 @@ export const AISettingsPanel = () => {
         livekit_api_key: "",
         livekit_api_secret: "",
         groq_api_key: "",
-    grok_api_key: "",
+        grok_api_key: "",
         sarvam_api_key: "",
         deepgram_api_key: "",
       }));
@@ -139,6 +144,26 @@ export const AISettingsPanel = () => {
       toast.error(apiError(e.response?.data?.detail));
     } finally {
       setSavingTelephony(false);
+    }
+  };
+
+  const testLivekitConnection = async () => {
+    setTestingLivekit(true);
+    setLivekitTestResult(null);
+    try {
+      const res = await api.post("/ai/calls/real/test-livekit");
+      setLivekitTestResult(res.data);
+      if (res.data.ok) {
+        toast.success(res.data.message, { duration: 6000 });
+      } else {
+        toast.error(res.data.message, { duration: 8000 });
+      }
+    } catch (err) {
+      const msg = apiError(err.response?.data?.detail || "Connection test failed");
+      setLivekitTestResult({ ok: false, message: msg });
+      toast.error(msg);
+    } finally {
+      setTestingLivekit(false);
     }
   };
 
@@ -546,14 +571,24 @@ export const AISettingsPanel = () => {
               </div>
 
               <div>
-                <Label className="text-xs font-medium text-slate-700">LiveKit API Key</Label>
+                <Label className="text-xs font-medium text-slate-700">
+                  LiveKit API Key
+                  {telephonyStatus?.livekit_key_prefix && (
+                    <span className={`ml-2 text-[10px] font-normal ${telephonyStatus?.livekit_key_valid_format ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      ({telephonyStatus.livekit_key_prefix} {telephonyStatus?.livekit_key_valid_format ? '✓ Valid format' : '⚠ Must start with API'})
+                    </span>
+                  )}
+                </Label>
                 <Input
                   type="password"
-                  placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key..."}
+                  placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key (starts with API...)"}
                   value={telephony.livekit_api_key}
                   onChange={(e) => setTelephony({ ...telephony, livekit_api_key: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Must start with <span className="font-mono font-semibold text-slate-600">API</span> from LiveKit Cloud Console.
+                </p>
               </div>
 
               <div>
@@ -565,6 +600,9 @@ export const AISettingsPanel = () => {
                   onChange={(e) => setTelephony({ ...telephony, livekit_api_secret: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  The secret corresponding to the API Key above (from same project).
+                </p>
               </div>
 
               <div>
@@ -575,6 +613,19 @@ export const AISettingsPanel = () => {
                   onChange={(e) => setTelephony({ ...telephony, vobiz_sip_trunk_id: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
+              </div>
+
+              <div>
+                <Label className="text-xs font-medium text-slate-700">Human Escalation Target Phone (Call Transfer)</Label>
+                <Input
+                  placeholder="7351735035"
+                  value={kb?.transfer_number || ""}
+                  onChange={(e) => updateKb("transfer_number", e.target.value)}
+                  className="mt-1 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Live transfer target (e.g. Vrinda Aggarwal +91 7351735035).
+                </p>
               </div>
 
               <div>
@@ -628,7 +679,31 @@ export const AISettingsPanel = () => {
               </div>
             </div>
 
-            <div className="mt-5 flex justify-end border-t border-slate-100 pt-4">
+            {livekitTestResult && (
+              <div className={`mt-4 rounded-xl p-3.5 text-xs border ${
+                livekitTestResult.ok
+                  ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+                  : "bg-rose-50 text-rose-900 border-rose-200"
+              }`}>
+                <div className="font-semibold flex items-center gap-1.5">
+                  {livekitTestResult.ok ? <Check className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-rose-600" />}
+                  {livekitTestResult.ok ? "LiveKit Connection Verified" : "LiveKit Connection Failed"}
+                </div>
+                <p className="mt-1 text-slate-600">{livekitTestResult.message}</p>
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={testLivekitConnection}
+                disabled={testingLivekit}
+                className="gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 text-xs"
+              >
+                {testingLivekit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-brand" />}
+                Test LiveKit Cloud Connection
+              </Button>
               <Button onClick={saveTelephony} disabled={savingTelephony} className="gap-2 bg-brand hover:bg-brand-dark">
                 {savingTelephony ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Save Telephony & Credentials
