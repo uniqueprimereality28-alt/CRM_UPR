@@ -43,6 +43,14 @@ logger = logging.getLogger("upr-calling-agent")
 VOICE_TURN_HANDLING = {
     "turn_detection": "vad",
     "endpointing": {"mode": "fixed", "min_delay": 0.8, "max_delay": 2.5},
+    "interruption": {
+        "enabled": True,
+        "mode": "vad",
+        "min_duration": 0.8,
+        "min_words": 2,
+        "resume_false_interruption": True,
+    },
+    "preemptive_generation": {"enabled": False},
 }
 
 
@@ -63,6 +71,7 @@ def normalize_e164(phone: str) -> str:
 # ─── CRM Sync & Structured Key-Points Extraction ───
 
 async def extract_call_signals_with_llm(transcript: str) -> dict:
+    """Use Groq / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
     fallback_result = {
         "summary": "Call completed with customer.",
         "disposition": "connected",
@@ -76,54 +85,66 @@ async def extract_call_signals_with_llm(transcript: str) -> dict:
         "next_followup_days": 2,
         "remarks": "",
     }
+
     if not transcript or len(transcript.strip()) < 10:
         return fallback_result
 
-    prompt = f"""
-Analyze the following sales call transcript between Vrinda (Unique Prime Reality) and a prospective property buyer in Gurgaon.
-Extract the structured lead data in JSON format:
-{{
-  "summary": "2-3 sentence executive summary of customer's interest and requirement",
-  "disposition": "interested" | "warm" | "site_visit_requested" | "call_back_requested" | "not_interested" | "wrong_number",
-  "requirements": {{
-    "purpose": "Personal Use" | "Investment" | null,
-    "budget": "e.g. 1.5 Cr to 2.5 Cr" | null,
-    "property_type": "Apartment" | "Penthouse" | "Plot" | "Commercial" | null,
-    "bhk": "1 BHK" | "2 BHK" | "3 BHK" | "4 BHK" | null,
-    "preferred_location": "Dwarka Expressway" | "Golf Course Ext" | "Sohna Road" | "New Gurgaon" | null,
-    "possession_timeline": "Ready to Move" | "Under Construction" | null
-  }},
-  "signals": ["list of 3-5 concise bullet points highlighting key buying signals, objections, or timeline"],
-  "urgency_score": 1-10,
-  "wants_site_visit": true | false,
-  "wants_brochure": true | false,
-  "whatsapp_opt_in": true | false,
-  "human_transfer_required": true | false,
-  "next_followup_days": 1 | 2 | 5,
-  "remarks": "Any special instructions or preferences mentioned"
-}}
+    prompt = f"""You are an expert real estate CRM data analyst. Analyze this phone conversation transcript between Vrinda (Unique Prime Reality AI consultant) and a customer.
 
-Transcript:
+TRANSCRIPT:
 {transcript}
-"""
+
+Extract the following information in pure JSON format with no markdown wrappers:
+{{
+  "summary": "Key points summary in bullet format: • Requirement (BHK, Budget, Location, Purpose) • Discussion highlights • Next step/Outcome",
+  "disposition": "connected | callback | not_interested | wrong_number | busy",
+  "requirements": {{
+    "property_type": "residential | commercial | studio | penthouse",
+    "purpose": "personal_use | investment",
+    "budget": "extracted budget string e.g. Under 3 Cr, 1.5 Cr, 90L",
+    "bhk": "e.g. 2 BHK, 3 BHK, 4 BHK, studio, penthouse",
+    "location_preference": "e.g. Dwarka Expressway, Manesar Corridor, Golf Course Ext, Sohna Road",
+    "possession_timeline": "immediate, 30 days, 6 months, or null"
+  }},
+  "signals": [
+    Choose from: "whatsapp_details", "budget_shared", "bhk_shared", "timeline_shared", "wants_site_visit", "wants_callback", "urgent_30_days", "investor_intent", "casual_interest", "not_interested", "wrong_number", "call_later", "requested_human"
+  ],
+  "urgency_score": 1-10 integer,
+  "wants_site_visit": true/false,
+  "wants_brochure": true/false,
+  "whatsapp_opt_in": true/false,
+  "human_transfer_required": true/false,
+  "next_followup_days": integer (e.g. 1, 2, 7) or null,
+  "remarks": "Notable customer preferences, objections or remarks"
+}}"""
+
     try:
-        if config.GROQ_API_KEY:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {config.GROQ_API_KEY}"},
-                    json={
-                        "model": config.GROQ_MODEL,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.1,
-                        "response_format": {"type": "json_object"},
-                    },
-                )
-                if resp.status_code == 200:
-                    return json.loads(resp.json()["choices"][0]["message"]["content"])
+        api_key = config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
+        base_url = "https://api.groq.com/openai/v1" if config.GROQ_API_KEY else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
+        model = config.GROQ_MODEL if config.GROQ_API_KEY else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
+
+        if not api_key:
+            return fallback_result
+
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            }
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            async with session.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=20) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    clean_json = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
+                    extracted = json.loads(clean_json)
+                    return {**fallback_result, **extracted}
+                else:
+                    logger.warning("Signal extraction LLM call returned status %s", resp.status)
     except Exception as e:
-        logger.warning("Could not extract signals with LLM: %s", e)
+        logger.error("Failed to extract call signals with LLM: %s", e)
+
     return fallback_result
 
 
@@ -133,26 +154,25 @@ async def post_call_to_crm(
     call_uuid: str,
     duration_seconds: float,
     transcript_list: list[dict],
-    agent_name: str,
+    agent_name: str = config.AGENT_NAME,
 ) -> None:
+    """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint."""
     if not config.CRM_BACKEND_URL:
+        logger.warning("CRM_BACKEND_URL is not set. Skipping CRM ingest.")
         return
 
-    full_transcript_text = "\n".join(
-        f"{t.get('speaker', 'Speaker')}: {t.get('text', '')}" for t in transcript_list
-    )
+    full_transcript_text = "\n".join(f"{item.get('speaker')}: {item.get('text')}" for item in transcript_list)
     analysis = await extract_call_signals_with_llm(full_transcript_text)
 
     payload = {
         "lead_id": lead_id,
         "campaign_id": campaign_id,
-        "call_uuid": call_uuid,
         "agent_name": agent_name,
-        "duration_seconds": round(duration_seconds, 1),
+        "call_uuid": call_uuid,
+        "duration_seconds": round(duration_seconds),
         "transcript": transcript_list,
-        "full_text": full_transcript_text,
-        "summary": analysis.get("summary", ""),
-        "disposition": analysis.get("disposition", "completed"),
+        "summary": analysis.get("summary", "Outbound AI call completed."),
+        "disposition": analysis.get("disposition", "connected"),
         "requirements": analysis.get("requirements", {}),
         "signals": analysis.get("signals", []),
         "urgency_score": analysis.get("urgency_score", 5),
@@ -174,7 +194,7 @@ async def post_call_to_crm(
         async with aiohttp.ClientSession() as session:
             async with session.post(ingest_url, json=payload, headers=headers, timeout=25) as resp:
                 if resp.status in (200, 201):
-                    logger.info("Call successfully synced to CRM! Lead: %s", lead_id)
+                    logger.info("Call successfully synced to CRM! Lead: %s, Signals: %s", lead_id, analysis.get("signals"))
                 else:
                     logger.error("Failed to sync call to CRM (%s): %s", resp.status, await resp.text())
     except Exception as e:
@@ -255,18 +275,29 @@ async def entrypoint(ctx: JobContext) -> None:
             api_key=config.GROQ_API_KEY,
             temperature=0.3,
         )
+        logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", config.GROQ_MODEL)
     elif config.OPENAI_API_KEY:
         llm_instance = openai.LLM(
             model=config.OPENAI_MODEL,
             api_key=config.OPENAI_API_KEY,
             temperature=0.3,
         )
+        logger.info("LLM initialized with OpenAI fallback: %s", config.OPENAI_MODEL)
+    elif config.GROK_API_KEY:
+        llm_instance = openai.LLM(
+            model=config.GROK_MODEL,
+            base_url="https://api.x.ai/v1",
+            api_key=config.GROK_API_KEY,
+            temperature=0.3,
+        )
+        logger.info("LLM initialized with Grok (xAI): %s", config.GROK_MODEL)
     else:
         llm_instance = openai.LLM(
             model="llama-3.3-70b-versatile",
             base_url="https://api.groq.com/openai/v1",
             temperature=0.3,
         )
+        logger.info("LLM initialized with default Groq configuration")
 
     # 2. Initialize STT (Deepgram Nova-3)
     stt_instance = deepgram.STT(
@@ -289,23 +320,23 @@ async def entrypoint(ctx: JobContext) -> None:
                 speaker=sarvam_speaker,
                 api_key=sarvam_key,
             )
+            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, sarvam_speaker, sarvam_lang)
         except Exception as e:
-            logger.warning("Could not initialize Sarvam TTS: %s. Using Deepgram fallback.", e)
+            logger.warning("Failed to initialize Sarvam TTS (%s). Falling back to Deepgram.", e)
 
     if tts_instance is None:
         tts_instance = deepgram.TTS(
             model=config.DEEPGRAM_TTS_MODEL,
             api_key=config.DEEPGRAM_API_KEY or None,
         )
+        logger.info("TTS initialized with Deepgram Aura: %s", config.DEEPGRAM_TTS_MODEL)
 
-    system_instructions = config.build_sales_system_prompt(
-        agent_config=agent_config,
-        inventory=inventory,
-        custom_instructions=user_prompt,
-    )
+    # 4. System prompt (Calls config.build_runtime_system_prompt directly)
+    system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt, inventory=inventory)
 
+    # 5. Agent
     agent = Agent(
-        instructions=system_instructions,
+        instructions=system_prompt,
         stt=stt_instance,
         llm=llm_instance,
         tts=tts_instance,
@@ -324,7 +355,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if disconnecting:
             return
         disconnecting = True
-        logger.info("Closing call after %.1fs...", delay_sec)
+        logger.info("Exit trigger detected. Closing call after %.1fs for speech completion...", delay_sec)
         await asyncio.sleep(delay_sec)
         ctx.shutdown()
 
@@ -348,6 +379,7 @@ async def entrypoint(ctx: JobContext) -> None:
             customer_spoke = True
             last_customer_speech_time = time.time()
 
+        # Drop-off rule check: if Vrinda says goodbye or customer said no/completed wrap-up
         lower = text.lower()
         if speaker == runtime_agent_name:
             if any(phrase in lower for phrase in ["thank you for your time, have a nice day", "have a nice day", "have a wonderful day"]) and "kya aap gurgaon" not in lower:
@@ -360,13 +392,13 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("Session closed.")
         session_closed.set()
 
-    # Immediate hangup when the customer cuts the call on mobile
+    # Immediate hangup when the lead disconnects their mobile phone
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant):
-        logger.info("Customer disconnected (%s). Hanging up immediately.", participant.identity)
+        logger.info("Customer participant disconnected (%s). Terminating call immediately.", participant.identity)
         ctx.shutdown()
 
-    # Start audio session with standard RoomOptions (fixes voice breaking & CPU spikes)
+    # Start audio session: use standard RoomOptions without heavy neural noise cancellation to prevent CPU stalls & audio stuttering
     await session.start(
         agent,
         room=ctx.room,
@@ -409,13 +441,13 @@ async def entrypoint(ctx: JobContext) -> None:
         await ctx.wait_for_participant()
         await session.say(f"Hello, main {runtime_agent_name} bol rahi hoon Unique Prime Reality, Gurgaon se. How may I help you?", allow_interruptions=True)
 
-    # Silence & Voicemail Watchdog (Prevents token waste):
-    # If no customer response within 14s of greeting, hang up immediately.
-    # If customer silent for >30s during call, hang up.
+    # Silence & Voicemail Watchdog to prevent token wastage:
+    # 1. If no response within 14s of greeting (voicemail / unanswered / silent line), hang up immediately.
+    # 2. If silent for >30s during call, prompt and hang up.
     async def silence_watchdog():
         await asyncio.sleep(14)
         if not customer_spoke and not disconnecting:
-            logger.info("No customer speech detected after greeting (voicemail / unanswered). Hanging up to save tokens.")
+            logger.info("No customer speech detected after greeting (likely voicemail or unanswered). Hanging up to save tokens.")
             ctx.shutdown()
             return
 
@@ -433,6 +465,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     watchdog_task = asyncio.create_task(silence_watchdog())
 
+    # Max call duration safeguard
     async def enforce_max_duration() -> None:
         await asyncio.sleep(config.MAX_CALL_DURATION_SECONDS)
         logger.warning("Max duration reached — closing call.")
@@ -453,6 +486,7 @@ async def entrypoint(ctx: JobContext) -> None:
         call_duration = time.time() - call_start
         logger.info("Call session complete. Duration: %.1fs, Turns: %d", call_duration, len(transcript_items))
 
+        # Post results back to CRM
         await post_call_to_crm(
             lead_id=lead_id,
             campaign_id=campaign_id,
@@ -465,7 +499,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
 if __name__ == "__main__":
     if not config.LIVEKIT_URL:
-        logger.error("ERROR: LIVEKIT_URL is not set.")
+        logger.error(
+            "ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Render Environment variables."
+        )
         sys.exit(1)
 
     try:
