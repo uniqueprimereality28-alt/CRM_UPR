@@ -12,6 +12,13 @@ import sys
 import time
 from typing import Optional
 
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("PYTHONMALLOC", "malloc")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "0")
+
 import aiohttp
 from dotenv import load_dotenv
 from livekit import api
@@ -197,13 +204,18 @@ async def post_call_to_crm(
 # ─── LiveKit Worker ───
 
 def prewarm(proc: JobProcess) -> None:
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except Exception:
+        pass
     proc.userdata["vad"] = silero.VAD.load(
         min_speech_duration=0.2,
         min_silence_duration=0.5,
         prefix_padding_duration=0.3,
         activation_threshold=0.65,
     )
-    logger.info("Silero VAD pre-warmed for telephony.")
+    logger.info("Silero VAD pre-warmed for telephony (single-thread mode).")
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -460,9 +472,9 @@ if __name__ == "__main__":
         "entrypoint_fnc": entrypoint,
         "prewarm_fnc": prewarm,
         "agent_name": config.LIVEKIT_AGENT_NAME,
-        "num_idle_processes": int(os.getenv("LIVEKIT_NUM_IDLE_PROCESSES", "1")),
-        "job_memory_warn_mb": 350,
-        "job_memory_limit_mb": 450,
+        "num_idle_processes": int(os.getenv("LIVEKIT_NUM_IDLE_PROCESSES", "0")),
+        "job_memory_warn_mb": 260,
+        "job_memory_limit_mb": 380,
     }
     if config.LIVEKIT_URL:
         worker_kwargs["ws_url"] = config.LIVEKIT_URL
