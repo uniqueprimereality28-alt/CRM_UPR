@@ -891,13 +891,6 @@ def _clean_str(val: Any) -> str:
     return s
 
 
-def _is_masked_dummy(val: Any) -> bool:
-    if not val:
-        return False
-    s = str(val).strip()
-    return "•" in s or "Configured" in s or (s.startswith("***") and len(s) < 25) or set(s) == {"*"}
-
-
 async def _get_voice_agent_config() -> dict:
     """DB-stored config (settable from inside the CRM) wins over env vars."""
     doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
@@ -958,7 +951,6 @@ class VoiceAgentSettingsIn(BaseModel):
 async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
     cfg = await _get_voice_agent_config()
     lk_key = cfg.get("livekit_api_key", "")
-    lk_secret = cfg.get("livekit_api_secret", "")
     return {
         "livekit_url": cfg.get("livekit_url", ""),
         "livekit_agent_name": cfg.get("livekit_agent_name", "upr-calling-agent"),
@@ -966,18 +958,16 @@ async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
         "voice_agent_url": cfg.get("voice_agent_url", ""),
         "sarvam_speaker": cfg.get("sarvam_speaker", "bulbul"),
         "sarvam_language": cfg.get("sarvam_language", "hi-IN"),
-        "has_livekit_key": bool(lk_key) and not _is_masked_dummy(lk_key),
-        "has_livekit_secret": bool(lk_secret) and not _is_masked_dummy(lk_secret),
+        "has_livekit_key": bool(lk_key),
+        "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
         "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
         "has_groq_key": bool(cfg.get("groq_api_key") or cfg.get("grok_api_key")),
         "has_grok_key": bool(cfg.get("grok_api_key")),
         "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
         "has_deepgram_key": bool(cfg.get("deepgram_api_key")),
         "secret_configured": bool(cfg.get("voice_agent_shared_secret") or cfg.get("livekit_api_secret")),
-        "livekit_key_prefix": lk_key[:7] + "..." if lk_key and not _is_masked_dummy(lk_key) else "",
+        "livekit_key_prefix": lk_key[:7] + "..." if lk_key else "",
         "livekit_key_valid_format": lk_key.startswith("API") if lk_key else False,
-        "livekit_key_is_masked_dummy": _is_masked_dummy(lk_key),
-        "livekit_secret_is_masked_dummy": _is_masked_dummy(lk_secret),
         "source": "database" if cfg.get("livekit_url") else ("env" if LIVEKIT_URL_ENV else "unset"),
     }
 
@@ -987,11 +977,7 @@ async def set_voice_agent_settings(payload: VoiceAgentSettingsIn, user: dict = D
     update = {"updated_at": now_iso(), "updated_by": user.get("username")}
     for field, val in payload.model_dump().items():
         if val is not None and str(val).strip() != "":
-            cleaned = _clean_str(val)
-            if _is_masked_dummy(cleaned):
-                logger.warning(f"Ignored masked placeholder string for field '{field}'")
-                continue
-            update[field] = cleaned
+            update[field] = _clean_str(val)
 
     # Auto-detect if user swapped LiveKit API Key and Secret
     lk_key = update.get("livekit_api_key")
@@ -1022,12 +1008,6 @@ async def test_livekit_connection(user: dict = Depends(require_vranda_only)):
         return {"ok": False, "message": "LiveKit API Key is missing. Please enter your API Key."}
     if not livekit_api_secret:
         return {"ok": False, "message": "LiveKit API Secret is missing. Please enter your API Secret."}
-
-    if _is_masked_dummy(livekit_api_key) or _is_masked_dummy(livekit_api_secret):
-        return {
-            "ok": False,
-            "message": "LiveKit API Key or Secret contains literal masked dots ('••••••')! You cannot copy masked dots from an old key. Go to cloud.livekit.io -> Settings -> Keys -> click '+ Generate key' and click the Copy icon (📋) next to the secret."
-        }
 
     swapped = False
     if livekit_api_secret.startswith("API") and not livekit_api_key.startswith("API"):
@@ -1134,13 +1114,6 @@ async def _dispatch_outbound_call(
         livekit_api_key, livekit_api_secret = livekit_api_secret, livekit_api_key
 
     if livekit_url and livekit_api_key and livekit_api_secret:
-        if _is_masked_dummy(livekit_api_key) or _is_masked_dummy(livekit_api_secret):
-            raise HTTPException(
-                400,
-                "LiveKit API credentials contain literal masked dots ('••••••'). You cannot copy masked dots from an old key. "
-                "Please go to cloud.livekit.io -> Settings -> Keys -> click '+ Generate key' and click the Copy icon (📋) next to the secret, then paste into CRM Settings."
-            )
-
         if not livekit_api_key.startswith("API"):
             raise HTTPException(
                 400,
@@ -1161,6 +1134,8 @@ async def _dispatch_outbound_call(
             "iat": now_ts - 30,
             "exp": now_ts + 3600,
             "video": {
+                "room": call_uuid,
+                "roomJoin": True,
                 "roomCreate": True,
                 "roomAdmin": True,
                 "roomList": True,
@@ -1244,14 +1219,12 @@ async def _dispatch_outbound_call(
                     headers=headers,
                     json={"agent_name": agent_name, "room": call_uuid, "metadata": metadata_str},
                 )
-                if dispatch_resp.status_code == 401:
-                    logger.error(f"LiveKit AgentDispatchService 401: {dispatch_resp.text}")
+                if dispatch_resp.status_code != 200:
+                    logger.error(f"LiveKit AgentDispatchService {dispatch_resp.status_code}: {dispatch_resp.text}")
                     raise HTTPException(
-                        401,
-                        f"LiveKit Cloud agent dispatch failed (401 invalid token). "
-                        f"Please verify your LiveKit API Key and Secret match your LiveKit project."
+                        dispatch_resp.status_code,
+                        f"LiveKit Cloud agent dispatch failed ({dispatch_resp.status_code}): {dispatch_resp.text}"
                     )
-                dispatch_resp.raise_for_status()
                 return {"call_uuid": call_uuid, "status": "dispatched", "method": "livekit_cloud"}
             except HTTPException:
                 raise
