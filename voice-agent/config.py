@@ -43,8 +43,8 @@ SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "hi-IN").strip()
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
 
 # ─── CRM Backend Integration ───
-CRM_BACKEND_URL = os.getenv("CRM_BACKEND_URL", "http://localhost:8001").rstrip("/")
-VOICE_AGENT_SHARED_SECRET = os.getenv("VOICE_AGENT_SHARED_SECRET", "upr-secret-token-change-in-prod").strip()
+CRM_BACKEND_URL = os.getenv("CRM_BACKEND_URL", "https://crm-upr-1.onrender.com").rstrip("/")
+VOICE_AGENT_SHARED_SECRET = os.getenv("VOICE_AGENT_SHARED_SECRET", "rxci_voice_9247xv").strip()
 
 # ─── Agent Persona & Default Prompts ───
 AGENT_NAME = "Vrinda"
