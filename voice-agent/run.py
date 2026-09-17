@@ -16,6 +16,11 @@ from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+
+try:
+    import psutil
+except Exception:
+    psutil = None
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 os.environ.setdefault("PYTHONMALLOC", "malloc")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -159,6 +164,35 @@ def health():
             )
         ),
     }
+
+
+@app.get("/memory")
+def memory_usage():
+    """No-cost memory diagnostic (no Render paid metrics needed).
+    Watch this while placing a test call: if 'worker_rss_mb' jumps sharply
+    and then the whole response stops responding, that's an OOM restart,
+    not a Groq/Deepgram/Sarvam connectivity problem."""
+    if psutil is None:
+        return {"error": "psutil not available"}
+
+    result = {"runner_rss_mb": None, "worker_rss_mb": None, "worker_alive": is_worker_alive()}
+    try:
+        result["runner_rss_mb"] = round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        pass
+    try:
+        if worker_process is not None and worker_process.poll() is None:
+            wp = psutil.Process(worker_process.pid)
+            total = wp.memory_info().rss
+            for child in wp.children(recursive=True):
+                try:
+                    total += child.memory_info().rss
+                except Exception:
+                    pass
+            result["worker_rss_mb"] = round(total / (1024 * 1024), 1)
+    except Exception as e:
+        result["worker_error"] = str(e)
+    return result
 
 
 @app.get("/test-agent-ws")
