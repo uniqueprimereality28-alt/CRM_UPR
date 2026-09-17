@@ -28,6 +28,10 @@ except Exception:
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        lk_key = (os.getenv("LIVEKIT_API_KEY") or "").strip().strip('"').strip("'")
+        lk_secret = (os.getenv("LIVEKIT_API_SECRET") or "").strip().strip('"').strip("'")
+        lk_url = (os.getenv("LIVEKIT_URL") or "").strip().strip('"').strip("'")
+
         if self.path == "/memory":
             rss = round(_PROCESS.memory_info().rss / (1024 * 1024), 1) if _PROCESS else 0.0
             body = json.dumps({
@@ -47,7 +51,13 @@ class HealthHandler(BaseHTTPRequestHandler):
             "status": "healthy",
             "service": "upr-voice-agent",
             "mode": "single_process",
-            "message": "Voice agent worker running in single process",
+            "livekit_url": lk_url,
+            "livekit_key_prefix": (lk_key[:6] + "...") if lk_key else "not_set",
+            "livekit_key_length": len(lk_key),
+            "livekit_secret_length": len(lk_secret),
+            "livekit_secret_starts_with_st": lk_secret.startswith("ST_") or lk_secret.startswith("ST"),
+            "livekit_key_starts_with_api": lk_key.startswith("API"),
+            "message": "Voice agent runner is alive and healthy.",
         }).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -81,4 +91,13 @@ if __name__ == "__main__":
         sys.argv = [sys.argv[0], "start"]
 
     import agent
-    agent.run_app_main()
+    while True:
+        try:
+            agent.run_app_main()
+            break
+        except SystemExit as se:
+            print(f"[runner] LiveKit agent worker exited with code {se.code}. Will retry in 15 seconds...", flush=True)
+            time.sleep(15)
+        except Exception as e:
+            print(f"[runner] LiveKit agent worker exception: {e}. Will retry in 15 seconds...", flush=True)
+            time.sleep(15)
