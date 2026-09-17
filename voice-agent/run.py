@@ -60,7 +60,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        # Suppress noisy Render health-check access logs
         pass
 
 
@@ -75,14 +74,11 @@ def start_health_server():
 
 
 if __name__ == "__main__":
-    # 1. Start HTTP server for Render health checks on daemon thread
     t = threading.Thread(target=start_health_server, daemon=True)
     t.start()
 
-    # 2. Ensure start command argument is present for LiveKit CLI
     if len(sys.argv) <= 1:
         sys.argv = [sys.argv[0], "start"]
 
-    # 3. Import and run agent worker in the main thread (Single Process)
     import agent
     agent.run_app_main()
