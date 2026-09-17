@@ -33,8 +33,7 @@ def _rss_mb() -> float:
 
 
 def _release_memory_to_os() -> None:
-    """Force Python GC and hand freed heap pages back to the OS (glibc malloc_trim).
-    Prevents RSS creep call-over-call on small containers (e.g. Render 512MB free tier)."""
+    """Force Python GC and hand freed heap pages back to the OS (glibc malloc_trim)."""
     gc.collect()
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
@@ -100,7 +99,7 @@ def normalize_e164(phone: str) -> str:
 
 # ─── CRM Sync & Structured Key-Points Extraction ───
 
-async def extract_call_signals_with_llm(transcript: str) -> dict:
+async def extract_call_signals_with_llm(transcript: str, api_key_override: Optional[str] = None) -> dict:
     """Use Groq / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
     fallback_result = {
         "summary": "Call completed with customer.",
@@ -149,9 +148,9 @@ Extract the following information in pure JSON format with no markdown wrappers:
 }}"""
 
     try:
-        api_key = config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
-        base_url = "https://api.groq.com/openai/v1" if config.GROQ_API_KEY else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
-        model = config.GROQ_MODEL if config.GROQ_API_KEY else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
+        api_key = api_key_override or config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
+        base_url = "https://api.groq.com/openai/v1" if (api_key_override or config.GROQ_API_KEY) else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
+        model = config.GROQ_MODEL if (api_key_override or config.GROQ_API_KEY) else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
 
         if not api_key:
             return fallback_result
@@ -185,14 +184,20 @@ async def post_call_to_crm(
     duration_seconds: float,
     transcript_list: list[dict],
     agent_name: str = config.AGENT_NAME,
+    crm_backend_url: Optional[str] = None,
+    shared_secret: Optional[str] = None,
+    groq_api_key: Optional[str] = None,
 ) -> None:
     """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint."""
-    if not config.CRM_BACKEND_URL:
+    target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
+    secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
+
+    if not target_backend_url:
         logger.warning("CRM_BACKEND_URL is not set. Skipping CRM ingest.")
         return
 
     full_transcript_text = "\n".join(f"{item.get('speaker')}: {item.get('text')}" for item in transcript_list)
-    analysis = await extract_call_signals_with_llm(full_transcript_text)
+    analysis = await extract_call_signals_with_llm(full_transcript_text, api_key_override=groq_api_key)
 
     payload = {
         "lead_id": lead_id,
@@ -214,13 +219,14 @@ async def post_call_to_crm(
         "remarks": analysis.get("remarks", ""),
     }
 
-    ingest_url = f"{config.CRM_BACKEND_URL}/api/ai/calls/ingest"
+    ingest_url = f"{target_backend_url}/api/ai/calls/ingest"
     headers = {
         "Content-Type": "application/json",
-        "X-Voice-Agent-Secret": config.VOICE_AGENT_SHARED_SECRET,
+        "X-Voice-Agent-Secret": secret,
     }
 
     try:
+        logger.info("Posting call results to CRM at %s (lead_id=%s, turns=%d)...", ingest_url, lead_id, len(transcript_list))
         async with aiohttp.ClientSession() as session:
             async with session.post(ingest_url, json=payload, headers=headers, timeout=25) as resp:
                 if resp.status in (200, 201):
@@ -228,7 +234,7 @@ async def post_call_to_crm(
                 else:
                     logger.error("Failed to sync call to CRM (%s): %s", resp.status, await resp.text())
     except Exception as e:
-        logger.error("Error posting call to CRM ingest endpoint: %s", e)
+        logger.error("Error posting call to CRM ingest endpoint (%s): %s", ingest_url, e)
 
 
 # ─── LiveKit Worker ───
@@ -556,6 +562,8 @@ async def entrypoint(ctx: JobContext) -> None:
         )
 
         # Post results back to CRM
+        crm_url = meta.get("crm_backend_url") or config.CRM_BACKEND_URL
+        crm_secret = meta.get("voice_agent_shared_secret") or config.VOICE_AGENT_SHARED_SECRET
         await post_call_to_crm(
             lead_id=lead_id,
             campaign_id=campaign_id,
@@ -563,6 +571,9 @@ async def entrypoint(ctx: JobContext) -> None:
             duration_seconds=call_duration,
             transcript_list=transcript_items,
             agent_name=runtime_agent_name,
+            crm_backend_url=crm_url,
+            shared_secret=crm_secret,
+            groq_api_key=groq_key,
         )
 
         # Drop per-call objects explicitly and return freed heap memory to the OS
