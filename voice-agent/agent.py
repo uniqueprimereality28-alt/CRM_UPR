@@ -342,7 +342,7 @@ async def entrypoint(ctx: JobContext) -> None:
     else:
         logger.error("WARNING: No LLM API key found in metadata or environment! Groq responses will fail.")
         llm_instance = openai.LLM(
-            model="llama-3.3-70b-versatile",
+            model="qwen/qwen3.8-27b",
             base_url="https://api.groq.com/openai/v1",
             temperature=0.3,
         )
