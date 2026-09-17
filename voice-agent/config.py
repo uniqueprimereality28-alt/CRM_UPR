@@ -115,6 +115,17 @@ def build_runtime_system_prompt(call_type: str, agent_config: dict = None, user_
     transfer_target = agent_config.get("transfer_target_name") or DEFAULT_TRANSFER_NAME
     name_phrase = f"{lead_name} ji" if lead_name else "Sir/Ma'am"
     transfer_phrase = agent_config.get("transfer_phrase") or f"{name_phrase} please stay on the line, while I am connecting the call."
+    final_summary_template = agent_config.get("final_summary_template") or ""
+    if final_summary_template:
+        final_summary_pattern = final_summary_template
+    else:
+        final_summary_pattern = (
+            f"{name_phrase} maine aapki saari requirement note kar li — aapko [repeat customer's BHK e.g. 3 BHK] "
+            f"property chahiye [repeat customer's Location e.g. Dwarka Expressway] mein under [repeat customer's "
+            f"Budget e.g. 2 Cr], for [repeat customer's Purpose e.g. personal use]. Main ye saari details hamari "
+            f"senior team ke sath share kar rahi hoon and they will get in touch with you shortly. "
+            f"Thank you so much for your time, have a nice day!"
+        )
 
     prompt = f"""\
 <role>
@@ -191,9 +202,11 @@ Office Location: {OFFICE_LOCATION}
      Say: "{builders_options}"
 
 5. DYNAMIC CROSS-VERIFICATION & WRAP-UP:
-   - Summarize what the customer ACTUALLY stated during the conversation:
-     Say: "{name_phrase} maine aapki saari requirement note kar li — aapko [repeat customer's BHK e.g. 3 BHK] property chahiye [repeat customer's Location e.g. Dwarka Expressway] mein under [repeat customer's Budget e.g. 2 Cr], for [repeat customer's Purpose e.g. personal use]. Main ye saari details hamari senior team ke sath share kar rahi hoon and they will get in touch with you shortly. Thank you so much for your time, have a nice day!"
-   - Once you say "Thank you for your time, have a nice day!", the call will gracefully end.
+   - Summarize what the customer ACTUALLY stated during the conversation, following this pattern
+     (replace {{config}}, {{location}}, {{budget}}, {{purpose}} with what the customer actually said —
+     e.g. {{config}} -> "3 BHK", {{location}} -> "Dwarka Expressway", {{budget}} -> "2 Cr", {{purpose}} -> "personal use"):
+     Say: "{final_summary_pattern}"
+   - Once you say a phrase like "have a nice day", the call will gracefully end.
 </conversation_flow>
 
 <strict_guardrails>
