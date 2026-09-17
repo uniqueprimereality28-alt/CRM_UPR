@@ -4,6 +4,8 @@ Powered by LiveKit + Vobiz SIP + Deepgram STT + Groq LLM + Sarvam AI TTS
 """
 
 import asyncio
+import ctypes
+import gc
 import json
 import logging
 import os
@@ -11,6 +13,36 @@ import re
 import sys
 import time
 from typing import Optional
+
+try:
+    import psutil
+    _PROCESS = psutil.Process()
+except Exception:
+    psutil = None
+    _PROCESS = None
+
+
+def _rss_mb() -> float:
+    """Current resident memory of this process, in MB (0 if psutil unavailable)."""
+    if _PROCESS is None:
+        return 0.0
+    try:
+        return round(_PROCESS.memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        return 0.0
+
+
+def _release_memory_to_os() -> None:
+    """Force Python GC and hand freed heap pages back to the OS (glibc malloc_trim).
+    Without this, RSS tends to creep upward call-over-call on small containers
+    even though there is no real leak, because glibc keeps freed memory in its
+    own arenas instead of returning it. This is what eventually trips a
+    platform-level memory limit (e.g. Render) after enough calls."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 os.environ.setdefault("PYTHONMALLOC", "malloc")
@@ -252,7 +284,10 @@ async def entrypoint(ctx: JobContext) -> None:
     lead_id = lead_id or f"lead_{int(time.time())}"
     runtime_agent_name = agent_config.get("agent_name") or agent_config.get("agentName") or config.AGENT_NAME
 
-    logger.info("Job started | lead_id=%s | phone=%s | type=%s", lead_id, phone_number, call_type)
+    logger.info(
+        "Job started | lead_id=%s | phone=%s | type=%s | rss_mb=%.1f",
+        lead_id, phone_number, call_type, _rss_mb(),
+    )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     logger.info("Connected to LiveKit room: %s", ctx.room.name)
@@ -484,7 +519,10 @@ async def entrypoint(ctx: JobContext) -> None:
         duration_task.cancel()
         watchdog_task.cancel()
         call_duration = time.time() - call_start
-        logger.info("Call session complete. Duration: %.1fs, Turns: %d", call_duration, len(transcript_items))
+        logger.info(
+            "Call session complete. Duration: %.1fs, Turns: %d, rss_mb=%.1f",
+            call_duration, len(transcript_items), _rss_mb(),
+        )
 
         # Post results back to CRM
         await post_call_to_crm(
@@ -495,6 +533,13 @@ async def entrypoint(ctx: JobContext) -> None:
             transcript_list=transcript_items,
             agent_name=runtime_agent_name,
         )
+
+        # Drop per-call objects explicitly and return freed heap memory to the OS
+        # before this worker/thread picks up the next job. Cheap, safe, and the
+        # single biggest lever we have against slow RSS growth on a small instance.
+        del vad_instance, llm_instance, stt_instance, tts_instance, agent, session
+        _release_memory_to_os()
+        logger.info("Post-cleanup rss_mb=%.1f", _rss_mb())
 
 
 if __name__ == "__main__":
