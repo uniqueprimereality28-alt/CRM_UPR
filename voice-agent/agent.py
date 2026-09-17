@@ -34,15 +34,13 @@ def _rss_mb() -> float:
 
 def _release_memory_to_os() -> None:
     """Force Python GC and hand freed heap pages back to the OS (glibc malloc_trim).
-    Without this, RSS tends to creep upward call-over-call on small containers
-    even though there is no real leak, because glibc keeps freed memory in its
-    own arenas instead of returning it. This is what eventually trips a
-    platform-level memory limit (e.g. Render) after enough calls."""
+    Prevents RSS creep call-over-call on small containers (e.g. Render 512MB free tier)."""
     gc.collect()
     try:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except Exception:
         pass
+
 
 os.environ.setdefault("MALLOC_ARENA_MAX", "2")
 os.environ.setdefault("PYTHONMALLOC", "malloc")
@@ -74,12 +72,12 @@ logger = logging.getLogger("upr-calling-agent")
 
 VOICE_TURN_HANDLING = {
     "turn_detection": "vad",
-    "endpointing": {"mode": "fixed", "min_delay": 0.8, "max_delay": 2.5},
+    "endpointing": {"mode": "fixed", "min_delay": 0.5, "max_delay": 2.0},
     "interruption": {
         "enabled": True,
         "mode": "vad",
-        "min_duration": 0.8,
-        "min_words": 2,
+        "min_duration": 0.5,
+        "min_words": 1,
         "resume_false_interruption": True,
     },
     "preemptive_generation": {"enabled": False},
@@ -303,48 +301,61 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     # 1. Initialize LLM (Groq -> OpenAI -> Grok fallback)
-    if config.GROQ_API_KEY:
+    groq_key = meta.get("groq_api_key") or config.GROQ_API_KEY
+    openai_key = meta.get("openai_api_key") or config.OPENAI_API_KEY
+    grok_key = meta.get("grok_api_key") or config.GROK_API_KEY
+
+    if groq_key:
         llm_instance = openai.LLM(
             model=config.GROQ_MODEL,
             base_url="https://api.groq.com/openai/v1",
-            api_key=config.GROQ_API_KEY,
+            api_key=groq_key,
             temperature=0.3,
         )
         logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", config.GROQ_MODEL)
-    elif config.OPENAI_API_KEY:
+    elif openai_key:
         llm_instance = openai.LLM(
             model=config.OPENAI_MODEL,
-            api_key=config.OPENAI_API_KEY,
+            api_key=openai_key,
             temperature=0.3,
         )
         logger.info("LLM initialized with OpenAI fallback: %s", config.OPENAI_MODEL)
-    elif config.GROK_API_KEY:
+    elif grok_key:
         llm_instance = openai.LLM(
             model=config.GROK_MODEL,
             base_url="https://api.x.ai/v1",
-            api_key=config.GROK_API_KEY,
+            api_key=grok_key,
             temperature=0.3,
         )
         logger.info("LLM initialized with Grok (xAI): %s", config.GROK_MODEL)
     else:
+        logger.error("WARNING: No LLM API key found in metadata or environment! Groq responses will fail.")
         llm_instance = openai.LLM(
             model="llama-3.3-70b-versatile",
             base_url="https://api.groq.com/openai/v1",
             temperature=0.3,
         )
-        logger.info("LLM initialized with default Groq configuration")
 
     # 2. Initialize STT (Deepgram Nova-3)
+    deepgram_key = meta.get("deepgram_api_key") or config.DEEPGRAM_API_KEY
+    if not deepgram_key:
+        logger.error("WARNING: No DEEPGRAM_API_KEY found in metadata or environment! STT will fail.")
+    else:
+        logger.info("STT initialized with Deepgram Nova-3")
+
     stt_instance = deepgram.STT(
         model=config.DEEPGRAM_STT_MODEL,
         language=config.DEEPGRAM_STT_LANGUAGE,
-        api_key=config.DEEPGRAM_API_KEY or None,
+        api_key=deepgram_key or None,
     )
 
     # 3. Initialize TTS (Sarvam AI Indian voices -> Deepgram Aura fallback)
     tts_instance = None
     sarvam_key = meta.get("sarvam_api_key") or config.SARVAM_API_KEY
+    valid_sarvam_speakers = {"simran", "priya", "kavya", "neha", "pooja", "aditya", "amit", "rahul"}
     sarvam_speaker = meta.get("sarvam_speaker") or config.SARVAM_SPEAKER
+    if sarvam_speaker not in valid_sarvam_speakers:
+        sarvam_speaker = "simran"
     sarvam_lang = meta.get("sarvam_language") or config.SARVAM_LANGUAGE_CODE
 
     if sarvam_key and HAS_SARVAM:
@@ -366,7 +377,7 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         logger.info("TTS initialized with Deepgram Aura: %s", config.DEEPGRAM_TTS_MODEL)
 
-    # 4. System prompt (Calls config.build_runtime_system_prompt directly)
+    # 4. System prompt
     system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt, inventory=inventory)
 
     # 5. Agent
@@ -385,14 +396,27 @@ async def entrypoint(ctx: JobContext) -> None:
 
     disconnecting = False
 
-    async def schedule_delayed_hangup(delay_sec: float = 3.5):
+    async def hangup_call():
+        """Proactively end the SIP telephony call immediately by deleting the LiveKit room.
+        This forces LiveKit to send a SIP BYE to Vobiz, terminating the phone line without lingering."""
         nonlocal disconnecting
         if disconnecting:
             return
         disconnecting = True
+        logger.info("Ending call: deleting LiveKit room %s to terminate Vobiz SIP trunk...", ctx.room.name)
+        try:
+            await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+            logger.info("Room %s deleted successfully; phone line hung up.", ctx.room.name)
+        except Exception as e:
+            logger.warning("Error deleting room for SIP hangup: %s", e)
+        ctx.shutdown()
+
+    async def schedule_delayed_hangup(delay_sec: float = 3.5):
+        if disconnecting:
+            return
         logger.info("Exit trigger detected. Closing call after %.1fs for speech completion...", delay_sec)
         await asyncio.sleep(delay_sec)
-        ctx.shutdown()
+        await hangup_call()
 
     customer_spoke = False
     last_customer_speech_time = time.time()
@@ -414,10 +438,16 @@ async def entrypoint(ctx: JobContext) -> None:
             customer_spoke = True
             last_customer_speech_time = time.time()
 
-        # Drop-off rule check: if Vrinda says goodbye or customer said no/completed wrap-up
+        # Drop-off rule check: if Vrinda says goodbye or wrap-up
         lower = text.lower()
         if speaker == runtime_agent_name:
-            if any(phrase in lower for phrase in ["thank you for your time, have a nice day", "have a nice day", "have a wonderful day"]) and "kya aap gurgaon" not in lower:
+            if any(phrase in lower for phrase in [
+                "thank you for your time, have a nice day",
+                "have a nice day",
+                "have a wonderful day",
+                "shukriya, have a nice day",
+                "hum baad mein contact karenge",
+            ]) and "kya aap gurgaon" not in lower:
                 asyncio.create_task(schedule_delayed_hangup(3.5))
 
     session_closed = asyncio.Event()
@@ -427,13 +457,14 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("Session closed.")
         session_closed.set()
 
-    # Immediate hangup when the lead disconnects their mobile phone
+    # Immediate hangup when the customer disconnects their mobile phone
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant):
-        logger.info("Customer participant disconnected (%s). Terminating call immediately.", participant.identity)
-        ctx.shutdown()
+        if participant.identity.startswith("sip_") or participant.identity != ctx.room.local_participant.identity:
+            logger.info("Customer participant disconnected (%s). Terminating call immediately.", participant.identity)
+            asyncio.create_task(hangup_call())
 
-    # Start audio session: use standard RoomOptions without heavy neural noise cancellation to prevent CPU stalls & audio stuttering
+    # Start audio session
     await session.start(
         agent,
         room=ctx.room,
@@ -460,11 +491,11 @@ async def entrypoint(ctx: JobContext) -> None:
             )
             logger.info("Call answered by customer! Playing initial greeting...")
             greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
-            await session.say(greeting, allow_interruptions=False)
+            await session.say(greeting, allow_interruptions=True)
             logger.info("Greeting finished. Conversation active.")
         except Exception as exc:
             logger.error("Outbound Vobiz call failed to connect: %s", exc)
-            ctx.shutdown()
+            await hangup_call()
             return
     elif call_type == "outbound" and not outbound_trunk_id:
         logger.warning("No VOBIZ_SIP_TRUNK_ID configured. Operating in test/browser room mode.")
@@ -477,25 +508,25 @@ async def entrypoint(ctx: JobContext) -> None:
         await session.say(f"Hello, main {runtime_agent_name} bol rahi hoon Unique Prime Reality, Gurgaon se. How may I help you?", allow_interruptions=True)
 
     # Silence & Voicemail Watchdog to prevent token wastage:
-    # 1. If no response within 14s of greeting (voicemail / unanswered / silent line), hang up immediately.
-    # 2. If silent for >30s during call, prompt and hang up.
+    # 1. If customer doesn't speak within 14s after greeting (answering machine / dead air), hang up.
+    # 2. If customer goes silent for >25s during the conversation, prompt and hang up.
     async def silence_watchdog():
         await asyncio.sleep(14)
         if not customer_spoke and not disconnecting:
-            logger.info("No customer speech detected after greeting (likely voicemail or unanswered). Hanging up to save tokens.")
-            ctx.shutdown()
+            logger.info("No customer speech detected within 14s after greeting (voicemail or dead line). Hanging up to save tokens.")
+            await hangup_call()
             return
 
         while not disconnecting:
-            await asyncio.sleep(5)
-            if (time.time() - last_customer_speech_time) > 30 and not disconnecting:
-                logger.info("Customer silent for >30s. Hanging up.")
+            await asyncio.sleep(4)
+            if (time.time() - last_customer_speech_time) > 25 and not disconnecting:
+                logger.info("Customer silent for >25s during call. Prompting and hanging up.")
                 try:
                     await session.say("Aapki aawaz nahi aa rahi hai, hum baad mein contact karenge. Thank you!", allow_interruptions=False)
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(2.5)
                 except Exception:
                     pass
-                ctx.shutdown()
+                await hangup_call()
                 return
 
     watchdog_task = asyncio.create_task(silence_watchdog())
@@ -506,10 +537,10 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.warning("Max duration reached — closing call.")
         try:
             await session.say("Thank you for your time. Have a wonderful day!", allow_interruptions=False)
-            await asyncio.sleep(4)
+            await asyncio.sleep(3.5)
         except Exception:
             pass
-        ctx.shutdown()
+        await hangup_call()
 
     duration_task = asyncio.create_task(enforce_max_duration())
 
@@ -535,14 +566,12 @@ async def entrypoint(ctx: JobContext) -> None:
         )
 
         # Drop per-call objects explicitly and return freed heap memory to the OS
-        # before this worker/thread picks up the next job. Cheap, safe, and the
-        # single biggest lever we have against slow RSS growth on a small instance.
         del vad_instance, llm_instance, stt_instance, tts_instance, agent, session
         _release_memory_to_os()
         logger.info("Post-cleanup rss_mb=%.1f", _rss_mb())
 
 
-if __name__ == "__main__":
+def run_app_main():
     if not config.LIVEKIT_URL:
         logger.error(
             "ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Render Environment variables."
@@ -582,3 +611,7 @@ if __name__ == "__main__":
         config.LIVEKIT_API_KEY[:6] if config.LIVEKIT_API_KEY else "NONE",
     )
     cli.run_app(WorkerOptions(**worker_kwargs))
+
+
+if __name__ == "__main__":
+    run_app_main()
