@@ -151,6 +151,8 @@ Extract the following information in pure JSON format with no markdown wrappers:
         api_key = api_key_override or config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
         base_url = "https://api.groq.com/openai/v1" if (api_key_override or config.GROQ_API_KEY) else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
         model = config.GROQ_MODEL if (api_key_override or config.GROQ_API_KEY) else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
+        if model in ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama3-70b-8192", "llama3-8b-8192", ""]:
+            model = "qwen/qwen3.8-27b"
 
         if not api_key:
             return fallback_result
@@ -312,13 +314,16 @@ async def entrypoint(ctx: JobContext) -> None:
     grok_key = meta.get("grok_api_key") or config.GROK_API_KEY
 
     if groq_key:
+        chosen_groq_model = config.GROQ_MODEL
+        if chosen_groq_model in ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama3-70b-8192", "llama3-8b-8192", ""]:
+            chosen_groq_model = "qwen/qwen3.8-27b"
         llm_instance = openai.LLM(
-            model=config.GROQ_MODEL,
+            model=chosen_groq_model,
             base_url="https://api.groq.com/openai/v1",
             api_key=groq_key,
             temperature=0.3,
         )
-        logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", config.GROQ_MODEL)
+        logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", chosen_groq_model)
     elif openai_key:
         llm_instance = openai.LLM(
             model=config.OPENAI_MODEL,
@@ -583,11 +588,25 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 def run_app_main():
-    if not config.LIVEKIT_URL:
-        logger.error(
-            "ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET in Render Environment variables."
-        )
+    ws_url = (config.LIVEKIT_URL or "").strip().strip('"').strip("'")
+    api_key = (config.LIVEKIT_API_KEY or "").strip().strip('"').strip("'")
+    api_secret = (config.LIVEKIT_API_SECRET or "").strip().strip('"').strip("'")
+
+    logger.info("=== LIVEKIT CREDENTIAL DIAGNOSTIC ===")
+    logger.info("LIVEKIT_URL: %s", ws_url)
+    logger.info("LIVEKIT_API_KEY: '%s...' (length: %d, starts_with_API: %s)", api_key[:6] if api_key else "EMPTY", len(api_key), api_key.startswith("API"))
+    logger.info("LIVEKIT_API_SECRET: '%s...' (length: %d, starts_with_ST: %s, starts_with_API: %s)", api_secret[:6] if api_secret else "EMPTY", len(api_secret), api_secret.startswith("ST_") or api_secret.startswith("ST"), api_secret.startswith("API"))
+
+    if not ws_url:
+        logger.error("ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL in Render Environment variables.")
         sys.exit(1)
+
+    if api_secret.startswith("API") and not api_key.startswith("API"):
+        logger.warning("SWAP DETECTED: LIVEKIT_API_KEY and LIVEKIT_API_SECRET were swapped! Auto-correcting...")
+        api_key, api_secret = api_secret, api_key
+
+    if api_secret.startswith("ST_") or api_secret.startswith("ST"):
+        logger.error("FATAL ERROR: LIVEKIT_API_SECRET is set to a SIP Trunk ID ('%s...')! A SIP Trunk ID cannot be used as an API Secret. Please go to cloud.livekit.io -> Project Settings -> Keys, copy the real API Secret, and paste it into LIVEKIT_API_SECRET in Render Environment tab.", api_secret[:8])
 
     try:
         from livekit.agents.job import JobExecutorType
@@ -609,17 +628,15 @@ def run_app_main():
     }
     if job_exec is not None:
         worker_kwargs["job_executor_type"] = job_exec
-    if config.LIVEKIT_URL:
-        worker_kwargs["ws_url"] = config.LIVEKIT_URL
-    if config.LIVEKIT_API_KEY:
-        worker_kwargs["api_key"] = config.LIVEKIT_API_KEY
-    if config.LIVEKIT_API_SECRET:
-        worker_kwargs["api_secret"] = config.LIVEKIT_API_SECRET
+    worker_kwargs["ws_url"] = ws_url
+    worker_kwargs["api_key"] = api_key
+    worker_kwargs["api_secret"] = api_secret
+
     logger.info(
         "Connecting worker '%s' to %s with Key '%s...'",
         config.LIVEKIT_AGENT_NAME,
-        config.LIVEKIT_URL,
-        config.LIVEKIT_API_KEY[:6] if config.LIVEKIT_API_KEY else "NONE",
+        ws_url,
+        api_key[:6] if api_key else "NONE",
     )
     cli.run_app(WorkerOptions(**worker_kwargs))
 
