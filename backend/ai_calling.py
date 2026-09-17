@@ -1191,6 +1191,27 @@ async def _dispatch_outbound_call(
                 "phone": e164_phone,
                 "userPrompt": user_prompt,
                 "inventory": clean_inventory,
+                # snake_case keys — these are what voice-agent/config.py actually
+                # reads from agent_config. The camelCase ones above are NOT read
+                # for these fields, so without this block every one of these was
+                # silently falling back to the hardcoded defaults in config.py
+                # regardless of what was saved in the Settings > Script tab.
+                "agent_name": kb.get("agent_name") or agent.get("name", "Vrinda"),
+                "company_name": kb.get("company_name", "Unique Prime Reality"),
+                "market": kb.get("market", ""),
+                "custom_greeting": kb.get("custom_greeting", ""),
+                "gate_no_response": kb.get("gate_no_response", ""),
+                "purpose_question": kb.get("purpose_question", ""),
+                "budget_config_question": kb.get("budget_config_question", ""),
+                "location_question": kb.get("location_question", ""),
+                "best_now_answer": kb.get("best_now_answer", ""),
+                "builders_options": kb.get("builders_options", ""),
+                "ai_disclosure_answer": kb.get("ai_disclosure_answer", ""),
+                "final_summary_template": kb.get("final_summary_template", ""),
+                "transfer_number": kb.get("transfer_number", TRANSFER_TARGET_NUMBER),
+                "transfer_target_name": kb.get("transfer_target_name", "Vrinda Aggarwal"),
+                "transfer_phrase": kb.get("transfer_phrase", ""),
+                "lead_name": lead_name,
             },
         }
         metadata_str = json.dumps(metadata_dict, default=str)
