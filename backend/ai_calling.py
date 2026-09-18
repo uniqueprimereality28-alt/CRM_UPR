@@ -21,6 +21,7 @@ import re
 import json
 import random
 import uuid
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Any
@@ -73,15 +74,15 @@ VOICE_AGENT_URL_ENV = os.environ.get("VOICE_AGENT_URL", "").rstrip("/")
 VOICE_AGENT_SHARED_SECRET_ENV = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
 VOICE_AGENT_SETTINGS_DOC_ID = "voice_agent_config"
 
-LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "wss://upr-f4uye3kl.livekit.cloud").strip()
-LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "APIzpBW2dgAWHCi").strip()
-LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN").strip()
+LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "").strip()
+LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "").strip()
+LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "").strip()
 LIVEKIT_AGENT_NAME_ENV = os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
-VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "ST_Ur4PPBKFmzeT").strip()
-GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "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").strip()
+VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "").strip()
+GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "").strip()
 GROK_API_KEY_ENV = os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY", "").strip()
-SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7").strip()
-DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "1b25ccbd65e3bfd2213085e75758344ed409eb21").strip()
+SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "").strip()
+DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "").strip()
 
 TRANSFER_TARGET_NAME = "Vranda Aggarwal"
 TRANSFER_TARGET_NUMBER = "7351735035"
@@ -895,33 +896,6 @@ async def _get_voice_agent_config() -> dict:
     """DB-stored config (settable from inside the CRM) wins over env vars."""
     doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
 
-    lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "wss://upr-f4uye3kl.livekit.cloud")
-    lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "APIzpBW2dgAWHCi")
-    lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN")
-
-    # Auto-detect swapped LiveKit API Key and Secret
-    if lk_secret.startswith("API") and not lk_key.startswith("API"):
-        logger.warning("LiveKit API Key and Secret were saved in reverse — auto-correcting...")
-        lk_key, lk_secret = lk_secret, lk_key
-
-    return {
-        "livekit_url": lk_url,
-        "livekit_api_key": lk_key,
-        "livekit_api_secret": lk_secret,
-        "livekit_agent_name": _clean_str(doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent"),
-        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "ST_Ur4PPBKFmzeT"),
-        "voice_agent_url": _clean_str(doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
-        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "rxci_voice_9247xv"),
-        "groq_api_key": _clean_str(doc.get("groq_api_key") or GROQ_API_KEY_ENV or "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"),
-        "grok_api_key": _clean_str(doc.get("grok_api_key") or GROK_API_KEY_ENV or ""),
-        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7"),
-        "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "1b25ccbd65e3bfd2213085e75758344ed409eb21"),
-        "sarvam_speaker": _clean_str(doc.get("sarvam_speaker") or "simran"),
-        "sarvam_language": _clean_str(doc.get("sarvam_language") or "hi-IN"),
-    }
-    """DB-stored config (settable from inside the CRM) wins over env vars."""
-    doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
-
     lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "")
     lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "")
     lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "")
@@ -1107,6 +1081,76 @@ async def test_livekit_connection(user: dict = Depends(require_vranda_only)):
         }
 
 
+async def _verify_worker_picked_up_job(
+    http_url: str,
+    headers: dict,
+    room_name: str,
+    lead_id: str,
+    agent_name: str,
+    delay_seconds: int = 20,
+) -> None:
+    """Runs in the background after a call is dispatched. If no participant
+    (not even the voice-agent worker itself) has joined the room within
+    `delay_seconds`, the worker never picked up the job — almost always
+    because the voice-agent service on Render is asleep/down/crashed, or its
+    LIVEKIT_URL/API_KEY/API_SECRET/LIVEKIT_AGENT_NAME don't match what the CRM
+    just dispatched with. Marks the lead accordingly instead of leaving it on
+    'dialing' forever with a misleading appearance of success."""
+    import httpx
+    try:
+        await asyncio.sleep(delay_seconds)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{http_url}/twirp/livekit.RoomService/ListParticipants",
+                headers=headers,
+                json={"room": room_name},
+            )
+        if resp.status_code != 200:
+            logger.warning("Could not verify worker pickup for room %s: HTTP %s", room_name, resp.status_code)
+            return
+
+        participants = (resp.json() or {}).get("participants", [])
+        if participants:
+            return  # Worker (and/or the SIP leg) is present — all good.
+
+        logger.error(
+            "No worker joined room %s within %ss of dispatch (agent_name=%s). "
+            "The voice-agent service likely never picked up the job.",
+            room_name, delay_seconds, agent_name,
+        )
+        try:
+            await db.leads.update_one(
+                {"_id": ObjectId(lead_id)} if ObjectId.is_valid(lead_id) else {"ai_call_uuid": room_name},
+                {"$set": {
+                    "ai_call_status": "failed",
+                    "ai_call_error": (
+                        f"No response from the calling agent within {delay_seconds}s — the voice-agent "
+                        f"worker never joined the call. Check that the voice-agent service on Render is "
+                        f"awake and running, and that its LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET "
+                        f"/ LIVEKIT_AGENT_NAME env vars exactly match the LiveKit settings saved in "
+                        f"AI Calling Settings (agent_name expected: '{agent_name}')."
+                    ),
+                    "updated_at": now_iso(),
+                }},
+            )
+        except Exception as db_exc:
+            logger.error("Failed to mark lead %s as failed after worker-pickup timeout: %s", lead_id, db_exc)
+
+        # Best-effort: delete the now-pointless empty room instead of letting
+        # it sit for the full 5-minute empty_timeout.
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(
+                    f"{http_url}/twirp/livekit.RoomService/DeleteRoom",
+                    headers=headers,
+                    json={"room": room_name},
+                )
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.error("Worker-pickup verification crashed for room %s: %s", room_name, exc)
+
+
 async def _dispatch_outbound_call(
     lead: dict,
     agent: dict,
@@ -1283,6 +1327,27 @@ async def _dispatch_outbound_call(
                         dispatch_resp.status_code,
                         f"LiveKit Cloud agent dispatch failed ({dispatch_resp.status_code}): {dispatch_resp.text}"
                     )
+
+                # IMPORTANT: a 200 here only means LiveKit accepted the job into
+                # its queue for a worker named `agent_name` to pick up — it does
+                # NOT mean the voice-agent process is actually running/connected,
+                # and it does NOT mean the phone will ring. If the voice-agent
+                # Render service is asleep, crashed, or its LIVEKIT_* env vars
+                # don't match these credentials, no worker ever claims the job,
+                # the room simply sits empty until it times out, and — without
+                # this check — the CRM would report "dispatched" success forever
+                # while nothing happens on the phone. This background check
+                # verifies a worker actually joined within a few seconds and
+                # surfaces a clear, honest failure on the lead if not.
+                asyncio.create_task(
+                    _verify_worker_picked_up_job(
+                        http_url=http_url,
+                        headers=headers,
+                        room_name=call_uuid,
+                        lead_id=lead_id,
+                        agent_name=agent_name,
+                    )
+                )
                 return {"call_uuid": call_uuid, "status": "dispatched", "method": "livekit_cloud"}
             except HTTPException:
                 raise
