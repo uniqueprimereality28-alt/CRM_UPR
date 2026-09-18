@@ -203,7 +203,8 @@ Office Location: {OFFICE_LOCATION}
 
 5. DYNAMIC CROSS-VERIFICATION & WRAP-UP:
    - Summarize what the customer ACTUALLY stated during the conversation, following this pattern
-     (replace {{config}}, {{location}}, {{budget}}, {{purpose}} with what the customer actually said):
+     (replace {{config}}, {{location}}, {{budget}}, {{purpose}} with what the customer actually said —
+     e.g. {{config}} -> "3 BHK", {{location}} -> "Dwarka Expressway", {{budget}} -> "2 Cr", {{purpose}} -> "personal use"):
      Say: "{final_summary_pattern}"
    - Once you say a phrase like "have a nice day", the call will gracefully end.
 </conversation_flow>
