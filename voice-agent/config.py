@@ -39,6 +39,16 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFF
 SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3").strip()
 SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "simran").strip()  # simran, priya, kavya, neha, pooja, aditya, amit, rahul
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN").strip()
+# NOTE: default changed from "hi-IN" to "en-IN". Every script/prompt in this
+# file (greeting, questions, etc.) is Hinglish written in LATIN letters
+# ("Kya aap Gurgaon mein koi property plan kar rahe hain?"), not Devanagari.
+# Sarvam's hi-IN voice expects actual Devanagari text — fed Romanized Hindi,
+# it can silently return empty/near-silent audio (no exception raised), which
+# is why a call can connect and answer normally but the AI never says a word.
+# en-IN is Sarvam's mode for exactly this kind of Latin-script, code-mixed
+# Hindi/English speech. If SARVAM_LANGUAGE_CODE is set explicitly in Render's
+# environment variables, that env var still wins over this default — update
+# it there too if it's currently set to "hi-IN".
 
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
 
