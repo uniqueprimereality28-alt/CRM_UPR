@@ -1,9 +1,11 @@
 """
-Unique Prime Reality - AI Voice Agent Worker (Production Engine)
-Ultra-low latency conversational calling with Groq Qwen-27B + Sarvam AI / Deepgram TTS + Deepgram Nova-3 STT.
-Engineered for Render Free Tier (Single process, ~180MB RAM).
+Unique Prime Reality - AI Outbound Calling Agent (Vrinda)
+Powered by LiveKit + Vobiz SIP + Deepgram STT + Groq LLM + Sarvam AI TTS
 """
+
 import asyncio
+import ctypes
+import gc
 import json
 import logging
 import os
@@ -12,25 +14,46 @@ import sys
 import time
 from typing import Optional
 
+try:
+    import psutil
+    _PROCESS = psutil.Process()
+except Exception:
+    psutil = None
+    _PROCESS = None
+
+
+def _rss_mb() -> float:
+    """Current resident memory of this process, in MB (0 if psutil unavailable)."""
+    if _PROCESS is None:
+        return 0.0
+    try:
+        return round(_PROCESS.memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        return 0.0
+
+
+def _release_memory_to_os() -> None:
+    """Force Python GC and hand freed heap pages back to the OS (glibc malloc_trim)."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+os.environ.setdefault("PYTHONMALLOC", "malloc")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "1")
+os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "0")
 
 import aiohttp
 from dotenv import load_dotenv
-load_dotenv()
-
-from livekit import api
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    RoomOptions,
-    WorkerOptions,
-    cli,
-    llm,
-)
+from livekit import api, rtc
+from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli, llm
 from livekit.agents.voice import Agent, AgentSession
+from livekit.agents.voice.room_io import RoomOptions
 from livekit.plugins import deepgram, openai, silero
 
 try:
@@ -41,41 +64,119 @@ except ImportError:
 
 import config
 
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("upr-calling-agent")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logger.addHandler(ch)
 
 VOICE_TURN_HANDLING = {
+    "turn_detection": "vad",
+    "endpointing": {"mode": "fixed", "min_delay": 0.5, "max_delay": 2.0},
     "interruption": {
-        "mode": "adaptive",
+        "enabled": True,
+        "mode": "vad",
+        "min_duration": 0.5,
         "min_words": 1,
-        "interruption_latency": 0.15,
-    }
+        "resume_false_interruption": True,
+    },
+    "preemptive_generation": {"enabled": False},
 }
 
 
-def _rss_mb() -> float:
+def normalize_e164(phone: str) -> str:
+    cleaned = re.sub(r"[\s().-]", "", str(phone or "")).strip()
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+    elif cleaned.startswith("0") and len(cleaned) == 11:
+        cleaned = "+91" + cleaned[1:]
+    elif not cleaned.startswith("+"):
+        if len(cleaned) == 10:
+            cleaned = "+91" + cleaned
+        else:
+            cleaned = "+" + cleaned
+    return cleaned
+
+
+# ─── CRM Sync & Structured Key-Points Extraction ───
+
+async def extract_call_signals_with_llm(transcript: str, api_key_override: Optional[str] = None) -> dict:
+    """Use Groq / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
+    fallback_result = {
+        "summary": "Call ended with no meaningful conversation captured.",
+        "disposition": "no_answer",
+        "requirements": {},
+        "signals": [],
+        "urgency_score": 5,
+        "wants_site_visit": False,
+        "wants_brochure": False,
+        "whatsapp_opt_in": False,
+        "human_transfer_required": False,
+        "next_followup_days": 2,
+        "remarks": "",
+    }
+
+    if not transcript or len(transcript.strip()) < 10:
+        return fallback_result
+
+    prompt = f"""You are an expert real estate CRM data analyst. Analyze this phone conversation transcript between Vrinda (Unique Prime Reality AI consultant) and a customer.
+
+TRANSCRIPT:
+{transcript}
+
+Extract the following information in pure JSON format with no markdown wrappers:
+{{
+  "summary": "Key points summary in bullet format: • Requirement (BHK, Budget, Location, Purpose) • Discussion highlights • Next step/Outcome",
+  "disposition": "connected | callback | not_interested | wrong_number | busy",
+  "requirements": {{
+    "property_type": "residential | commercial | studio | penthouse",
+    "purpose": "personal_use | investment",
+    "budget": "extracted budget string e.g. Under 3 Cr, 1.5 Cr, 90L",
+    "bhk": "e.g. 2 BHK, 3 BHK, 4 BHK, studio, penthouse",
+    "location_preference": "e.g. Dwarka Expressway, Manesar Corridor, Golf Course Ext, Sohna Road",
+    "possession_timeline": "immediate, 30 days, 6 months, or null"
+  }},
+  "signals": [
+    Choose from: "whatsapp_details", "budget_shared", "bhk_shared", "timeline_shared", "wants_site_visit", "wants_callback", "urgent_30_days", "investor_intent", "casual_interest", "not_interested", "wrong_number", "call_later", "requested_human"
+  ],
+  "urgency_score": 1-10 integer,
+  "wants_site_visit": true/false,
+  "wants_brochure": true/false,
+  "whatsapp_opt_in": true/false,
+  "human_transfer_required": true/false,
+  "next_followup_days": integer (e.g. 1, 2, 7) or null,
+  "remarks": "Notable customer preferences, objections or remarks"
+}}"""
+
     try:
-        import psutil
-        return round(psutil.Process().memory_info().rss / (1024 * 1024), 1)
-    except Exception:
-        return 0.0
+        api_key = api_key_override or config.GROQ_API_KEY or config.OPENAI_API_KEY or config.GROK_API_KEY
+        base_url = "https://api.groq.com/openai/v1" if (api_key_override or config.GROQ_API_KEY) else ("https://api.openai.com/v1" if config.OPENAI_API_KEY else "https://api.x.ai/v1")
+        model = config.GROQ_MODEL if (api_key_override or config.GROQ_API_KEY) else (config.OPENAI_MODEL if config.OPENAI_API_KEY else config.GROK_MODEL)
+        if model in ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama3-70b-8192", "llama3-8b-8192", ""]:
+            model = "qwen/qwen3.8-27b"
 
+        if not api_key:
+            return fallback_result
 
-def normalize_e164(raw: str) -> str:
-    cleaned = re.sub(r"[^\d+]", "", raw.strip())
-    if cleaned.startswith("+"):
-        return cleaned
-    digits = re.sub(r"\D", "", cleaned)
-    if len(digits) == 10:
-        return f"+91{digits}"
-    if len(digits) == 12 and digits.startswith("91"):
-        return f"+{digits}"
-    return f"+{digits}"
+        async with aiohttp.ClientSession() as session:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            }
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            async with session.post(f"{base_url}/chat/completions", json=payload, headers=headers, timeout=20) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    content = data["choices"][0]["message"]["content"].strip()
+                    clean_json = re.sub(r"^```json\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
+                    extracted = json.loads(clean_json)
+                    return {**fallback_result, **extracted}
+                else:
+                    logger.warning("Signal extraction LLM call returned status %s", resp.status)
+    except Exception as e:
+        logger.error("Failed to extract call signals with LLM: %s", e)
+
+    return fallback_result
 
 
 async def post_call_to_crm(
@@ -83,55 +184,132 @@ async def post_call_to_crm(
     campaign_id: Optional[str],
     call_uuid: str,
     duration_seconds: float,
-    transcript_list: list,
-    agent_name: str,
-    crm_backend_url: str,
-    shared_secret: str,
+    transcript_list: list[dict],
+    agent_name: str = config.AGENT_NAME,
+    crm_backend_url: Optional[str] = None,
+    shared_secret: Optional[str] = None,
+    groq_api_key: Optional[str] = None,
     forced_disposition: Optional[str] = None,
     forced_remarks: Optional[str] = None,
 ) -> None:
-    if not crm_backend_url:
+    target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
+    secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
+
+    if not target_backend_url:
+        logger.warning("CRM_BACKEND_URL is not set. Skipping CRM ingest.")
         return
 
-    url = f"{crm_backend_url.rstrip('/')}/api/ai/calls/real/complete"
+    full_transcript_text = "\n".join(f"{item.get('speaker')}: {item.get('text')}" for item in transcript_list)
+
+    if forced_disposition:
+        analysis = {
+            "summary": forced_remarks or f"Call ended without connecting. Disposition: {forced_disposition}.",
+            "disposition": forced_disposition,
+            "requirements": {},
+            "signals": [],
+            "urgency_score": 0,
+            "wants_site_visit": False,
+            "wants_brochure": False,
+            "whatsapp_opt_in": False,
+            "human_transfer_required": False,
+            "next_followup_days": 1,
+            "remarks": forced_remarks or "",
+        }
+    else:
+        analysis = await extract_call_signals_with_llm(full_transcript_text, api_key_override=groq_api_key)
+
     payload = {
         "lead_id": lead_id,
         "campaign_id": campaign_id,
-        "call_uuid": call_uuid,
-        "duration_seconds": round(duration_seconds, 1),
-        "transcript": transcript_list,
         "agent_name": agent_name,
-        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "call_uuid": call_uuid,
+        "duration_seconds": round(duration_seconds),
+        "transcript": transcript_list,
+        "summary": analysis.get("summary", "Outbound AI call completed."),
+        "disposition": analysis.get("disposition", "connected"),
+        "requirements": analysis.get("requirements", {}),
+        "signals": analysis.get("signals", []),
+        "urgency_score": analysis.get("urgency_score", 5),
+        "wants_site_visit": analysis.get("wants_site_visit", False),
+        "wants_brochure": analysis.get("wants_brochure", False),
+        "whatsapp_opt_in": analysis.get("whatsapp_opt_in", False),
+        "human_transfer_required": analysis.get("human_transfer_required", False),
+        "next_followup_days": analysis.get("next_followup_days", 2),
+        "remarks": analysis.get("remarks", ""),
     }
-    if forced_disposition:
-        payload["disposition"] = forced_disposition
-    if forced_remarks:
-        payload["remarks"] = forced_remarks
 
+    url = f"{target_backend_url}/api/ai/calls/ingest"
     headers = {
+        "X-Voice-Agent-Secret": secret,
         "Content-Type": "application/json",
-        "X-Voice-Agent-Secret": shared_secret,
     }
 
+    logger.info("Posting call results to CRM: %s (lead_id=%s, turns=%d, disp=%s)", url, lead_id, len(transcript_list), payload["disposition"])
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as resp:
                 if resp.status in (200, 201):
-                    logger.info("Call data saved to CRM successfully: lead_id=%s, call_uuid=%s", lead_id, call_uuid)
+                    logger.info("Call successfully ingested by CRM: %s", await resp.text())
                 else:
                     body = await resp.text()
-                    logger.warning("CRM /complete returned %s: %s", resp.status, body)
+                    logger.warning("CRM ingest returned HTTP %s: %s", resp.status, body)
     except Exception as exc:
         logger.error("Failed to post call to CRM (%s): %s", url, exc)
 
 
-def prewarm(proc: JobContext) -> None:
+async def send_whatsapp_followup(
+    phone: str,
+    name: str,
+    requirements: dict,
+    crm_backend_url: Optional[str] = None,
+    shared_secret: Optional[str] = None,
+) -> None:
+    target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
+    secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
+
+    if not target_backend_url:
+        return
+
+    bhk = requirements.get("bhk") or "property"
+    budget = requirements.get("budget") or "preferred budget"
+    location = requirements.get("location_preference") or "Gurgaon prime locations"
+
+    message = (
+        f"Namaste {name or 'Ji'}! 🙏\n\n"
+        f"Thank you for speaking with Vrinda from *Unique Prime Reality*.\n\n"
+        f"As per your requirement for *{bhk}* in *{location}* (Budget: {budget}), "
+        f"our senior property consultant is preparing the best shortlisted options and project brochures for you.\n\n"
+        f"📍 Office: Dwarka Expressway, near Conscient One mall, Gurgaon\n\n"
+        f"We will share the project details right here shortly. Have a wonderful day!"
+    )
+
+    url = f"{target_backend_url}/api/ai/whatsapp/send"
+    headers = {
+        "X-Voice-Agent-Secret": secret,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "phone": phone,
+        "message": message,
+        "lead_name": name,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                logger.info("WhatsApp follow-up dispatched to %s: HTTP %s", phone, resp.status)
+    except Exception as exc:
+        logger.warning("Failed to dispatch WhatsApp follow-up: %s", exc)
+
+
+def prewarm(proc: JobProcess) -> None:
+    logger.info("Prewarming Silero VAD | pid=%d | rss=%.1fMB", os.getpid(), _rss_mb())
     try:
         proc.userdata["vad"] = silero.VAD.load(
-            min_speech_duration=0.2,
+            min_speech_duration=0.15,
             min_silence_duration=0.5,
             prefix_padding_duration=0.3,
-            activation_threshold=0.65,
+            activation_threshold=0.50,
         )
         logger.info("VAD model prewarmed successfully | rss=%.1fMB", _rss_mb())
     except Exception as exc:
@@ -155,36 +333,30 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
     campaign_id = None
     call_type = "outbound"
     user_prompt = ""
+    agent_config = {}
     sip_trunk_id = None
-    agent_config: dict = {}
-    inventory = config.DEFAULT_INVENTORY
+    inventory = None
 
-    if ctx.job.metadata:
+    job_metadata_str = getattr(ctx.job, "metadata", None) or ""
+    if job_metadata_str:
         try:
-            meta = json.loads(ctx.job.metadata)
+            meta = json.loads(job_metadata_str)
+            logger.info("Parsed job metadata keys: %s", list(meta.keys()))
             phone_number = meta.get("phone_number") or meta.get("phone")
-            lead_id = meta.get("lead_id") or meta.get("id")
+            lead_id = meta.get("lead_id")
             campaign_id = meta.get("campaign_id")
             call_type = meta.get("call_type", "outbound")
-            user_prompt = meta.get("user_prompt") or meta.get("prompt") or ""
+            user_prompt = meta.get("user_prompt", "")
+            agent_config = meta.get("agent_config") or {}
             sip_trunk_id = meta.get("sip_trunk_id") or meta.get("vobiz_sip_trunk_id")
-            raw_cfg = meta.get("agent_config", {})
-            if isinstance(raw_cfg, dict):
-                agent_config = raw_cfg
-            lead_name = meta.get("lead_name") or meta.get("leadName") or agent_config.get("lead_name") or agent_config.get("leadName") or ""
-            if lead_name:
-                agent_config["lead_name"] = lead_name
-                agent_config["leadName"] = lead_name
-            inventory = meta.get("inventory") or agent_config.get("inventory") or config.DEFAULT_INVENTORY
+            inventory = meta.get("inventory")
         except Exception as e:
-            logger.warning("Could not parse job metadata: %s", e)
+            logger.warning("Failed to parse job metadata JSON: %s", e)
 
-    lead_id = lead_id or f"lead_{int(time.time())}"
-    runtime_agent_name = agent_config.get("agent_name") or agent_config.get("agentName") or config.AGENT_NAME
-
-    logger.info(
-        "Job started | lead_id=%s | phone=%s | type=%s | rss_mb=%.1f",
-        lead_id, phone_number, call_type, _rss_mb(),
+    runtime_agent_name = (
+        agent_config.get("agent_name")
+        or agent_config.get("agentName")
+        or config.AGENT_NAME
     )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -194,10 +366,10 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
     transcript_items: list[dict] = []
 
     vad_instance = ctx.proc.userdata.get("vad") or silero.VAD.load(
-        min_speech_duration=0.2,
+        min_speech_duration=0.15,
         min_silence_duration=0.5,
         prefix_padding_duration=0.3,
-        activation_threshold=0.65,
+        activation_threshold=0.50,
     )
 
     # 1. Initialize LLM (Groq -> OpenAI -> Grok fallback)
@@ -215,7 +387,7 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             api_key=groq_key,
             temperature=0.3,
         )
-        logger.info("LLM initialized with Groq: %s", chosen_groq_model)
+        logger.info("LLM initialized with Groq (Ultra-Low Latency): %s", chosen_groq_model)
     elif openai_key:
         llm_instance = openai.LLM(
             model=config.OPENAI_MODEL,
@@ -230,8 +402,9 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             api_key=grok_key,
             temperature=0.3,
         )
-        logger.info("LLM initialized with Grok: %s", config.GROK_MODEL)
+        logger.info("LLM initialized with Grok (xAI): %s", config.GROK_MODEL)
     else:
+        logger.error("WARNING: No LLM API key found in metadata or environment! Groq responses will fail.")
         llm_instance = openai.LLM(
             model="qwen/qwen3.8-27b",
             base_url="https://api.groq.com/openai/v1",
@@ -240,14 +413,18 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
 
     # 2. Initialize STT (Deepgram Nova-3)
     deepgram_key = meta.get("deepgram_api_key") or config.DEEPGRAM_API_KEY
+    if not deepgram_key:
+        logger.error("WARNING: No DEEPGRAM_API_KEY found in metadata or environment! STT will fail.")
+    else:
+        logger.info("STT initialized with Deepgram Nova-3")
+
     stt_instance = deepgram.STT(
         model=config.DEEPGRAM_STT_MODEL,
         language=config.DEEPGRAM_STT_LANGUAGE,
         api_key=deepgram_key or None,
     )
-    logger.info("STT initialized with Deepgram Nova-3")
 
-    # 3. Initialize TTS (Sarvam AI -> Deepgram Aura fallback)
+    # 3. Initialize TTS (Sarvam AI Indian voices -> Deepgram Aura fallback)
     tts_instance = None
     sarvam_key = meta.get("sarvam_api_key") or config.SARVAM_API_KEY
     valid_sarvam_speakers = {"simran", "priya", "kavya", "neha", "pooja", "aditya", "amit", "rahul"}
@@ -263,22 +440,34 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
                 target_language_code=sarvam_lang,
                 speaker=sarvam_speaker,
                 api_key=sarvam_key,
+                output_audio_codec="mp3",
             )
-            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, sarvam_speaker, sarvam_lang)
+            logger.info("TTS initialized with Sarvam AI: model=%s, speaker=%s, lang=%s, codec=mp3", config.SARVAM_MODEL, sarvam_speaker, sarvam_lang)
+        except TypeError:
+            try:
+                tts_instance = sarvam.TTS(
+                    model=config.SARVAM_MODEL,
+                    target_language_code=sarvam_lang,
+                    speaker=sarvam_speaker,
+                    api_key=sarvam_key,
+                )
+                logger.info("TTS initialized with Sarvam AI (default codec): model=%s, speaker=%s, lang=%s", config.SARVAM_MODEL, sarvam_speaker, sarvam_lang)
+            except Exception as e:
+                logger.warning("Failed to initialize Sarvam TTS (%s). Falling back to Deepgram.", e)
         except Exception as e:
-            logger.warning("Failed to initialize Sarvam TTS (%s). Falling back to Deepgram.", e)
+            logger.warning("Failed to initialize Sarvam TTS with mp3 (%s). Falling back to Deepgram.", e)
 
     if tts_instance is None:
         tts_instance = deepgram.TTS(
             model=config.DEEPGRAM_TTS_MODEL,
-            api_key=config.DEEPGRAM_API_KEY or None,
+            api_key=deepgram_key or config.DEEPGRAM_API_KEY or None,
         )
         logger.info("TTS initialized with Deepgram Aura: %s", config.DEEPGRAM_TTS_MODEL)
 
     # 4. System prompt
     system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt, inventory=inventory)
 
-    # 5. Agent & Session
+    # 5. Agent
     agent = Agent(
         instructions=system_prompt,
         stt=stt_instance,
@@ -299,9 +488,10 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
         if disconnecting:
             return
         disconnecting = True
-        logger.info("Ending call: deleting LiveKit room %s...", ctx.room.name)
+        logger.info("Ending call: deleting LiveKit room %s to terminate Vobiz SIP trunk...", ctx.room.name)
         try:
             await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+            logger.info("Room %s deleted successfully; phone line hung up.", ctx.room.name)
         except Exception as e:
             logger.warning("Error deleting room for SIP hangup: %s", e)
         ctx.shutdown()
@@ -309,6 +499,7 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
     async def schedule_delayed_hangup(delay_sec: float = 3.5):
         if disconnecting:
             return
+        logger.info("Exit trigger detected. Closing call after %.1fs for speech completion...", delay_sec)
         await asyncio.sleep(delay_sec)
         await hangup_call()
 
@@ -332,21 +523,13 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             customer_spoke = True
             last_customer_speech_time = time.time()
 
-            lower = text.lower()
+        lower = text.lower()
+        if speaker == runtime_agent_name:
             if any(phrase in lower for phrase in [
-                "nahi chahiye",
-                "not interested",
-                "wrong number",
-                "don't call",
-                "dont call",
-                "call cut",
-                "busy right now",
-                "busy hu",
-                "baad mein",
-                "baad me call karna",
-                "disconnect",
-                "ruk jao",
-                "baad mein baat karenge",
+                "thank you for your time, have a nice day",
+                "have a nice day",
+                "have a wonderful day",
+                "shukriya, have a nice day",
                 "hum baad mein contact karenge",
             ]) and "kya aap gurgaon" not in lower:
                 asyncio.create_task(schedule_delayed_hangup(3.5))
@@ -358,11 +541,22 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
         logger.info("Session closed.")
         session_closed.set()
 
+    # Immediate hangup when the customer disconnects their mobile phone
     @ctx.room.on("participant_disconnected")
     def on_participant_disconnected(participant):
         if participant.identity.startswith("sip_") or participant.identity != ctx.room.local_participant.identity:
             logger.info("Customer participant disconnected (%s). Terminating call immediately.", participant.identity)
             asyncio.create_task(hangup_call())
+
+    # Observability: log participant attribute changes and track subscriptions
+    @ctx.room.on("participant_attributes_changed")
+    def on_attributes_changed(changed_attrs: dict, participant: rtc.Participant):
+        if "sip.callStatus" in changed_attrs:
+            logger.info("SIP attribute changed for %s: callStatus='%s'", participant.identity, changed_attrs["sip.callStatus"])
+
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
+        logger.info("Subscribed to %s track %s from participant %s", publication.kind, track.sid, participant.identity)
 
     # Start audio session
     await session.start(
@@ -378,6 +572,9 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
     outbound_trunk_id = sip_trunk_id or config.VOBIZ_SIP_TRUNK_ID
     if call_type == "outbound" and phone_number and outbound_trunk_id:
         e164_phone = normalize_e164(phone_number)
+        target_sip_id = f"sip_{e164_phone}"
+
+        # Check if SIP participant was already dialed by CRM backend
         sip_already_in_room = any(p.identity.startswith("sip_") for p in ctx.room.remote_participants.values())
         if not sip_already_in_room:
             logger.info("Dialling %s via Vobiz SIP trunk %s ...", e164_phone, outbound_trunk_id)
@@ -387,8 +584,8 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
                         room_name=ctx.room.name,
                         sip_trunk_id=outbound_trunk_id,
                         sip_call_to=e164_phone,
-                        participant_identity=f"sip_{e164_phone}",
-                        wait_until_answered=True,
+                        participant_identity=target_sip_id,
+                        wait_until_answered=False,
                     )
                 )
             except Exception as exc:
@@ -413,19 +610,65 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
                     await hangup_call()
                     return
         else:
-            logger.info("SIP participant %s already dialed by CRM. Waiting for customer answer...", e164_phone)
+            logger.info("SIP participant %s already registered in room. Waiting for customer to answer...", e164_phone)
 
-        # Wait for customer participant to answer
+        # Explicitly wait for the customer to answer the phone (sip.callStatus == 'active')
+        logger.info("Dial active. Waiting for customer %s to pick up...", e164_phone)
+        answered = False
+        sip_participant = None
+
+        for wait_tick in range(120):  # 120 * 0.5s = 60s timeout
+            for p in ctx.room.remote_participants.values():
+                if p.identity.startswith("sip_") or p.identity == target_sip_id:
+                    sip_participant = p
+                    break
+
+            if sip_participant:
+                call_status = (sip_participant.attributes.get("sip.callStatus") or "").lower()
+                has_audio_track = any(
+                    pub.kind == rtc.TrackKind.KIND_AUDIO 
+                    for pub in sip_participant.track_publications.values()
+                )
+
+                if wait_tick % 6 == 0:
+                    logger.info("SIP status for %s: '%s' (audio_tracks=%s)", 
+                                sip_participant.identity, call_status or "dialing", has_audio_track)
+
+                # Active status or published audio track indicates call has been answered by human
+                if call_status == "active" or (has_audio_track and call_status not in ("dialing", "ringing")):
+                    logger.info("Customer answered phone call! (callStatus='%s', has_audio=%s)", call_status, has_audio_track)
+                    answered = True
+                    break
+                elif call_status in ("hangup", "rejected", "busy", "failed"):
+                    logger.warning("Call ended before answer (status: %s)", call_status)
+                    break
+
+            await asyncio.sleep(0.5)
+
+        if not answered:
+            logger.warning("Customer did not answer within timeout or rejected call. Terminating.")
+            await hangup_call()
+            return
+
+        # Explicitly link the session to the answered SIP participant
         try:
-            await ctx.wait_for_participant()
-        except Exception:
-            pass
+            if sip_participant and hasattr(session, "room_io") and session.room_io:
+                session.room_io.set_participant(sip_participant)
+                logger.info("Linked AgentSession to customer participant: %s", sip_participant.identity)
+        except Exception as e:
+            logger.warning("Could not explicitly link participant: %s", e)
 
-        logger.info("Call answered by customer! Playing initial greeting...")
-        await asyncio.sleep(0.6)
+        # Settle pause for carrier RTP media bridging (0.8s prevents clipping initial greeting)
+        logger.info("Carrier RTP bridge stabilizing (0.8s)...")
+        await asyncio.sleep(0.8)
+
         greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
-        await session.say(greeting, allow_interruptions=True)
-        logger.info("Greeting finished. Conversation active.")
+        logger.info("Speaking initial greeting to customer: '%s'", greeting)
+        try:
+            await session.say(greeting, allow_interruptions=True)
+            logger.info("Greeting finished. Conversation active.")
+        except Exception as e:
+            logger.error("Failed to speak greeting with Sarvam TTS: %s", e)
     elif call_type == "outbound" and not outbound_trunk_id:
         logger.warning("No VOBIZ_SIP_TRUNK_ID configured. Operating in test/browser room mode.")
         await ctx.wait_for_participant()
@@ -436,89 +679,99 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
         await ctx.wait_for_participant()
         await session.say(f"Hello, main {runtime_agent_name} bol rahi hoon Unique Prime Reality, Gurgaon se. How may I help you?", allow_interruptions=True)
 
-    # Silence & Voicemail Watchdog:
+    # Silence & Voicemail Watchdog to prevent token wastage:
+    # 1. If customer doesn't speak within 20s after greeting (answering machine / dead air), hang up.
+    # 2. If customer goes silent for >28s during the conversation, prompt and hang up.
     async def silence_watchdog():
-        await asyncio.sleep(14)
+        await asyncio.sleep(20)
         if not customer_spoke and not disconnecting:
-            logger.info("No customer speech detected within 14s after greeting. Hanging up to save tokens.")
+            logger.info("No customer speech detected within 20s after greeting (voicemail or dead line). Hanging up to save tokens.")
             await hangup_call()
             return
 
         while not disconnecting:
-            await asyncio.sleep(5)
-            if customer_spoke and (time.time() - last_customer_speech_time > 28):
-                logger.info("Customer silent for >28s. Playing final prompt & ending call.")
+            await asyncio.sleep(4)
+            if (time.time() - last_customer_speech_time) > 28 and not disconnecting:
+                logger.info("Customer silent for >28s during call. Prompting and hanging up.")
                 try:
-                    await session.say("Lagta hai aap busy hain ya call hold par hai. Aap baad mein call kar sakte hain. Have a nice day!", allow_interruptions=False)
-                    await asyncio.sleep(4)
+                    await session.say("Aapki aawaz nahi aa rahi hai, hum baad mein contact karenge. Thank you!", allow_interruptions=False)
+                    await asyncio.sleep(2.5)
                 except Exception:
                     pass
                 await hangup_call()
-                break
+                return
 
-    asyncio.create_task(silence_watchdog())
+    watchdog_task = asyncio.create_task(silence_watchdog())
 
-    # Max duration guard (10 minutes)
-    async def enforce_max_duration():
+    # Max call duration safeguard
+    async def enforce_max_duration() -> None:
         await asyncio.sleep(config.MAX_CALL_DURATION_SECONDS)
-        if not disconnecting:
-            logger.warning("Max call duration (%ds) reached. Graceful shutdown.", config.MAX_CALL_DURATION_SECONDS)
-            try:
-                await session.say("Thank you for your time, have a nice day!", allow_interruptions=False)
-                await asyncio.sleep(3)
-            except Exception:
-                pass
-            await hangup_call()
+        logger.warning("Max duration reached — closing call.")
+        try:
+            await session.say("Thank you for your time. Have a wonderful day!", allow_interruptions=False)
+            await asyncio.sleep(3.5)
+        except Exception:
+            pass
+        await hangup_call()
 
-    asyncio.create_task(enforce_max_duration())
+    duration_task = asyncio.create_task(enforce_max_duration())
 
-    await session_closed.wait()
+    try:
+        await session_closed.wait()
+    finally:
+        duration_task.cancel()
+        watchdog_task.cancel()
+        call_duration = time.time() - call_start
+        logger.info(
+            "Call session complete. Duration: %.1fs, Turns: %d, rss_mb=%.1f",
+            call_duration, len(transcript_items), _rss_mb(),
+        )
 
-    duration = time.time() - call_start
-    logger.info("Call ended: lead_id=%s, duration=%.1fs, items=%d", lead_id, duration, len(transcript_items))
+        crm_url = meta.get("crm_backend_url") or config.CRM_BACKEND_URL
+        crm_secret = meta.get("voice_agent_shared_secret") or config.VOICE_AGENT_SHARED_SECRET
+        await post_call_to_crm(
+            lead_id=lead_id,
+            campaign_id=campaign_id,
+            call_uuid=ctx.room.name,
+            duration_seconds=call_duration,
+            transcript_list=transcript_items,
+            agent_name=runtime_agent_name,
+            crm_backend_url=crm_url,
+            shared_secret=crm_secret,
+            groq_api_key=groq_key,
+        )
 
-    await post_call_to_crm(
-        lead_id=lead_id,
-        campaign_id=campaign_id,
-        call_uuid=ctx.room.name,
-        duration_seconds=duration,
-        transcript_list=transcript_items,
-        agent_name=runtime_agent_name,
-        crm_backend_url=meta.get("crm_backend_url") or config.CRM_BACKEND_URL,
-        shared_secret=meta.get("voice_agent_shared_secret") or config.VOICE_AGENT_SHARED_SECRET,
-    )
+        del vad_instance, llm_instance, stt_instance, tts_instance, agent, session
+        _release_memory_to_os()
+        logger.info("Post-cleanup rss_mb=%.1f", _rss_mb())
 
 
 def run_app_main():
-    ws_url = (config.LIVEKIT_URL or "").strip().strip('"').strip("'")
-    api_key = (config.LIVEKIT_API_KEY or "").strip().strip('"').strip("'")
-    api_secret = (config.LIVEKIT_API_SECRET or "").strip().strip('"').strip("'")
+    ws_url = config.LIVEKIT_URL
+    api_key = config.LIVEKIT_API_KEY
+    api_secret = config.LIVEKIT_API_SECRET
 
-    logger.info("=== LIVEKIT CREDENTIAL DIAGNOSTIC ===")
+    logger.info("Starting upr-calling-agent worker (Production Mode)...")
     logger.info("LIVEKIT_URL: %s", ws_url)
     logger.info("LIVEKIT_API_KEY: '%s...' (length: %d, starts_with_API: %s)", api_key[:6] if api_key else "EMPTY", len(api_key), api_key.startswith("API"))
     logger.info("LIVEKIT_API_SECRET: '%s...' (length: %d, starts_with_ST: %s, starts_with_API: %s)", api_secret[:6] if api_secret else "EMPTY", len(api_secret), api_secret.startswith("ST_") or api_secret.startswith("ST"), api_secret.startswith("API"))
 
     if not ws_url:
-        logger.error("ERROR: LIVEKIT_URL is not set.")
+        logger.error("ERROR: LIVEKIT_URL is not set. Please configure LIVEKIT_URL in Render Environment variables.")
         sys.exit(1)
 
     if api_secret.startswith("API") and not api_key.startswith("API"):
-        logger.warning("SWAP DETECTED: LIVEKIT_API_KEY and LIVEKIT_API_SECRET were swapped! Auto-correcting...")
+        logger.warning("Detected swapped LIVEKIT_API_KEY and LIVEKIT_API_SECRET! Auto-correcting...")
         api_key, api_secret = api_secret, api_key
 
     if api_secret.startswith("ST_") or api_secret.startswith("ST"):
-        logger.error("FATAL ERROR: LIVEKIT_API_SECRET is set to a SIP Trunk ID!")
+        logger.error("FATAL ERROR: LIVEKIT_API_SECRET is set to a SIP Trunk ID ('%s...')! A SIP Trunk ID cannot be used as an API Secret. Please go to cloud.livekit.io -> Project Settings -> Keys, copy the real API Secret, and paste it into LIVEKIT_API_SECRET in Render Environment tab.", api_secret[:8])
 
     try:
         from livekit.agents.job import JobExecutorType
         job_exec = JobExecutorType.THREAD
     except Exception:
-        try:
-            from livekit.agents import JobExecutorType
-            job_exec = JobExecutorType.THREAD
-        except Exception:
-            job_exec = None
+        job_exec = None
 
     worker_kwargs = {
         "entrypoint_fnc": entrypoint,
@@ -530,17 +783,9 @@ def run_app_main():
     }
     if job_exec is not None:
         worker_kwargs["job_executor_type"] = job_exec
-    worker_kwargs["ws_url"] = ws_url
-    worker_kwargs["api_key"] = api_key
-    worker_kwargs["api_secret"] = api_secret
 
-    logger.info(
-        "Connecting worker '%s' to %s with Key '%s...'",
-        config.LIVEKIT_AGENT_NAME,
-        ws_url,
-        api_key[:6] if api_key else "NONE",
-    )
-    cli.run_app(WorkerOptions(**worker_kwargs))
+    opts = WorkerOptions(**worker_kwargs)
+    cli.run_app(opts)
 
 
 if __name__ == "__main__":
