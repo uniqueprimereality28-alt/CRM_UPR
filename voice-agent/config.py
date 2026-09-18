@@ -7,12 +7,12 @@ except ImportError:
     pass
 
 # ─── LiveKit & Telephony ───
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "").strip()
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "").strip()
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "").strip()
+LIVEKIT_URL = os.getenv("LIVEKIT_URL", "wss://upr-f4uye3kl.livekit.cloud").strip()
+LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "APIzpBW2dgAWHCi").strip()
+LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN").strip()
 LIVEKIT_AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
 
-VOBIZ_SIP_TRUNK_ID = os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID", "").strip()
+VOBIZ_SIP_TRUNK_ID = os.getenv("VOBIZ_SIP_TRUNK_ID") or os.getenv("OUTBOUND_SIP_TRUNK_ID", "ST_Ur4PPBKFmzeT").strip()
 DEFAULT_TRANSFER_NUMBER = os.getenv("DEFAULT_TRANSFER_NUMBER", "+917351735035").strip()
 DEFAULT_TRANSFER_NAME = os.getenv("DEFAULT_TRANSFER_NAME", "Vrinda Aggarwal").strip()
 MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
@@ -22,12 +22,12 @@ MAX_CALL_DURATION_SECONDS = int(os.getenv("MAX_CALL_DURATION_SECONDS", "600"))
 STT_PROVIDER = os.getenv("STT_PROVIDER", "deepgram").strip().lower()
 
 # Deepgram Nova-3 STT
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "").strip()
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "1b25ccbd65e3bfd2213085e75758344ed409eb21").strip()
 DEEPGRAM_STT_MODEL = os.getenv("DEEPGRAM_STT_MODEL", "nova-3").strip()
 DEEPGRAM_STT_LANGUAGE = os.getenv("DEEPGRAM_STT_LANGUAGE", "hi").strip()
 
 # ─── LLM Brain: Groq (Ultra-Fast 600+ tokens/sec, Recommended) or OpenAI / Grok fallback ───
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
@@ -35,20 +35,10 @@ GROK_API_KEY = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY", "").strip()
 GROK_MODEL = os.getenv("GROK_MODEL", "grok-2-latest").strip()
 
 # TTS: Sarvam AI (Indian voices) or Deepgram Aura fallback
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "").strip()
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7").strip()
 SARVAM_MODEL = os.getenv("SARVAM_MODEL", "bulbul:v3").strip()
 SARVAM_SPEAKER = os.getenv("SARVAM_SPEAKER", "simran").strip()  # simran, priya, kavya, neha, pooja, aditya, amit, rahul
 SARVAM_LANGUAGE_CODE = os.getenv("SARVAM_LANGUAGE_CODE", "en-IN").strip()
-# NOTE: default changed from "hi-IN" to "en-IN". Every script/prompt in this
-# file (greeting, questions, etc.) is Hinglish written in LATIN letters
-# ("Kya aap Gurgaon mein koi property plan kar rahe hain?"), not Devanagari.
-# Sarvam's hi-IN voice expects actual Devanagari text — fed Romanized Hindi,
-# it can silently return empty/near-silent audio (no exception raised), which
-# is why a call can connect and answer normally but the AI never says a word.
-# en-IN is Sarvam's mode for exactly this kind of Latin-script, code-mixed
-# Hindi/English speech. If SARVAM_LANGUAGE_CODE is set explicitly in Render's
-# environment variables, that env var still wins over this default — update
-# it there too if it's currently set to "hi-IN".
 
 DEEPGRAM_TTS_MODEL = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en").strip()
 
@@ -213,8 +203,7 @@ Office Location: {OFFICE_LOCATION}
 
 5. DYNAMIC CROSS-VERIFICATION & WRAP-UP:
    - Summarize what the customer ACTUALLY stated during the conversation, following this pattern
-     (replace {{config}}, {{location}}, {{budget}}, {{purpose}} with what the customer actually said —
-     e.g. {{config}} -> "3 BHK", {{location}} -> "Dwarka Expressway", {{budget}} -> "2 Cr", {{purpose}} -> "personal use"):
+     (replace {{config}}, {{location}}, {{budget}}, {{purpose}} with what the customer actually said):
      Say: "{final_summary_pattern}"
    - Once you say a phrase like "have a nice day", the call will gracefully end.
 </conversation_flow>
