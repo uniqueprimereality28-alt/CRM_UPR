@@ -919,7 +919,7 @@ async def _get_voice_agent_config() -> dict:
         "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or ""),
         "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or ""),
         "sarvam_speaker": _clean_str(doc.get("sarvam_speaker") or "simran"),
-        "sarvam_language": _clean_str(doc.get("sarvam_language") or "hi-IN"),
+        "sarvam_language": _clean_str(doc.get("sarvam_language") or "en-IN"),
     }
 
 
@@ -963,7 +963,7 @@ async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
         "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id", ""),
         "voice_agent_url": cfg.get("voice_agent_url", ""),
         "sarvam_speaker": cfg.get("sarvam_speaker", "simran"),
-        "sarvam_language": cfg.get("sarvam_language", "hi-IN"),
+        "sarvam_language": cfg.get("sarvam_language", "en-IN"),
         "has_livekit_key": bool(lk_key),
         "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
         "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
@@ -1236,7 +1236,7 @@ async def _dispatch_outbound_call(
             "voice_id": voice,
             "sip_trunk_id": cfg.get("vobiz_sip_trunk_id") or "",
             "sarvam_speaker": cfg.get("sarvam_speaker") or "simran",
-            "sarvam_language": cfg.get("sarvam_language") or "hi-IN",
+            "sarvam_language": cfg.get("sarvam_language") or "en-IN",
             "groq_api_key": cfg.get("groq_api_key") or cfg.get("grok_api_key") or "",
             "deepgram_api_key": cfg.get("deepgram_api_key") or "",
             "sarvam_api_key": cfg.get("sarvam_api_key") or "",
@@ -1621,7 +1621,7 @@ async def complete_followup(fu_id: str, user: dict = Depends(get_current_user)):
 class TTSTestIn(BaseModel):
     text: str
     speaker: Optional[str] = "simran"
-    language: Optional[str] = "hi-IN"
+    language: Optional[str] = "en-IN"
 
 
 VALID_SARVAM_SPEAKERS = {
@@ -1671,7 +1671,7 @@ async def tts_test(payload: TTSTestIn, user: dict = Depends(get_current_user)):
     headers = {"api-subscription-key": sarvam_key, "Content-Type": "application/json"}
     body = {
         "inputs": [payload.text[:500]],
-        "target_language_code": payload.language or "hi-IN",
+        "target_language_code": payload.language or "en-IN",
         "speaker": selected_speaker,
         "model": "bulbul:v3",
     }
