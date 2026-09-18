@@ -16,7 +16,7 @@ os.environ.setdefault("PYTHONMALLOC", "malloc")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "0")
+os.environ.setdefault("LIVEKIT_NUM_IDLE_PROCESSES", "1")
 
 try:
     import psutil
@@ -59,7 +59,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             "livekit_key_starts_with_api": lk_key.startswith("API"),
             "message": "Voice agent runner is alive and healthy.",
         }).encode("utf-8")
-        self.send_response(200)
+            self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
