@@ -585,6 +585,12 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
                 )
             )
             logger.info("Call answered by customer! Playing initial greeting...")
+            # Brief settle pause: the SIP signalling can report "answered" a
+            # fraction of a second before the two-way RTP audio path is fully
+            # bridged on the carrier side. Speaking immediately risks the
+            # first utterance (often the ENTIRE greeting, since nothing else
+            # is said until the customer responds) being silently dropped.
+            await asyncio.sleep(0.6)
             greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
             await session.say(greeting, allow_interruptions=True)
             logger.info("Greeting finished. Conversation active.")
