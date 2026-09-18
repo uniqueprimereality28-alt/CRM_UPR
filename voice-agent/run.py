@@ -59,7 +59,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             "livekit_key_starts_with_api": lk_key.startswith("API"),
             "message": "Voice agent runner is alive and healthy.",
         }).encode("utf-8")
-            self.send_response(200)
+        self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
