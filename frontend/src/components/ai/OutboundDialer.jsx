@@ -70,15 +70,53 @@ export const OutboundDialer = ({ onCallDispatched }) => {
 
       const res = await api.post("/ai/calls/real/trigger", payload);
       setStatus("success");
-      setStatusMessage(`Call dispatched to ${phone}! The LiveKit agent is placing the call via Vobiz SIP.`);
-      toast.success("Outbound call dispatched successfully!");
+      setStatusMessage(`Call dispatched to ${phone}! The LiveKit agent is placing the call via Vobiz SIP. Confirming it actually connected…`);
+      toast.success("Outbound call dispatched — confirming it connects...");
       if (onCallDispatched) onCallDispatched(res.data);
+      // A 200 here only means LiveKit queued the job for a worker — it does
+      // NOT mean the voice-agent actually picked it up or that the phone is
+      // ringing. Poll the lead for a short while so a silent failure (worker
+      // never joined, SIP dial rejected, etc.) is actually shown instead of
+      // this success message being the last thing the user ever sees.
+      pollCallOutcome(res.data.lead_id);
     } catch (err) {
       setStatus("error");
       const msg = err.response?.data?.detail || err.message || "Failed to dispatch call. Please check your telephony settings.";
       setStatusMessage(msg);
       toast.error(apiError(msg));
     }
+  };
+
+  const pollCallOutcome = (leadId) => {
+    if (!leadId) return;
+    let attempts = 0;
+    const maxAttempts = 6; // ~30s at 5s apart — covers the 20s backend worker-pickup check
+    const interval = setInterval(async () => {
+      attempts += 1;
+      try {
+        const { data } = await api.get(`/leads/${leadId}`);
+        const lead = data?.lead || data; // GET /leads/{id} returns {lead, activities, calls}
+        if (lead?.ai_call_status === "failed") {
+          clearInterval(interval);
+          setStatus("error");
+          setStatusMessage(
+            lead.ai_call_error ||
+              "The call did not connect. Check your voice-agent service and LiveKit/Vobiz SIP trunk settings."
+          );
+          toast.error("The outbound call failed to connect");
+          return;
+        }
+        if (lead?.ai_call_status === "called") {
+          clearInterval(interval);
+          setStatus("success");
+          setStatusMessage(`Call to ${phone} completed. Check Calls for the transcript and outcome.`);
+          return;
+        }
+      } catch {
+        // ignore transient polling errors
+      }
+      if (attempts >= maxAttempts) clearInterval(interval);
+    }, 5000);
   };
 
   const filteredLeads = recentLeads.filter((l) =>
