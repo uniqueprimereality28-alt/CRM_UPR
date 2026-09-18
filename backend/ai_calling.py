@@ -73,15 +73,15 @@ VOICE_AGENT_URL_ENV = os.environ.get("VOICE_AGENT_URL", "").rstrip("/")
 VOICE_AGENT_SHARED_SECRET_ENV = os.environ.get("VOICE_AGENT_SHARED_SECRET", "")
 VOICE_AGENT_SETTINGS_DOC_ID = "voice_agent_config"
 
-LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "").strip()
-LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "").strip()
-LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "").strip()
+LIVEKIT_URL_ENV = os.environ.get("LIVEKIT_URL", "wss://upr-f4uye3kl.livekit.cloud").strip()
+LIVEKIT_API_KEY_ENV = os.environ.get("LIVEKIT_API_KEY", "APIzpBW2dgAWHCi").strip()
+LIVEKIT_API_SECRET_ENV = os.environ.get("LIVEKIT_API_SECRET", "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN").strip()
 LIVEKIT_AGENT_NAME_ENV = os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent").strip()
-VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "").strip()
-GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "").strip()
+VOBIZ_SIP_TRUNK_ID_ENV = os.environ.get("VOBIZ_SIP_TRUNK_ID") or os.environ.get("OUTBOUND_SIP_TRUNK_ID", "ST_Ur4PPBKFmzeT").strip()
+GROQ_API_KEY_ENV = os.environ.get("GROQ_API_KEY", "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").strip()
 GROK_API_KEY_ENV = os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY", "").strip()
-SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "").strip()
-DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "").strip()
+SARVAM_API_KEY_ENV = os.environ.get("SARVAM_API_KEY", "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7").strip()
+DEEPGRAM_API_KEY_ENV = os.environ.get("DEEPGRAM_API_KEY", "1b25ccbd65e3bfd2213085e75758344ed409eb21").strip()
 
 TRANSFER_TARGET_NAME = "Vranda Aggarwal"
 TRANSFER_TARGET_NUMBER = "7351735035"
@@ -892,6 +892,33 @@ def _clean_str(val: Any) -> str:
 
 
 async def _get_voice_agent_config() -> dict:
+    """DB-stored config (settable from inside the CRM) wins over env vars."""
+    doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
+
+    lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "wss://upr-f4uye3kl.livekit.cloud")
+    lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "APIzpBW2dgAWHCi")
+    lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN")
+
+    # Auto-detect swapped LiveKit API Key and Secret
+    if lk_secret.startswith("API") and not lk_key.startswith("API"):
+        logger.warning("LiveKit API Key and Secret were saved in reverse — auto-correcting...")
+        lk_key, lk_secret = lk_secret, lk_key
+
+    return {
+        "livekit_url": lk_url,
+        "livekit_api_key": lk_key,
+        "livekit_api_secret": lk_secret,
+        "livekit_agent_name": _clean_str(doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent"),
+        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "ST_Ur4PPBKFmzeT"),
+        "voice_agent_url": _clean_str(doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
+        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "rxci_voice_9247xv"),
+        "groq_api_key": _clean_str(doc.get("groq_api_key") or GROQ_API_KEY_ENV or "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"),
+        "grok_api_key": _clean_str(doc.get("grok_api_key") or GROK_API_KEY_ENV or ""),
+        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7"),
+        "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "1b25ccbd65e3bfd2213085e75758344ed409eb21"),
+        "sarvam_speaker": _clean_str(doc.get("sarvam_speaker") or "simran"),
+        "sarvam_language": _clean_str(doc.get("sarvam_language") or "hi-IN"),
+    }
     """DB-stored config (settable from inside the CRM) wins over env vars."""
     doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
 
