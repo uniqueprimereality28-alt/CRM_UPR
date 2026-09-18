@@ -192,6 +192,20 @@ async def post_call_to_crm(
     forced_disposition: Optional[str] = None,
     forced_remarks: Optional[str] = None,
 ) -> None:
+    """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint.
+
+    IMPORTANT: this is the ONLY place the CRM learns what happened to a call.
+    Every code path that can end a call (successful hangup, SIP dial failure,
+    or an unexpected crash) MUST reach this function — otherwise the lead's
+    ai_call_status is left stuck on "dialing" forever and the CRM shows a
+    false "success" with no way to tell the call never actually happened.
+
+    forced_disposition / forced_remarks let a failure path report the real
+    outcome directly (e.g. "failed" + the SIP error) instead of running the
+    transcript through the LLM extractor, which has nothing to analyze when
+    the call never connected and would otherwise default to a misleading
+    "connected"/"no_answer" guess.
+    """
     target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
     secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
 
@@ -238,125 +252,131 @@ async def post_call_to_crm(
         "remarks": analysis.get("remarks", ""),
     }
 
-    url = f"{target_backend_url}/api/ai/calls/ingest"
+    ingest_url = f"{target_backend_url}/api/ai/calls/ingest"
     headers = {
-        "X-Voice-Agent-Secret": secret,
         "Content-Type": "application/json",
+        "X-Voice-Agent-Secret": secret,
     }
 
-    logger.info("Posting call results to CRM: %s (lead_id=%s, turns=%d, disp=%s)", url, lead_id, len(transcript_list), payload["disposition"])
     try:
-        async with aiohttp.ClientSession() as http:
-            async with http.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as resp:
+        logger.info("Posting call results to CRM at %s (lead_id=%s, turns=%d)...", ingest_url, lead_id, len(transcript_list))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(ingest_url, json=payload, headers=headers, timeout=25) as resp:
                 if resp.status in (200, 201):
-                    logger.info("Call successfully ingested by CRM: %s", await resp.text())
+                    logger.info("Call successfully synced to CRM! Lead: %s, Signals: %s", lead_id, analysis.get("signals"))
                 else:
-                    body = await resp.text()
-                    logger.warning("CRM ingest returned HTTP %s: %s", resp.status, body)
-    except Exception as exc:
-        logger.error("Failed to post call to CRM (%s): %s", url, exc)
+                    logger.error("Failed to sync call to CRM (%s): %s", resp.status, await resp.text())
+    except Exception as e:
+        logger.error("Error posting call to CRM ingest endpoint (%s): %s", ingest_url, e)
 
 
-async def send_whatsapp_followup(
-    phone: str,
-    name: str,
-    requirements: dict,
-    crm_backend_url: Optional[str] = None,
-    shared_secret: Optional[str] = None,
-) -> None:
-    target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
-    secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
-
-    if not target_backend_url:
-        return
-
-    bhk = requirements.get("bhk") or "property"
-    budget = requirements.get("budget") or "preferred budget"
-    location = requirements.get("location_preference") or "Gurgaon prime locations"
-
-    message = (
-        f"Namaste {name or 'Ji'}! 🙏\n\n"
-        f"Thank you for speaking with Vrinda from *Unique Prime Reality*.\n\n"
-        f"As per your requirement for *{bhk}* in *{location}* (Budget: {budget}), "
-        f"our senior property consultant is preparing the best shortlisted options and project brochures for you.\n\n"
-        f"📍 Office: Dwarka Expressway, near Conscient One mall, Gurgaon\n\n"
-        f"We will share the project details right here shortly. Have a wonderful day!"
-    )
-
-    url = f"{target_backend_url}/api/ai/whatsapp/send"
-    headers = {
-        "X-Voice-Agent-Secret": secret,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "phone": phone,
-        "message": message,
-        "lead_name": name,
-    }
-
-    try:
-        async with aiohttp.ClientSession() as http:
-            async with http.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                logger.info("WhatsApp follow-up dispatched to %s: HTTP %s", phone, resp.status)
-    except Exception as exc:
-        logger.warning("Failed to dispatch WhatsApp follow-up: %s", exc)
-
+# ─── LiveKit Worker ───
 
 def prewarm(proc: JobProcess) -> None:
-    logger.info("Prewarming Silero VAD | pid=%d | rss=%.1fMB", os.getpid(), _rss_mb())
     try:
-        proc.userdata["vad"] = silero.VAD.load(
-            min_speech_duration=0.15,
-            min_silence_duration=0.5,
-            prefix_padding_duration=0.3,
-            activation_threshold=0.50,
-        )
-        logger.info("VAD model prewarmed successfully | rss=%.1fMB", _rss_mb())
-    except Exception as exc:
-        logger.warning("VAD prewarm failed: %s", exc)
+        import torch
+        torch.set_num_threads(1)
+    except Exception:
+        pass
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=0.2,
+        min_silence_duration=0.5,
+        prefix_padding_duration=0.3,
+        activation_threshold=0.65,
+    )
+    logger.info("Silero VAD pre-warmed for telephony (single-thread mode).")
 
 
 async def entrypoint(ctx: JobContext) -> None:
-    logger.info("Job assigned: room=%s | agent=%s | rss=%.1fMB", ctx.room.name, config.LIVEKIT_AGENT_NAME, _rss_mb())
+    """Thin wrapper around _entrypoint_impl.
+
+    Every code path inside _entrypoint_impl that can end a call is expected
+    to report the outcome to the CRM via post_call_to_crm(). This wrapper is
+    the last line of defence: if something crashes BEFORE that point (a bad
+    plugin API key, a metadata parsing bug, an unexpected exception from the
+    LiveKit SDK, etc.), the job would otherwise just die silently — LiveKit
+    shows the dispatch as accepted, the CRM shows "dialing" forever, and the
+    phone never rings, with no record anywhere of why. Catching it here and
+    forcing a "failed" ingest call closes that gap.
+    """
     try:
         await _entrypoint_impl(ctx)
     except Exception as exc:
-        logger.error("Error in entrypoint: %s", exc, exc_info=True)
-    finally:
-        logger.info("Session finished: %s", ctx.room.name)
+        logger.exception("Unhandled crash in call entrypoint: %s", exc)
+        lead_id = None
+        campaign_id = None
+        crm_url = None
+        crm_secret = None
+        try:
+            meta = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
+            lead_id = meta.get("lead_id") or meta.get("id")
+            campaign_id = meta.get("campaign_id")
+            crm_url = meta.get("crm_backend_url")
+            crm_secret = meta.get("voice_agent_shared_secret")
+        except Exception:
+            pass
+        if lead_id:
+            try:
+                await post_call_to_crm(
+                    lead_id=str(lead_id),
+                    campaign_id=campaign_id,
+                    call_uuid=(ctx.room.name if ctx.room else "unknown"),
+                    duration_seconds=0,
+                    transcript_list=[],
+                    crm_backend_url=crm_url or config.CRM_BACKEND_URL,
+                    shared_secret=crm_secret or config.VOICE_AGENT_SHARED_SECRET,
+                    forced_disposition="failed",
+                    forced_remarks=(
+                        f"The calling agent crashed before the call could be placed or completed: {exc}. "
+                        f"This usually means a missing/invalid API key (Groq, Deepgram, Sarvam) or LiveKit "
+                        f"SIP trunk config — check the voice-agent service logs on Render for the full traceback."
+                    ),
+                )
+            except Exception as report_exc:
+                logger.error("Also failed to report crash back to CRM: %s", report_exc)
+        else:
+            logger.error("Could not report crash to CRM: no lead_id in job metadata.")
+        # Re-raise so LiveKit's own job-failure bookkeeping still sees it.
+        raise
 
 
 async def _entrypoint_impl(ctx: JobContext) -> None:
-    meta: dict = {}
-    phone_number = None
-    lead_id = None
-    campaign_id = None
+    phone_number: Optional[str] = None
+    lead_id: Optional[str] = None
+    campaign_id: Optional[str] = None
     call_type = "outbound"
     user_prompt = ""
-    agent_config = {}
-    sip_trunk_id = None
-    inventory = None
+    agent_config: dict = {}
+    inventory: list = config.DEFAULT_INVENTORY
+    sip_trunk_id: Optional[str] = None
+    meta: dict = {}
 
-    job_metadata_str = getattr(ctx.job, "metadata", None) or ""
-    if job_metadata_str:
+    if ctx.job.metadata:
         try:
-            meta = json.loads(job_metadata_str)
-            logger.info("Parsed job metadata keys: %s", list(meta.keys()))
+            meta = json.loads(ctx.job.metadata)
             phone_number = meta.get("phone_number") or meta.get("phone")
-            lead_id = meta.get("lead_id")
+            lead_id = meta.get("lead_id") or meta.get("id")
             campaign_id = meta.get("campaign_id")
             call_type = meta.get("call_type", "outbound")
-            user_prompt = meta.get("user_prompt", "")
-            agent_config = meta.get("agent_config") or {}
+            user_prompt = meta.get("user_prompt") or meta.get("prompt") or ""
             sip_trunk_id = meta.get("sip_trunk_id") or meta.get("vobiz_sip_trunk_id")
-            inventory = meta.get("inventory")
+            raw_cfg = meta.get("agent_config", {})
+            if isinstance(raw_cfg, dict):
+                agent_config = raw_cfg
+            lead_name = meta.get("lead_name") or meta.get("leadName") or agent_config.get("lead_name") or agent_config.get("leadName") or ""
+            if lead_name:
+                agent_config["lead_name"] = lead_name
+                agent_config["leadName"] = lead_name
+            inventory = meta.get("inventory") or agent_config.get("inventory") or config.DEFAULT_INVENTORY
         except Exception as e:
-            logger.warning("Failed to parse job metadata JSON: %s", e)
+            logger.warning("Could not parse job metadata: %s", e)
 
-    runtime_agent_name = (
-        agent_config.get("agent_name")
-        or agent_config.get("agentName")
-        or config.AGENT_NAME
+    lead_id = lead_id or f"lead_{int(time.time())}"
+    runtime_agent_name = agent_config.get("agent_name") or agent_config.get("agentName") or config.AGENT_NAME
+
+    logger.info(
+        "Job started | lead_id=%s | phone=%s | type=%s | rss_mb=%.1f",
+        lead_id, phone_number, call_type, _rss_mb(),
     )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
@@ -467,23 +487,29 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
     # 4. System prompt
     system_prompt = config.build_runtime_system_prompt(call_type, agent_config, user_prompt, inventory=inventory)
 
-    # 5. Agent
+    # 5. Agent & Session (Pass stt, llm, tts, vad to BOTH to guarantee media pipeline initialization)
     agent = Agent(
         instructions=system_prompt,
+        stt=stt_instance,
+        llm=llm_instance,
+        tts=tts_instance,
+        vad=vad_instance,
+        turn_handling=VOICE_TURN_HANDLING,
+    )
+
+    session = AgentSession(
+        vad=vad_instance,
         stt=stt_instance,
         llm=llm_instance,
         tts=tts_instance,
         turn_handling=VOICE_TURN_HANDLING,
     )
 
-    session = AgentSession(
-        vad=vad_instance,
-        turn_handling=VOICE_TURN_HANDLING,
-    )
-
     disconnecting = False
 
     async def hangup_call():
+        """Proactively end the SIP telephony call immediately by deleting the LiveKit room.
+        This forces LiveKit to send a SIP BYE to Vobiz, terminating the phone line without lingering."""
         nonlocal disconnecting
         if disconnecting:
             return
@@ -523,6 +549,7 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             customer_spoke = True
             last_customer_speech_time = time.time()
 
+        # Drop-off rule check: if Vrinda says goodbye or wrap-up
         lower = text.lower()
         if speaker == runtime_agent_name:
             if any(phrase in lower for phrase in [
@@ -635,7 +662,7 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
                                 sip_participant.identity, call_status or "dialing", has_audio_track)
 
                 # Active status or published audio track indicates call has been answered by human
-                if call_status == "active" or (has_audio_track and call_status not in ("dialing", "ringing")):
+                if call_status == "active" or has_audio_track:
                     logger.info("Customer answered phone call! (callStatus='%s', has_audio=%s)", call_status, has_audio_track)
                     answered = True
                     break
@@ -650,22 +677,24 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             await hangup_call()
             return
 
-        # Explicitly link the session to the answered SIP participant
+        # Explicitly link the session to the answered SIP participant using participant identity string
         try:
             if sip_participant and hasattr(session, "room_io") and session.room_io:
-                session.room_io.set_participant(sip_participant)
+                session.room_io.set_participant(sip_participant.identity)
                 logger.info("Linked AgentSession to customer participant: %s", sip_participant.identity)
         except Exception as e:
             logger.warning("Could not explicitly link participant: %s", e)
 
-        # Settle pause for carrier RTP media bridging (0.8s prevents clipping initial greeting)
-        logger.info("Carrier RTP bridge stabilizing (0.8s)...")
-        await asyncio.sleep(0.8)
+        # Settle pause for carrier RTP media bridging (1.0s prevents clipping initial greeting)
+        logger.info("Carrier RTP bridge stabilizing (1.0s)...")
+        await asyncio.sleep(1.0)
 
         greeting = config.build_outbound_greeting(reason=user_prompt or "enquiry", agent_config=agent_config)
         logger.info("Speaking initial greeting to customer: '%s'", greeting)
         try:
-            await session.say(greeting, allow_interruptions=True)
+            # allow_interruptions=False is CRITICAL for outbound greeting:
+            # carrier line pickup clicks/noise must not kill the opening greeting!
+            await session.say(greeting, allow_interruptions=False)
             logger.info("Greeting finished. Conversation active.")
         except Exception as e:
             logger.error("Failed to speak greeting with Sarvam TTS: %s", e)
@@ -727,6 +756,7 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             call_duration, len(transcript_items), _rss_mb(),
         )
 
+        # Post results back to CRM
         crm_url = meta.get("crm_backend_url") or config.CRM_BACKEND_URL
         crm_secret = meta.get("voice_agent_shared_secret") or config.VOICE_AGENT_SHARED_SECRET
         await post_call_to_crm(
@@ -741,17 +771,18 @@ async def _entrypoint_impl(ctx: JobContext) -> None:
             groq_api_key=groq_key,
         )
 
+        # Drop per-call objects explicitly and return freed heap memory to the OS
         del vad_instance, llm_instance, stt_instance, tts_instance, agent, session
         _release_memory_to_os()
         logger.info("Post-cleanup rss_mb=%.1f", _rss_mb())
 
 
 def run_app_main():
-    ws_url = config.LIVEKIT_URL
-    api_key = config.LIVEKIT_API_KEY
-    api_secret = config.LIVEKIT_API_SECRET
+    ws_url = (config.LIVEKIT_URL or "").strip().strip('"').strip("'")
+    api_key = (config.LIVEKIT_API_KEY or "").strip().strip('"').strip("'")
+    api_secret = (config.LIVEKIT_API_SECRET or "").strip().strip('"').strip("'")
 
-    logger.info("Starting upr-calling-agent worker (Production Mode)...")
+    logger.info("=== LIVEKIT CREDENTIAL DIAGNOSTIC ===")
     logger.info("LIVEKIT_URL: %s", ws_url)
     logger.info("LIVEKIT_API_KEY: '%s...' (length: %d, starts_with_API: %s)", api_key[:6] if api_key else "EMPTY", len(api_key), api_key.startswith("API"))
     logger.info("LIVEKIT_API_SECRET: '%s...' (length: %d, starts_with_ST: %s, starts_with_API: %s)", api_secret[:6] if api_secret else "EMPTY", len(api_secret), api_secret.startswith("ST_") or api_secret.startswith("ST"), api_secret.startswith("API"))
@@ -761,7 +792,7 @@ def run_app_main():
         sys.exit(1)
 
     if api_secret.startswith("API") and not api_key.startswith("API"):
-        logger.warning("Detected swapped LIVEKIT_API_KEY and LIVEKIT_API_SECRET! Auto-correcting...")
+        logger.warning("SWAP DETECTED: LIVEKIT_API_KEY and LIVEKIT_API_SECRET were swapped! Auto-correcting...")
         api_key, api_secret = api_secret, api_key
 
     if api_secret.startswith("ST_") or api_secret.startswith("ST"):
@@ -771,7 +802,11 @@ def run_app_main():
         from livekit.agents.job import JobExecutorType
         job_exec = JobExecutorType.THREAD
     except Exception:
-        job_exec = None
+        try:
+            from livekit.agents import JobExecutorType
+            job_exec = JobExecutorType.THREAD
+        except Exception:
+            job_exec = None
 
     worker_kwargs = {
         "entrypoint_fnc": entrypoint,
@@ -783,9 +818,17 @@ def run_app_main():
     }
     if job_exec is not None:
         worker_kwargs["job_executor_type"] = job_exec
+    worker_kwargs["ws_url"] = ws_url
+    worker_kwargs["api_key"] = api_key
+    worker_kwargs["api_secret"] = api_secret
 
-    opts = WorkerOptions(**worker_kwargs)
-    cli.run_app(opts)
+    logger.info(
+        "Connecting worker '%s' to %s with Key '%s...'",
+        config.LIVEKIT_AGENT_NAME,
+        ws_url,
+        api_key[:6] if api_key else "NONE",
+    )
+    cli.run_app(WorkerOptions(**worker_kwargs))
 
 
 if __name__ == "__main__":
