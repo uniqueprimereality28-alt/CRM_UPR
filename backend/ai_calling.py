@@ -896,9 +896,9 @@ async def _get_voice_agent_config() -> dict:
     """DB-stored config (settable from inside the CRM) wins over env vars."""
     doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
 
-    lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "")
-    lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "")
-    lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "")
+    lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "wss://upr-f4uye3kl.livekit.cloud")
+    lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "APIzpBW2dgAWHCi")
+    lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN")
 
     # Auto-detect swapped LiveKit API Key and Secret
     # LiveKit API Keys always begin with 'API' (e.g. APIxxxxxxxx). Secrets never begin with 'API'.
@@ -911,13 +911,13 @@ async def _get_voice_agent_config() -> dict:
         "livekit_api_key": lk_key,
         "livekit_api_secret": lk_secret,
         "livekit_agent_name": _clean_str(doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent"),
-        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or ""),
+        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "ST_Ur4PPBKFmzeT"),
         "voice_agent_url": _clean_str(doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
-        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or ""),
-        "groq_api_key": _clean_str(doc.get("groq_api_key") or GROQ_API_KEY_ENV or ""),
+        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "rxci_voice_9247xv"),
+        "groq_api_key": _clean_str(doc.get("groq_api_key") or GROQ_API_KEY_ENV or "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"),
         "grok_api_key": _clean_str(doc.get("grok_api_key") or GROK_API_KEY_ENV or ""),
-        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or ""),
-        "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or ""),
+        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or "sk_vudv2579_8FvL3A5fsmYsO1mC1kiBFFp7"),
+        "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or "1b25ccbd65e3bfd2213085e75758344ed409eb21"),
         "sarvam_speaker": _clean_str(doc.get("sarvam_speaker") or "simran"),
         "sarvam_language": _clean_str(doc.get("sarvam_language") or "en-IN"),
     }
@@ -1217,6 +1217,10 @@ async def _dispatch_outbound_call(
                 "roomList": True,
                 "agent": True,
             },
+            "sip": {
+                "admin": True,
+                "call": True,
+            },
         }
         token = jwt.encode(token_payload, livekit_api_secret, algorithm="HS256")
         headers = {
@@ -1328,17 +1332,34 @@ async def _dispatch_outbound_call(
                         f"LiveKit Cloud agent dispatch failed ({dispatch_resp.status_code}): {dispatch_resp.text}"
                     )
 
-                # IMPORTANT: a 200 here only means LiveKit accepted the job into
-                # its queue for a worker named `agent_name` to pick up — it does
-                # NOT mean the voice-agent process is actually running/connected,
-                # and it does NOT mean the phone will ring. If the voice-agent
-                # Render service is asleep, crashed, or its LIVEKIT_* env vars
-                # don't match these credentials, no worker ever claims the job,
-                # the room simply sits empty until it times out, and — without
-                # this check — the CRM would report "dispatched" success forever
-                # while nothing happens on the phone. This background check
-                # verifies a worker actually joined within a few seconds and
-                # surfaces a clear, honest failure on the lead if not.
+                # 3. Create SIP Participant to immediately dial customer via Vobiz Trunk
+                sip_trunk_id = cfg.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or "ST_Ur4PPBKFmzeT"
+                try:
+                    sip_resp = await client.post(
+                        f"{http_url}/twirp/livekit.SIP/CreateSIPParticipant",
+                        headers=headers,
+                        json={
+                            "room_name": call_uuid,
+                            "sip_trunk_id": sip_trunk_id,
+                            "sip_call_to": e164_phone,
+                            "participant_identity": f"sip_{e164_phone}",
+                            "wait_until_answered": False,
+                        },
+                    )
+                    logger.info(f"LiveKit SIP dial status {sip_resp.status_code}: {sip_resp.text}")
+                    if sip_resp.status_code not in (200, 201):
+                        logger.error(f"LiveKit SIP dialing failed ({sip_resp.status_code}): {sip_resp.text}")
+                        raise HTTPException(
+                            sip_resp.status_code,
+                            f"Vobiz SIP Dialing failed ({sip_resp.status_code}): {sip_resp.text}"
+                        )
+                except HTTPException:
+                    raise
+                except Exception as sip_err:
+                    logger.error(f"Error calling LiveKit CreateSIPParticipant: {sip_err}")
+                    raise HTTPException(502, f"Failed to dial {e164_phone} via Vobiz SIP: {sip_err}")
+
+                # Background verification that worker joins and stays healthy
                 asyncio.create_task(
                     _verify_worker_picked_up_job(
                         http_url=http_url,
