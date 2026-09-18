@@ -263,6 +263,7 @@ class Lead(BaseDocument):
     ai_temperature: Optional[str] = None
     ai_call_status: Optional[str] = None
     ai_call_uuid: Optional[str] = None
+    ai_call_error: Optional[str] = None
     assigned_agent_type: Optional[str] = None
 
 
