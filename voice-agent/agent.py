@@ -102,8 +102,8 @@ def normalize_e164(phone: str) -> str:
 async def extract_call_signals_with_llm(transcript: str, api_key_override: Optional[str] = None) -> dict:
     """Use Groq / OpenAI to extract structured requirements and scoring signals in key points from transcript."""
     fallback_result = {
-        "summary": "Call completed with customer.",
-        "disposition": "connected",
+        "summary": "Call ended with no meaningful conversation captured.",
+        "disposition": "no_answer",
         "requirements": {},
         "signals": [],
         "urgency_score": 5,
@@ -189,8 +189,23 @@ async def post_call_to_crm(
     crm_backend_url: Optional[str] = None,
     shared_secret: Optional[str] = None,
     groq_api_key: Optional[str] = None,
+    forced_disposition: Optional[str] = None,
+    forced_remarks: Optional[str] = None,
 ) -> None:
-    """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint."""
+    """Post final transcript & extracted scoring signals to CRM /api/ai/calls/ingest endpoint.
+
+    IMPORTANT: this is the ONLY place the CRM learns what happened to a call.
+    Every code path that can end a call (successful hangup, SIP dial failure,
+    or an unexpected crash) MUST reach this function — otherwise the lead's
+    ai_call_status is left stuck on "dialing" forever and the CRM shows a
+    false "success" with no way to tell the call never actually happened.
+
+    forced_disposition / forced_remarks let a failure path report the real
+    outcome directly (e.g. "failed" + the SIP error) instead of running the
+    transcript through the LLM extractor, which has nothing to analyze when
+    the call never connected and would otherwise default to a misleading
+    "connected"/"no_answer" guess.
+    """
     target_backend_url = (crm_backend_url or config.CRM_BACKEND_URL or "https://crm-upr-1.onrender.com").rstrip("/")
     secret = shared_secret or config.VOICE_AGENT_SHARED_SECRET or "rxci_voice_9247xv"
 
@@ -199,7 +214,23 @@ async def post_call_to_crm(
         return
 
     full_transcript_text = "\n".join(f"{item.get('speaker')}: {item.get('text')}" for item in transcript_list)
-    analysis = await extract_call_signals_with_llm(full_transcript_text, api_key_override=groq_api_key)
+
+    if forced_disposition:
+        analysis = {
+            "summary": forced_remarks or f"Call ended without connecting. Disposition: {forced_disposition}.",
+            "disposition": forced_disposition,
+            "requirements": {},
+            "signals": [],
+            "urgency_score": 0,
+            "wants_site_visit": False,
+            "wants_brochure": False,
+            "whatsapp_opt_in": False,
+            "human_transfer_required": False,
+            "next_followup_days": 1,
+            "remarks": forced_remarks or "",
+        }
+    else:
+        analysis = await extract_call_signals_with_llm(full_transcript_text, api_key_override=groq_api_key)
 
     payload = {
         "lead_id": lead_id,
@@ -257,6 +288,59 @@ def prewarm(proc: JobProcess) -> None:
 
 
 async def entrypoint(ctx: JobContext) -> None:
+    """Thin wrapper around _entrypoint_impl.
+
+    Every code path inside _entrypoint_impl that can end a call is expected
+    to report the outcome to the CRM via post_call_to_crm(). This wrapper is
+    the last line of defence: if something crashes BEFORE that point (a bad
+    plugin API key, a metadata parsing bug, an unexpected exception from the
+    LiveKit SDK, etc.), the job would otherwise just die silently — LiveKit
+    shows the dispatch as accepted, the CRM shows "dialing" forever, and the
+    phone never rings, with no record anywhere of why. Catching it here and
+    forcing a "failed" ingest call closes that gap.
+    """
+    try:
+        await _entrypoint_impl(ctx)
+    except Exception as exc:
+        logger.exception("Unhandled crash in call entrypoint: %s", exc)
+        lead_id = None
+        campaign_id = None
+        crm_url = None
+        crm_secret = None
+        try:
+            meta = json.loads(ctx.job.metadata) if ctx.job.metadata else {}
+            lead_id = meta.get("lead_id") or meta.get("id")
+            campaign_id = meta.get("campaign_id")
+            crm_url = meta.get("crm_backend_url")
+            crm_secret = meta.get("voice_agent_shared_secret")
+        except Exception:
+            pass
+        if lead_id:
+            try:
+                await post_call_to_crm(
+                    lead_id=str(lead_id),
+                    campaign_id=campaign_id,
+                    call_uuid=(ctx.room.name if ctx.room else "unknown"),
+                    duration_seconds=0,
+                    transcript_list=[],
+                    crm_backend_url=crm_url or config.CRM_BACKEND_URL,
+                    shared_secret=crm_secret or config.VOICE_AGENT_SHARED_SECRET,
+                    forced_disposition="failed",
+                    forced_remarks=(
+                        f"The calling agent crashed before the call could be placed or completed: {exc}. "
+                        f"This usually means a missing/invalid API key (Groq, Deepgram, Sarvam) or LiveKit "
+                        f"SIP trunk config — check the voice-agent service logs on Render for the full traceback."
+                    ),
+                )
+            except Exception as report_exc:
+                logger.error("Also failed to report crash back to CRM: %s", report_exc)
+        else:
+            logger.error("Could not report crash to CRM: no lead_id in job metadata.")
+        # Re-raise so LiveKit's own job-failure bookkeeping still sees it.
+        raise
+
+
+async def _entrypoint_impl(ctx: JobContext) -> None:
     phone_number: Optional[str] = None
     lead_id: Optional[str] = None
     campaign_id: Optional[str] = None
@@ -506,6 +590,31 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("Greeting finished. Conversation active.")
         except Exception as exc:
             logger.error("Outbound Vobiz call failed to connect: %s", exc)
+            failure_reason = str(exc)
+            # Report the real failure to the CRM immediately so the lead does
+            # not stay stuck on "dialing" forever with no explanation. Without
+            # this, the CRM shows a false "success" (the dispatch was queued)
+            # while the phone never actually rang and nobody ever finds out why.
+            try:
+                await post_call_to_crm(
+                    lead_id=lead_id,
+                    campaign_id=campaign_id,
+                    call_uuid=ctx.room.name,
+                    duration_seconds=time.time() - call_start,
+                    transcript_list=transcript_items,
+                    agent_name=runtime_agent_name,
+                    crm_backend_url=meta.get("crm_backend_url") or config.CRM_BACKEND_URL,
+                    shared_secret=meta.get("voice_agent_shared_secret") or config.VOICE_AGENT_SHARED_SECRET,
+                    forced_disposition="failed",
+                    forced_remarks=(
+                        f"Outbound SIP dial via Vobiz trunk '{outbound_trunk_id}' failed before the call "
+                        f"could connect: {failure_reason}. Check the LiveKit Cloud SIP -> Outbound Trunk "
+                        f"config (trunk still exists, Vobiz credentials/caller ID correct, destination not "
+                        f"blocked) and that the phone number is reachable."
+                    ),
+                )
+            except Exception as report_exc:
+                logger.error("Also failed to report SIP dial failure back to CRM: %s", report_exc)
             await hangup_call()
             return
     elif call_type == "outbound" and not outbound_trunk_id:
