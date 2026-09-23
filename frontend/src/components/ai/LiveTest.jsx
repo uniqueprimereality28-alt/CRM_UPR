@@ -14,7 +14,7 @@ import { api, apiError } from "../../lib/api";
 import { toast } from "sonner";
 
 export function LiveTest() {
-  const [customerName, setCustomerName] = useState("Aarav");
+  const [customerName, setCustomerName] = useState("Sandeep");
   const [speaker, setSpeaker] = useState("simran");
   const [activeSegment, setActiveSegment] = useState("budget");
   const [customText, setCustomText] = useState("");
