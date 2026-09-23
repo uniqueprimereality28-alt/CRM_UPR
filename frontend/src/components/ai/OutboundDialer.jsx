@@ -70,7 +70,7 @@ export const OutboundDialer = ({ onCallDispatched }) => {
 
       const res = await api.post("/ai/calls/real/trigger", payload);
       setStatus("success");
-      setStatusMessage(`Call dispatched to ${phone}! The LiveKit agent is placing the call via Vobiz SIP. Confirming it actually connected…`);
+      setStatusMessage(`Call dispatched to ${phone}! Sarvam Voice Agent is placing the call via Vobiz. Confirming connection…`);
       toast.success("Outbound call dispatched — confirming it connects...");
       if (onCallDispatched) onCallDispatched(res.data);
       // A 200 here only means LiveKit queued the job for a worker — it does
@@ -101,7 +101,7 @@ export const OutboundDialer = ({ onCallDispatched }) => {
           setStatus("error");
           setStatusMessage(
             lead.ai_call_error ||
-              "The call did not connect. Check your voice-agent service and LiveKit/Vobiz SIP trunk settings."
+              "The call did not connect. Check your Sarvam Voice Agent settings (API Key, Org ID, Agent ID)."
           );
           toast.error("The outbound call failed to connect");
           return;
@@ -133,7 +133,7 @@ export const OutboundDialer = ({ onCallDispatched }) => {
           </div>
           <h2 className="brand-font mt-1 text-xl font-bold text-slate-900">Start an Outbound AI Call</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Dispatch Simran to dial the lead via Vobiz SIP with real-time Sarvam AI voice & Grok reasoning.
+            Dispatch Vrinda (Simran voice) to call leads via Sarvam Voice Agents & Vobiz telephony.
           </p>
         </div>
         <Badge variant="outline" className="border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
@@ -266,7 +266,7 @@ export const OutboundDialer = ({ onCallDispatched }) => {
         >
           {status === "dispatching" ? (
             <>
-              <Loader2 className="h-4 w-4 animate-spin" /> Dispatching Call via Vobiz...
+              <Loader2 className="h-4 w-4 animate-spin" /> Dispatching via Sarvam...
             </>
           ) : (
             <>
