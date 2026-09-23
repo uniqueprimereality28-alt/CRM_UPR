@@ -52,7 +52,7 @@ export default function AICalling() {
           </div>
           <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Telecalling</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Outbound voice agent for Unique Prime Reality — dials leads via Vobiz SIP, uses Sarvam AI voice & Groq LLM, scores requirements, and updates CRM leads in real time.
+            Outbound voice agent for Unique Prime Reality — dials leads via Sarvam Voice Agents & Vobiz telephony, qualifies requirements, and updates CRM leads in real time.
           </p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={loadStats} data-testid="refresh-stats-btn">
@@ -71,7 +71,7 @@ export default function AICalling() {
       ) : (
         <div className="flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-          <span>Telephony active — LiveKit Cloud & Vobiz SIP connected with Sarvam AI Indian voice & Groq reasoning.</span>
+          <span>Telephony active — Sarvam Voice Agents connected via Vobiz with Simran (AI Indian voice).</span>
         </div>
       )}
 
