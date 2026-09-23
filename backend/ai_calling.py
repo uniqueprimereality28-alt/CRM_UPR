@@ -1361,6 +1361,7 @@ async def _dispatch_outbound_call(
     )
 
 
+@ai_router.post("/calls/real/trigger")
 async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(require_vranda_only)):
     lead = None
     if payload.lead_id:
