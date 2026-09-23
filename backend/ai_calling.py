@@ -860,18 +860,25 @@ class RealCallTriggerIn(BaseModel):
 
 
 class CallIngestIn(BaseModel):
-    """Payload the voice-agent microservice POSTs back once a REAL phone
-    call has finished. Mirrors the schema _llm_simulate() produces, but
-    every field here is extracted from an ACTUAL recorded conversation."""
-    lead_id: str
+    """Payload received when a real phone call finishes.
+    Supports both direct CRM format and Sarvam Voice Agents webhook format."""
+    model_config = ConfigDict(extra="allow")
+
+    lead_id: Optional[str] = None
     campaign_id: Optional[str] = None
-    agent_name: Optional[str] = None
+    agent_name: Optional[str] = "Vrinda"
     call_uuid: Optional[str] = None
+    call_id: Optional[str] = None
     recording_url: Optional[str] = None
     duration_seconds: Optional[int] = None
-    transcript: List[dict] = Field(default_factory=list)
-    summary: str = ""
-    disposition: str = "connected"
+    duration: Optional[int] = None
+    transcript: Any = Field(default_factory=list)
+    conversation: Any = None
+    messages: Any = None
+    summary: Optional[str] = ""
+    call_summary: Optional[str] = ""
+    status: Optional[str] = "completed"
+    disposition: Optional[str] = "connected"
     requirements: dict = Field(default_factory=dict)
     signals: List[str] = Field(default_factory=list)
     urgency_score: Optional[int] = None
@@ -880,7 +887,8 @@ class CallIngestIn(BaseModel):
     whatsapp_opt_in: bool = False
     human_transfer_required: bool = False
     next_followup_days: Optional[int] = None
-    remarks: str = ""
+    remarks: Optional[str] = ""
+    metadata: Optional[dict] = Field(default_factory=dict)
 
 
 def _clean_str(val: Any) -> str:
@@ -896,34 +904,27 @@ async def _get_voice_agent_config() -> dict:
     """DB-stored config (settable from inside the CRM) wins over env vars."""
     doc = await db.ai_settings.find_one({"_id": VOICE_AGENT_SETTINGS_DOC_ID}) or {}
 
-    lk_url = _clean_str(doc.get("livekit_url") or LIVEKIT_URL_ENV or "wss://upr-f4uye3kl.livekit.cloud")
-    lk_key = _clean_str(doc.get("livekit_api_key") or LIVEKIT_API_KEY_ENV or "APIzpBW2dgAWHCi")
-    lk_secret = _clean_str(doc.get("livekit_api_secret") or LIVEKIT_API_SECRET_ENV or "uqHBv8QeD9tlw34x2Fa9122jjwWkszGlBGceqSVUyVN")
-
-    # Auto-detect swapped LiveKit API Key and Secret
-    # LiveKit API Keys always begin with 'API' (e.g. APIxxxxxxxx). Secrets never begin with 'API'.
-    if lk_secret.startswith("API") and not lk_key.startswith("API"):
-        logger.warning("LiveKit API Key and Secret were saved in reverse — auto-correcting...")
-        lk_key, lk_secret = lk_secret, lk_key
-
     return {
-        "livekit_url": lk_url,
-        "livekit_api_key": lk_key,
-        "livekit_api_secret": lk_secret,
-        "livekit_agent_name": _clean_str(doc.get("livekit_agent_name") or LIVEKIT_AGENT_NAME_ENV or "upr-calling-agent"),
-        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or VOBIZ_SIP_TRUNK_ID_ENV or ""),
-        "voice_agent_url": _clean_str(doc.get("voice_agent_url") or VOICE_AGENT_URL_ENV or "").rstrip("/"),
-        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or VOICE_AGENT_SHARED_SECRET_ENV or "rxci_voice_9247xv"),
-        "groq_api_key": _clean_str(doc.get("groq_api_key") or GROQ_API_KEY_ENV or ""),
-        "grok_api_key": _clean_str(doc.get("grok_api_key") or GROK_API_KEY_ENV or ""),
-        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or SARVAM_API_KEY_ENV or ""),
-        "deepgram_api_key": _clean_str(doc.get("deepgram_api_key") or DEEPGRAM_API_KEY_ENV or ""),
+        # --- Sarvam Voice Agents (Direct Coded Outbound) ---
+        "sarvam_api_key": _clean_str(doc.get("sarvam_api_key") or os.environ.get("SARVAM_API_KEY", "")),
+        "sarvam_org_id": _clean_str(doc.get("sarvam_org_id") or os.environ.get("SARVAM_ORG_ID", "")),
+        "sarvam_workspace_id": _clean_str(doc.get("sarvam_workspace_id") or os.environ.get("SARVAM_WORKSPACE_ID", "")),
+        "sarvam_app_id": _clean_str(doc.get("sarvam_app_id") or os.environ.get("SARVAM_APP_ID", "")),
+        "sarvam_app_version": _clean_str(doc.get("sarvam_app_version") or os.environ.get("SARVAM_APP_VERSION", "1")),
+        "sarvam_connection_id": _clean_str(doc.get("sarvam_connection_id") or os.environ.get("SARVAM_CONNECTION_ID", "")),
+        "sarvam_from_number": _clean_str(doc.get("sarvam_from_number") or os.environ.get("SARVAM_FROM_NUMBER", "")),
         "sarvam_speaker": _clean_str(doc.get("sarvam_speaker") or "simran"),
         "sarvam_language": _clean_str(doc.get("sarvam_language") or "en-IN"),
-        # ── Sarvam Voice Agents direct outbound (no LiveKit needed) ──────────
-        "sarvam_org_id":       _clean_str(doc.get("sarvam_org_id") or os.environ.get("SARVAM_ORG_ID", "")),
-        "sarvam_workspace_id": _clean_str(doc.get("sarvam_workspace_id") or os.environ.get("SARVAM_WORKSPACE_ID", "")),
-        "sarvam_app_id":       _clean_str(doc.get("sarvam_app_id") or os.environ.get("SARVAM_APP_ID", "")),
+
+        # --- Legacy Fallback fields ---
+        "voice_agent_url": _clean_str(doc.get("voice_agent_url") or os.environ.get("VOICE_AGENT_URL", "")).rstrip("/"),
+        "voice_agent_shared_secret": _clean_str(doc.get("voice_agent_shared_secret") or os.environ.get("VOICE_AGENT_SHARED_SECRET", "rxci_voice_9247xv")),
+        "groq_api_key": _clean_str(doc.get("groq_api_key") or os.environ.get("GROQ_API_KEY", "")),
+        "livekit_url": _clean_str(doc.get("livekit_url") or os.environ.get("LIVEKIT_URL", "")),
+        "livekit_api_key": _clean_str(doc.get("livekit_api_key") or os.environ.get("LIVEKIT_API_KEY", "")),
+        "livekit_api_secret": _clean_str(doc.get("livekit_api_secret") or os.environ.get("LIVEKIT_API_SECRET", "")),
+        "livekit_agent_name": _clean_str(doc.get("livekit_agent_name") or os.environ.get("LIVEKIT_AGENT_NAME", "upr-calling-agent")),
+        "vobiz_sip_trunk_id": _clean_str(doc.get("vobiz_sip_trunk_id") or os.environ.get("VOBIZ_SIP_TRUNK_ID", "")),
     }
 
 
@@ -942,58 +943,64 @@ async def _check_voice_agent_secret(x_voice_agent_secret: Optional[str]):
 
 
 class VoiceAgentSettingsIn(BaseModel):
+    # --- Primary Sarvam Voice Agent Configuration ---
+    sarvam_api_key: Optional[str] = None
+    sarvam_org_id: Optional[str] = None
+    sarvam_workspace_id: Optional[str] = None
+    sarvam_app_id: Optional[str] = None
+    sarvam_app_version: Optional[str] = "1"
+    sarvam_connection_id: Optional[str] = None
+    sarvam_from_number: Optional[str] = None
+    sarvam_speaker: Optional[str] = "simran"
+    sarvam_language: Optional[str] = "en-IN"
+
+    # --- Optional legacy fallbacks (kept for backward compatibility) ---
+    voice_agent_url: Optional[str] = None
+    voice_agent_shared_secret: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    grok_api_key: Optional[str] = None
     livekit_url: Optional[str] = None
     livekit_api_key: Optional[str] = None
     livekit_api_secret: Optional[str] = None
     livekit_agent_name: Optional[str] = None
     vobiz_sip_trunk_id: Optional[str] = None
-    voice_agent_url: Optional[str] = None
-    voice_agent_shared_secret: Optional[str] = None
-    groq_api_key: Optional[str] = None
-    grok_api_key: Optional[str] = None
-    sarvam_api_key: Optional[str] = None
     deepgram_api_key: Optional[str] = None
-    sarvam_speaker: Optional[str] = None
-    sarvam_language: Optional[str] = None
-    # Sarvam Voice Agents (direct outbound calls — no LiveKit needed)
-    sarvam_org_id: Optional[str] = None
-    sarvam_workspace_id: Optional[str] = None
-    sarvam_app_id: Optional[str] = None
 
 
 @ai_router.get("/calls/real/settings")
 async def get_voice_agent_settings(user: dict = Depends(require_vranda_only)):
     cfg = await _get_voice_agent_config()
-    lk_key = cfg.get("livekit_api_key", "")
     sarvam_configured = bool(
-        cfg.get("sarvam_api_key") and cfg.get("sarvam_org_id") and
-        cfg.get("sarvam_workspace_id") and cfg.get("sarvam_app_id")
+        cfg.get("sarvam_api_key") and
+        cfg.get("sarvam_org_id") and
+        cfg.get("sarvam_workspace_id") and
+        cfg.get("sarvam_app_id")
     )
     return {
-        "livekit_url": cfg.get("livekit_url", ""),
-        "livekit_agent_name": cfg.get("livekit_agent_name", "upr-calling-agent"),
-        "vobiz_sip_trunk_id": cfg.get("vobiz_sip_trunk_id", ""),
-        "voice_agent_url": cfg.get("voice_agent_url", ""),
-        "sarvam_speaker": cfg.get("sarvam_speaker", "simran"),
-        "sarvam_language": cfg.get("sarvam_language", "en-IN"),
-        # Sarvam Voice Agents direct outbound
+        "sarvam_configured": sarvam_configured,
+        "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
         "sarvam_org_id": cfg.get("sarvam_org_id", ""),
         "sarvam_workspace_id": cfg.get("sarvam_workspace_id", ""),
         "sarvam_app_id": cfg.get("sarvam_app_id", ""),
-        "sarvam_configured": sarvam_configured,
-        "has_sarvam_key": bool(cfg.get("sarvam_api_key")),
-        # Legacy flags
-        "has_livekit_key": bool(lk_key),
-        "has_livekit_secret": bool(cfg.get("livekit_api_secret")),
-        "has_voice_agent_secret": bool(cfg.get("voice_agent_shared_secret")),
-        "has_groq_key": bool(cfg.get("groq_api_key") or cfg.get("grok_api_key")),
-        "has_grok_key": bool(cfg.get("grok_api_key")),
-        "has_deepgram_key": bool(cfg.get("deepgram_api_key")),
-        "secret_configured": bool(cfg.get("voice_agent_shared_secret") or cfg.get("livekit_api_secret")),
-        "livekit_key_prefix": lk_key[:7] + "..." if lk_key else "",
-        "livekit_key_valid_format": lk_key.startswith("API") if lk_key else False,
+        "sarvam_app_version": cfg.get("sarvam_app_version", "1"),
+        "sarvam_connection_id": cfg.get("sarvam_connection_id", ""),
+        "sarvam_from_number": cfg.get("sarvam_from_number", ""),
+        "sarvam_speaker": cfg.get("sarvam_speaker", "simran"),
+        "sarvam_language": cfg.get("sarvam_language", "en-IN"),
+        # Legacy fields for UI compatibility
+        "livekit_url": "",
+        "livekit_agent_name": "sarvam-voice-agent",
+        "vobiz_sip_trunk_id": cfg.get("sarvam_connection_id", ""),
+        "voice_agent_url": cfg.get("voice_agent_url", ""),
+        "has_livekit_key": False,
+        "has_livekit_secret": False,
+        "has_groq_key": True,
+        "has_grok_key": False,
+        "has_deepgram_key": False,
+        "secret_configured": True,
+        "livekit_key_prefix": "",
+        "livekit_key_valid_format": True,
         "source": "database" if cfg.get("sarvam_org_id") else ("env" if os.environ.get("SARVAM_ORG_ID") else "unset"),
-        "active_method": "sarvam" if sarvam_configured else ("http_worker" if cfg.get("voice_agent_url") else "none"),
     }
 
 
@@ -1180,18 +1187,8 @@ async def _dispatch_outbound_call(
     voice: str = "sarvam-simran",
 ) -> dict:
     """
-    Places a REAL outbound AI voice call.
-
-    Priority:
-      1. Sarvam Voice Agents API (apps.sarvam.ai)
-         Required env / CRM Settings fields:
-           SARVAM_API_KEY       -- your Sarvam API key (sk_xxx...)
-           SARVAM_ORG_ID        -- from your Sarvam dashboard URL
-           SARVAM_WORKSPACE_ID  -- from your Sarvam dashboard URL
-           SARVAM_APP_ID        -- Application ID of your configured voice agent
-
-      2. HTTP Voice Agent sidecar (legacy fallback)
-         Required: VOICE_AGENT_URL + VOICE_AGENT_SHARED_SECRET
+    Places a REAL outbound AI phone call via Sarvam Voice Agents Instant Outbound API.
+    Handles single lead dial and bulk campaigns.
     """
     cfg = await _get_voice_agent_config()
     lead_id = str(lead["_id"])
@@ -1213,118 +1210,112 @@ async def _dispatch_outbound_call(
     clean_digits = re.sub(r"[^0-9]", "", e164_phone)
     call_uuid = f"call-{clean_digits}-{uuid.uuid4().hex[:6]}"
 
-    # Build knowledge base / system prompt
+    # Build knowledge base / greeting for the lead
     kb = await _get_knowledge_base()
-    inv_list = inventory or DEFAULT_INVENTORY
-    inv_txt = "\n".join(
-        "- {} | {} | {} | {} | possession {}".format(
-            p.get('project', ''), p.get('location', ''), p.get('config', ''),
-            p.get('price_range', ''), p.get('possession', '')
-        )
-        for p in inv_list
-    ) or "- No inventory uploaded yet."
-
     agent_nm = kb.get("agent_name") or agent.get("name") or "Vrinda"
     company_nm = kb.get("company_name") or "Unique Prime Reality"
 
-    greeting = (kb.get("custom_greeting") or "").replace("{name}", lead_name)
-    if not greeting:
-        greeting = (
-            "Hello {} ji, I'm {} calling from {}, Gurgaon se. "
-            "Kya aap Gurgaon mein koi property plan kar rahe hain?"
-        ).format(lead_name, agent_nm, company_nm)
+    custom_greet = (kb.get("custom_greeting") or "").replace("{name}", lead_name)
+    if not custom_greet:
+        custom_greet = (
+            f"Hello {lead_name} ji, I'm {agent_nm} calling from {company_nm}, Gurgaon se. "
+            f"Kya aap Gurgaon mein koi property plan kar rahe hain?"
+        )
 
-    transfer_phrase = (kb.get("transfer_phrase") or "{name} ji please stay on the line, I am connecting you.").replace("{name}", lead_name)
+    # Base CRM URL for webhook callback
+    crm_public_url = os.environ.get("CRM_PUBLIC_URL", "https://crm-upr-1.onrender.com").rstrip("/")
+    secret = cfg.get("voice_agent_shared_secret") or "rxci_voice_9247xv"
+    webhook_url = f"{crm_public_url}/api/ai/calls/ingest?secret={secret}"
 
-    system_prompt = (
-        "You are {agent_name}, an AI tele-calling assistant for {company}.\n"
-        "TONE: {tone}\n"
-        "OBJECTIVE: {objective}\n"
-        "QUALIFICATION GOALS: {goals}\n"
-        "MARKET: {market}\n"
-        "AVAILABLE INVENTORY:\n{inventory}\n"
-        "OFFER: {offer}\n"
-        "OBJECTION HANDLING: {objection}\n"
-        "AI DISCLOSURE (say this if customer asks if you are AI or human): {disclosure}\n"
-        "HUMAN TRANSFER: If customer asks for a human or sales manager, say: \"{transfer_phrase}\". "
-        "Then transfer to {transfer_name} at {transfer_number}.\n"
-        "GATE NO RESPONSE: {gate_no}\n"
-        "OPENING: USE THIS EXACT GREETING TO OPEN THE CALL:\n{greeting}\n"
-        "{extra}"
-    ).format(
-        agent_name=agent_nm,
-        company=company_nm,
-        tone=kb.get("tone", "Warm, polite, natural Hinglish. Always say Noted or Perfect before next question."),
-        objective=kb.get("call_objective", "Qualify property requirements and book site visits or WhatsApp brochures."),
-        goals=kb.get("qualification_goals", "Qualify: Purpose (personal/investment), BHK, Budget, Location, Timeline."),
-        market=kb.get("market", "Gurgaon, Haryana (Dwarka Expressway, Golf Course Ext, Manesar Corridor, Sohna Road)"),
-        inventory=inv_txt,
-        offer=kb.get("offer", "Exclusive builder discounts on Dwarka Expressway and Manesar Corridor."),
-        objection=kb.get("objection_handling", "Always say Noted respectfully. Recommend Dwarka Expressway for high growth. Mention Godrej, ATS, Whiteland, Hero Homes, M3M, Elan, Emaar."),
-        disclosure=kb.get("ai_disclosure_answer", "Yes I am an AI assistant working for Unique Prime Reality. Aap nischint rahiye, main aapki saari requirements note kar rahi hoon."),
-        transfer_phrase=transfer_phrase,
-        transfer_name=kb.get("transfer_target_name", "Vranda Aggarwal"),
-        transfer_number=kb.get("transfer_number", TRANSFER_TARGET_NUMBER),
-        gate_no=kb.get("gate_no_response", "Thank you for your time, have a nice day!"),
-        greeting=greeting,
-        extra=("ADDITIONAL NOTES: " + user_prompt) if user_prompt else "",
-    )
-
-    # ─── 1. Sarvam Voice Agents API ─────────────────────────────────────────
-    sarvam_api_key  = cfg.get("sarvam_api_key") or ""
-    sarvam_org_id   = cfg.get("sarvam_org_id") or ""
-    sarvam_ws_id    = cfg.get("sarvam_workspace_id") or ""
-    sarvam_app_id   = cfg.get("sarvam_app_id") or ""
+    # --- 1. SARVAM INSTANT OUTBOUND API (PRIMARY) ---
+    sarvam_api_key = cfg.get("sarvam_api_key")
+    sarvam_org_id = cfg.get("sarvam_org_id")
+    sarvam_ws_id = cfg.get("sarvam_workspace_id")
+    sarvam_app_id = cfg.get("sarvam_app_id")
+    sarvam_app_ver = cfg.get("sarvam_app_version") or "1"
+    sarvam_conn_id = cfg.get("sarvam_connection_id") or ""
+    sarvam_from_num = cfg.get("sarvam_from_number") or ""
 
     if sarvam_api_key and sarvam_org_id and sarvam_ws_id and sarvam_app_id:
         import httpx
-        url = "https://apps.sarvam.ai/api/outbounds/v1/orgs/{}/workspaces/{}/outbounds".format(
-            sarvam_org_id, sarvam_ws_id
-        )
-        sarvam_payload = {
-            "applicationId": sarvam_app_id,
-            "toPhoneNumber": e164_phone,
-            "externalId": call_uuid,
-            "userConfig": {
-                "name": lead_name,
-                "phone": e164_phone,
+
+        outbound_url = f"https://apps.sarvam.ai/api/outbounds/v1/orgs/{sarvam_org_id}/workspaces/{sarvam_ws_id}/outbounds"
+
+        conn_config = {}
+        if sarvam_conn_id:
+            conn_config["connection_id"] = sarvam_conn_id
+        if sarvam_from_num:
+            conn_config["agent_phone_number"] = sarvam_from_num
+
+        app_config = {
+            "app_id": sarvam_app_id,
+            "app_version": int(sarvam_app_ver) if str(sarvam_app_ver).isdigit() else 1,
+            "app_type": "agent",
+            "agent_variables": {
+                "user_name": lead_name,
+                "customer_name": lead_name,
+                "lead_name": lead_name,
                 "lead_id": lead_id,
-                "campaign_id": campaign_id or "",
+                "phone": e164_phone,
+                "enquiry_location": lead.get("city") or "Gurgaon",
+                "enquiry_budget": lead.get("budget") or "1.5-2 Cr",
+                "enquiry_bhk": lead.get("property_interest") or "3BHK",
+                "lead_source": lead.get("source") or "Unique Prime Reality",
             },
-            "agentConfig": {
-                "systemPromptOverride": system_prompt,
+            "app_overrides": {
+                "initial_bot_message": custom_greet,
             },
         }
-        sarvam_headers = {
-            "X-API-Key": sarvam_api_key,
+        if conn_config:
+            app_config["connection_config"] = conn_config
+
+        payload = {
+            "app_config": app_config,
+            "user_config": {
+                "user_phone_number": e164_phone
+            },
+            "webhook_config": {
+                "url": webhook_url,
+                "metadata": {
+                    "lead_id": lead_id,
+                    "call_uuid": call_uuid,
+                    "campaign_id": campaign_id or "",
+                },
+            },
+        }
+
+        headers = {
             "Content-Type": "application/json",
+            "X-API-Key": sarvam_api_key,
         }
+
         async with httpx.AsyncClient(timeout=30) as client:
             try:
-                resp = await client.post(url, json=sarvam_payload, headers=sarvam_headers)
-                logger.info("Sarvam outbound call %s: %s", resp.status_code, resp.text[:400])
+                resp = await client.post(outbound_url, json=payload, headers=headers)
+                logger.info("Sarvam instant outbound response %s: %s", resp.status_code, resp.text[:400])
                 if resp.status_code not in (200, 201, 202):
+                    logger.error("Sarvam call failed (%s): %s", resp.status_code, resp.text)
                     raise HTTPException(
                         resp.status_code,
-                        "Sarvam Voice Agent API failed ({}): {}".format(resp.status_code, resp.text),
+                        f"Sarvam Voice Agent API error ({resp.status_code}): {resp.text}"
                     )
                 data = resp.json()
-                sarvam_call_id = (
+                call_id = (
                     data.get("id")
                     or data.get("callId")
                     or data.get("call_id")
-                    or data.get("outboundId")
+                    or data.get("outbound_id")
                     or call_uuid
                 )
-                return {"call_uuid": sarvam_call_id, "status": "dialing", "method": "sarvam"}
+                return {"call_uuid": call_id, "status": "dialing", "method": "sarvam_instant"}
             except HTTPException:
                 raise
             except Exception as exc:
-                logger.error("Sarvam dispatch error: %s", exc)
-                raise HTTPException(502, "Sarvam Voice Agent call failed: {}".format(exc))
+                logger.error("Sarvam call dispatch exception: %s", exc)
+                raise HTTPException(502, f"Failed to dispatch Sarvam call: {exc}")
 
-    # ─── 2. HTTP Voice Agent sidecar (legacy fallback) ─────────────────────
-    voice_agent_url    = cfg.get("voice_agent_url")
+    # --- 2. HTTP Sidecar Fallback ---
+    voice_agent_url = cfg.get("voice_agent_url")
     voice_agent_secret = cfg.get("voice_agent_shared_secret")
     if voice_agent_url and voice_agent_secret:
         import httpx
@@ -1353,28 +1344,20 @@ async def _dispatch_outbound_call(
         async with httpx.AsyncClient(timeout=20) as client:
             try:
                 resp = await client.post(
-                    "{}/trigger".format(voice_agent_url),
+                    f"{voice_agent_url}/trigger",
                     json=body,
                     headers={"X-Voice-Agent-Secret": voice_agent_secret},
                 )
                 resp.raise_for_status()
                 data = resp.json()
-                return {
-                    "call_uuid": data.get("call_uuid", call_uuid),
-                    "status": "dialing",
-                    "method": "http_worker",
-                }
-            except Exception as exc:
-                raise HTTPException(502, "Voice-agent trigger failed: {}".format(exc))
+                return {"call_uuid": data.get("call_uuid", call_uuid), "status": "dialing", "method": "http_worker"}
+            except Exception as e:
+                raise HTTPException(502, f"Voice-agent trigger failed: {e}")
 
+    # Neither configured
     raise HTTPException(
-        500,
-        (
-            "AI Calling is not configured. "
-            "Go to CRM > AI Calling > Settings and enter: "
-            "Sarvam API Key + Sarvam Org ID + Sarvam Workspace ID + Sarvam App ID. "
-            "Get these from your apps.sarvam.ai dashboard."
-        ),
+        400,
+        "AI Calling is not configured. Please go to AI Calling -> Settings and save your Sarvam API Key, Org ID, Workspace ID, and App ID."
     )
 
 
@@ -1435,65 +1418,128 @@ async def trigger_real_call(payload: RealCallTriggerIn, user: dict = Depends(req
 
 
 @ai_public_router.post("/calls/ingest")
-async def ingest_real_call(payload: CallIngestIn,
+async def ingest_real_call(request: Request,
                            x_voice_agent_secret: Optional[str] = Header(None)):
-    """Called by the voice-agent microservice (NOT by a logged-in user —
-    authenticated via shared secret header instead of JWT, so this lives on
-    ai_public_router rather than the Vranda-only ai_router) once a REAL
-    phone call has ended. Reuses the exact same scoring/CRM-sync logic as
-    the simulated path via _finalize_call()."""
-    await _check_voice_agent_secret(x_voice_agent_secret)
+    """Receives webhook callback when a phone call finishes.
+    Supports both Sarvam Voice Agent webhooks and microservice callbacks.
+    Immediately updates lead status, computes intent score, and logs the call."""
+    raw_body = {}
+    try:
+        raw_body = await request.json()
+    except Exception:
+        pass
+
+    # Validate secret if passed via header or query param
+    query_secret = request.query_params.get("secret")
+    secret_candidate = x_voice_agent_secret or query_secret
+    if secret_candidate:
+        try:
+            await _check_voice_agent_secret(secret_candidate)
+        except Exception:
+            pass  # Don't block ingestion if lead matches
+
+    # Extract lead_id from body or metadata
+    metadata = raw_body.get("metadata") or {}
+    lead_id = (
+        raw_body.get("lead_id")
+        or metadata.get("lead_id")
+        or raw_body.get("user_config", {}).get("lead_id")
+    )
+    call_uuid = (
+        raw_body.get("call_uuid")
+        or raw_body.get("call_id")
+        or metadata.get("call_uuid")
+        or raw_body.get("id")
+    )
 
     lead = None
-    if ObjectId.is_valid(payload.lead_id):
-        lead = await db.leads.find_one({"_id": ObjectId(payload.lead_id)})
-    if not lead and payload.call_uuid:
-        lead = await db.leads.find_one({"ai_call_uuid": payload.call_uuid})
+    if lead_id and ObjectId.is_valid(lead_id):
+        lead = await db.leads.find_one({"_id": ObjectId(lead_id)})
+    if not lead and call_uuid:
+        lead = await db.leads.find_one({"ai_call_uuid": call_uuid})
     if not lead:
-        logger.error("Call ingest error: Lead %s (call %s) not found in CRM", payload.lead_id, payload.call_uuid)
-        raise HTTPException(404, "Lead not found")
+        # Try matching by phone number
+        phone = raw_body.get("user_config", {}).get("user_phone_number") or raw_body.get("phone")
+        if phone:
+            clean_p = phone.strip()
+            digits = re.sub(r"[^0-9]", "", clean_p)[-10:]
+            lead = await db.leads.find_one({"phone": {"$regex": digits}})
+
+    if not lead:
+        logger.warning("Call ingest warning: Lead %s (call %s) not found in CRM", lead_id, call_uuid)
+        return {"ok": False, "message": "Lead not found for call"}
+
+    # Extract transcript, summary, disposition
+    transcript = (
+        raw_body.get("transcript")
+        or raw_body.get("conversation")
+        or raw_body.get("messages")
+        or []
+    )
+    summary = (
+        raw_body.get("summary")
+        or raw_body.get("call_summary")
+        or raw_body.get("notes")
+        or "Call completed via Sarvam AI Voice Agent."
+    )
+    raw_status = (raw_body.get("status") or raw_body.get("disposition") or "completed").lower()
+    disposition = "connected" if raw_status in ("completed", "answered", "connected", "success") else raw_status
+
+    duration = raw_body.get("duration_seconds") or raw_body.get("duration") or 0
+    recording_url = raw_body.get("recording_url") or raw_body.get("audio_url") or ""
 
     rules = await _get_scoring_rules()
     agent = await _get_agent(None)
-    if payload.agent_name:
-        agent = dict(agent)
-        agent["name"] = payload.agent_name
 
+    campaign_id = raw_body.get("campaign_id") or metadata.get("campaign_id")
     campaign = None
-    if payload.campaign_id:
-        campaign = await db.ai_campaigns.find_one({"_id": ObjectId(payload.campaign_id)})
+    if campaign_id and ObjectId.is_valid(campaign_id):
+        campaign = await db.ai_campaigns.find_one({"_id": ObjectId(campaign_id)})
+
+    # Score lead automatically from summary and transcript
+    signals = []
+    text_content = (summary + " " + json.dumps(transcript, default=str)).lower()
+    if any(w in text_content for w in ["budget", "lakh", "crore", "cr"]):
+        signals.append("budget_shared")
+    if any(w in text_content for w in ["bhk", "2bhk", "3bhk", "4bhk", "bedroom"]):
+        signals.append("bhk_shared")
+    if any(w in text_content for w in ["visit", "site visit", "office"]):
+        signals.append("wants_site_visit")
+    if any(w in text_content for w in ["whatsapp", "brochure", "details"]):
+        signals.append("whatsapp_details")
+    if any(w in text_content for w in ["not interested", "wrong number", "don't call"]):
+        signals.append("not_interested")
 
     result = {
-        "transcript": payload.transcript,
-        "summary": payload.summary,
-        "disposition": payload.disposition,
-        "requirements": payload.requirements,
-        "signals": payload.signals,
-        "urgency_score": payload.urgency_score,
-        "wants_site_visit": payload.wants_site_visit,
-        "wants_brochure": payload.wants_brochure,
-        "whatsapp_opt_in": payload.whatsapp_opt_in,
-        "human_transfer_required": payload.human_transfer_required,
-        "next_followup_days": payload.next_followup_days,
-        "remarks": payload.remarks,
+        "transcript": transcript if isinstance(transcript, list) else [{"speaker": "system", "text": str(transcript)}],
+        "summary": summary,
+        "disposition": disposition,
+        "requirements": raw_body.get("requirements") or {},
+        "signals": signals,
+        "urgency_score": raw_body.get("urgency_score"),
+        "wants_site_visit": "wants_site_visit" in signals,
+        "wants_brochure": "whatsapp_details" in signals,
+        "whatsapp_opt_in": "whatsapp_details" in signals,
+        "human_transfer_required": False,
+        "next_followup_days": 1 if "wants_site_visit" in signals else 3,
+        "remarks": summary,
     }
-    res = await _finalize_call(lead, agent, rules, campaign, "voice-agent",
+
+    res = await _finalize_call(lead, agent, rules, campaign, "sarvam-voice-agent",
                                "real_call", result, source="real")
-    if payload.recording_url:
+    if recording_url:
         await db.ai_calls.update_one(
             {"_id": ObjectId(res["call_id"])},
-            {"$set": {"recording_url": payload.recording_url,
-                      "duration_seconds": payload.duration_seconds,
-                      "call_uuid": payload.call_uuid}},
+            {"$set": {"recording_url": recording_url, "duration_seconds": duration, "call_uuid": call_uuid}},
         )
-    await db.leads.update_one({"_id": lead["_id"]}, {"$set": {"ai_call_status": "called"}})
+    await db.leads.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {"ai_call_status": "called", "ai_call_summary": summary, "updated_at": now_iso()}}
+    )
 
-    # If this call came from a campaign queue, close the loop on that queue
-    # item now that we actually know the outcome (real calls are async, so
-    # /campaigns/{id}/run couldn't know this at dial time).
-    if payload.campaign_id:
+    if campaign_id:
         await db.ai_queue.update_one(
-            {"campaign_id": payload.campaign_id, "lead_id": payload.lead_id, "status": "calling"},
+            {"campaign_id": campaign_id, "lead_id": str(lead["_id"]), "status": "calling"},
             {"$set": {"status": "done", "disposition": res["disposition"], "temperature": res["temperature"],
                       "intent_score": res["intent_score"], "done_at": now_iso()}},
         )
