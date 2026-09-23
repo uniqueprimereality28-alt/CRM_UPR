@@ -57,7 +57,7 @@ export function LiveTest() {
         {
           text: textToSpeak,
           speaker: speaker,
-          language_code: "hi-IN",
+          language: "en-IN",
         },
         { responseType: "blob" }
       );
