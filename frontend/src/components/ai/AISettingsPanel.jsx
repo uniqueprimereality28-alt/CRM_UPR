@@ -61,7 +61,7 @@ export const AISettingsPanel = () => {
     sarvam_api_key: "",
     deepgram_api_key: "",
     sarvam_speaker: "simran",
-    sarvam_language: "hi-IN",
+    sarvam_language: "en-IN",
   });
   const [telephonyStatus, setTelephonyStatus] = useState(null);
   const [testingLivekit, setTestingLivekit] = useState(false);
@@ -87,7 +87,7 @@ export const AISettingsPanel = () => {
         livekit_agent_name: r.data.livekit_agent_name || "upr-calling-agent",
         vobiz_sip_trunk_id: r.data.vobiz_sip_trunk_id || "",
         sarvam_speaker: r.data.sarvam_speaker || "bulbul",
-        sarvam_language: r.data.sarvam_language || "hi-IN",
+        sarvam_language: r.data.sarvam_language || "en-IN",
       }));
     }).catch(() => {});
   }, []);
