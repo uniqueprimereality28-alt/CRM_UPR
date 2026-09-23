@@ -51,26 +51,19 @@ export const AISettingsPanel = () => {
   const [newProj, setNewProj] = useState({ project: "", location: "", config: "", price_range: "", possession: "", highlights: "" });
 
   const [telephony, setTelephony] = useState({
-    livekit_url: "",
-    livekit_api_key: "",
-    livekit_api_secret: "",
-    livekit_agent_name: "upr-calling-agent",
-    vobiz_sip_trunk_id: "",
-    groq_api_key: "",
-    grok_api_key: "",
     sarvam_api_key: "",
-    deepgram_api_key: "",
+    sarvam_org_id: "",
+    sarvam_workspace_id: "",
+    sarvam_app_id: "",
+    sarvam_app_version: "1",
+    sarvam_connection_id: "",
+    sarvam_from_number: "",
     sarvam_speaker: "simran",
     sarvam_language: "en-IN",
+    voice_agent_shared_secret: "",
   });
   const [telephonyStatus, setTelephonyStatus] = useState(null);
-  const [testingLivekit, setTestingLivekit] = useState(false);
-  const [livekitTestResult, setLivekitTestResult] = useState(null);
-  const [showLivekitKey, setShowLivekitKey] = useState(false);
-  const [showLivekitSecret, setShowLivekitSecret] = useState(false);
-  const [showGroqKey, setShowGroqKey] = useState(false);
   const [showSarvamKey, setShowSarvamKey] = useState(false);
-  const [showDeepgramKey, setShowDeepgramKey] = useState(false);
 
   useEffect(() => {
     api.get("/ai/scoring-rules").then((r) => { setRules(r.data.rules); setBands(r.data.temperature_bands); }).catch(() => {});
@@ -83,10 +76,13 @@ export const AISettingsPanel = () => {
       setTelephonyStatus(r.data);
       setTelephony((prev) => ({
         ...prev,
-        livekit_url: r.data.livekit_url || "",
-        livekit_agent_name: r.data.livekit_agent_name || "upr-calling-agent",
-        vobiz_sip_trunk_id: r.data.vobiz_sip_trunk_id || "",
-        sarvam_speaker: r.data.sarvam_speaker || "bulbul",
+        sarvam_org_id: r.data.sarvam_org_id || "",
+        sarvam_workspace_id: r.data.sarvam_workspace_id || "",
+        sarvam_app_id: r.data.sarvam_app_id || "",
+        sarvam_app_version: r.data.sarvam_app_version || "1",
+        sarvam_connection_id: r.data.sarvam_connection_id || "",
+        sarvam_from_number: r.data.sarvam_from_number || "",
+        sarvam_speaker: r.data.sarvam_speaker || "simran",
         sarvam_language: r.data.sarvam_language || "en-IN",
       }));
     }).catch(() => {});
@@ -133,17 +129,12 @@ export const AISettingsPanel = () => {
       if (kb) {
         await api.post("/ai/knowledge-base", kb).catch(() => {});
       }
-      toast.success("Telephony & AI keys saved!");
+      toast.success("Sarvam Voice Agent settings saved!");
       const res = await api.get("/ai/calls/real/settings");
       setTelephonyStatus(res.data);
       setTelephony((prev) => ({
         ...prev,
-        livekit_api_key: "",
-        livekit_api_secret: "",
-        groq_api_key: "",
-        grok_api_key: "",
         sarvam_api_key: "",
-        deepgram_api_key: "",
       }));
     } catch (e) {
       toast.error(apiError(e.response?.data?.detail));
@@ -152,25 +143,7 @@ export const AISettingsPanel = () => {
     }
   };
 
-  const testLivekitConnection = async () => {
-    setTestingLivekit(true);
-    setLivekitTestResult(null);
-    try {
-      const res = await api.post("/ai/calls/real/test-livekit");
-      setLivekitTestResult(res.data);
-      if (res.data.ok) {
-        toast.success(res.data.message, { duration: 6000 });
-      } else {
-        toast.error(res.data.message, { duration: 8000 });
-      }
-    } catch (err) {
-      const msg = apiError(err.response?.data?.detail || "Connection test failed");
-      setLivekitTestResult({ ok: false, message: msg });
-      toast.error(msg);
-    } finally {
-      setTestingLivekit(false);
-    }
-  };
+
 
   const addProject = async () => {
     if (!newProj.project.trim() || !newProj.location.trim()) return toast.error("Project & location required");
@@ -528,167 +501,149 @@ export const AISettingsPanel = () => {
           )}
         </TabsContent>
 
-        {/* Tab 2: Telephony Credentials */}
+        {/* Tab 2: Sarvam Voice Agent Configuration */}
         <TabsContent value="telephony" className="mt-5 space-y-5">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
               <div>
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-brand">
-                  <KeyRound className="h-3.5 w-3.5" /> Telephony Configuration
+                  <KeyRound className="h-3.5 w-3.5" /> Voice Agent Configuration
                 </div>
-                <h2 className="brand-font mt-1 text-xl font-bold text-slate-900">LiveKit Cloud & Vobiz SIP Trunk</h2>
+                <h2 className="brand-font mt-1 text-xl font-bold text-slate-900">Sarvam Voice Agents & Vobiz Telephony</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Enter your credentials here. They are stored securely in MongoDB and injected automatically without redeploying.
+                  Connect your Sarvam AI voice agent for automated outbound calls. Credentials stored securely in MongoDB.
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                {telephonyStatus?.is_ready ? (
+                {telephonyStatus?.sarvam_configured ? (
                   <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200 gap-1">
-                    <CheckCircle2 className="h-3 w-3" /> Active & Configured
+                    <CheckCircle2 className="h-3 w-3" /> Sarvam Connected
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 gap-1">
-                    <AlertTriangle className="h-3 w-3" /> Incomplete Setup
+                    <AlertTriangle className="h-3 w-3" /> Setup Required
                   </Badge>
                 )}
               </div>
             </div>
 
-            {/* Warning if masked dummy string is saved */}
-            {(telephonyStatus?.livekit_secret_is_masked_dummy || telephonyStatus?.livekit_key_is_masked_dummy) && (
-              <div className="mt-4 rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs text-rose-900">
-                <div className="font-bold flex items-center gap-1.5 text-rose-800 text-sm">
-                  <AlertTriangle className="h-4 w-4 text-rose-600" />
-                  Literal Masked Dots ('••••') Detected in Saved Credentials!
+            {/* Setup Guide */}
+            {!telephonyStatus?.sarvam_configured && (
+              <div className="mt-4 rounded-xl border border-brand/20 bg-brand/5 p-4 text-xs text-slate-700">
+                <div className="font-semibold text-brand-dark flex items-center gap-1.5 mb-2">
+                  <HelpCircle className="h-3.5 w-3.5" /> Quick Setup Guide
                 </div>
-                <p className="mt-1 text-slate-700">
-                  Aapki saved LiveKit Key ya Secret mein actual alphanumeric string ki jagah literal bullet dots (<code className="font-mono bg-white px-1.5 py-0.5 rounded border border-rose-200">••••••••</code>) saved hain. 
-                  Is wajah se LiveKit Cloud ne token ko <strong>401 invalid token</strong> kehkar reject kiya!
-                </p>
-                <p className="mt-2 font-semibold text-rose-700">
-                  Fix: Go to <a href="https://cloud.livekit.io" target="_blank" rel="noreferrer" className="underline font-bold">cloud.livekit.io</a> &gt; Settings &gt; Keys &gt; Click <strong>"+ Generate key"</strong> &gt; Click the <strong>Copy icon (📋)</strong> next to the Secret, aur yahan paste karo. (Mouse se dots select mat karna).
-                </p>
+                <ol className="list-decimal list-inside space-y-1 text-[11px]">
+                  <li>Go to <strong>indus.sarvam.ai/samvaad</strong> → Deploy with Code → Generate API Key</li>
+                  <li>Go to <strong>Settings</strong> (gear icon) → Copy Org ID & Workspace ID</li>
+                  <li>Go to <strong>Agents</strong> → Select your agent → Copy Agent ID from URL</li>
+                  <li>Go to <strong>Phone Numbers</strong> → Import your Vobiz number → Copy Connection ID</li>
+                  <li>Paste all values below and click <strong>Save</strong></li>
+                </ol>
               </div>
             )}
 
-{/* Quick helper instruction card
-<div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-600">
-  <div className="font-semibold text-slate-800 flex items-center gap-1.5 mb-1">
-    <KeyRound className="h-3.5 w-3.5 text-brand" /> LiveKit Credentials Copy Karne Ka Sahi Tareeqa (cloud.livekit.io)
-  </div>
-  <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-slate-600">
-    <li>LiveKit Cloud Console kholo: <strong>cloud.livekit.io</strong> &gt; Select Project &gt; <strong>Settings &gt; Keys</strong></li>
-    <li>Naya key banane ke liye <strong>"+ Generate key"</strong> button dabao.</li>
-    <li>Popup aayega jisme <strong>API Key</strong> aur <strong>Secret</strong> dikhenge. Dono ke bagal mein bane <strong>📋 Copy icon</strong> par click karo.</li>
-    <li>Yahan neeche fields mein paste karke <strong>👁️ Eye icon</strong> dabakar confirm kar lo ki letters/numbers dikh rahe hain (dots nahi).</li>
-  </ol>
-</div>
-*/}
-
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <div>
-                <Label className="text-xs font-medium text-slate-700">LiveKit WebSocket URL (Cloud)</Label>
-                <Input
-                  placeholder="wss://your-project.livekit.cloud"
-                  value={telephony.livekit_url}
-                  onChange={(e) => setTelephony({ ...telephony, livekit_url: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
-              </div>
-
-              <div>
-                <Label className="text-xs font-medium text-slate-700">LiveKit Agent Name</Label>
-                <Input
-                  placeholder="upr-calling-agent"
-                  value={telephony.livekit_agent_name}
-                  onChange={(e) => setTelephony({ ...telephony, livekit_agent_name: e.target.value })}
-                  className="mt-1 font-mono text-xs"
-                />
-              </div>
-
-              <div>
+              {/* Sarvam API Key */}
+              <div className="sm:col-span-2">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-medium text-slate-700">
-                    LiveKit API Key
-                    {telephonyStatus?.livekit_key_prefix && (
-                      <span className={`ml-2 text-[10px] font-normal ${telephonyStatus?.livekit_key_valid_format ? 'text-emerald-600' : 'text-amber-600'}`}>
-                        ({telephonyStatus.livekit_key_prefix} {telephonyStatus?.livekit_key_valid_format ? '✓ Valid format' : '⚠ Must start with API'})
-                      </span>
+                    Sarvam API Key
+                    {telephonyStatus?.has_sarvam_key && (
+                      <span className="ml-2 text-[10px] text-emerald-600">✓ Configured</span>
                     )}
                   </Label>
                   <button
                     type="button"
-                    onClick={() => setShowLivekitKey(!showLivekitKey)}
+                    onClick={() => setShowSarvamKey(!showSarvamKey)}
                     className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
                   >
-                    {showLivekitKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showLivekitKey ? "Hide" : "Reveal"}
+                    {showSarvamKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    {showSarvamKey ? "Hide" : "Reveal"}
                   </button>
                 </div>
                 <div className="relative mt-1">
                   <Input
-                    type={showLivekitKey ? "text" : "password"}
-                    placeholder={telephonyStatus?.has_livekit_key ? "•••••••••••• (Configured)" : "API Key (starts with API...)"}
-                    value={telephony.livekit_api_key}
-                    onChange={(e) => setTelephony({ ...telephony, livekit_api_key: e.target.value })}
+                    type={showSarvamKey ? "text" : "password"}
+                    placeholder={telephonyStatus?.has_sarvam_key ? "•••••••••••• (Configured)" : "sk_... from indus.sarvam.ai"}
+                    value={telephony.sarvam_api_key}
+                    onChange={(e) => setTelephony({ ...telephony, sarvam_api_key: e.target.value })}
                     className="pr-9 font-mono text-xs"
                   />
                   <button
                     type="button"
-                    onClick={() => setShowLivekitKey(!showLivekitKey)}
+                    onClick={() => setShowSarvamKey(!showSarvamKey)}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                   >
-                    {showLivekitKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    {showSarvamKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  Must start with <span className="font-mono font-semibold text-slate-600">API</span> from LiveKit Cloud Console.
+                  From <strong>indus.sarvam.ai</strong> → Deploy with Code → Generate API Key
                 </p>
               </div>
 
+              {/* Org ID */}
               <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-slate-700">LiveKit API Secret</Label>
-                  <button
-                    type="button"
-                    onClick={() => setShowLivekitSecret(!showLivekitSecret)}
-                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
-                  >
-                    {showLivekitSecret ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showLivekitSecret ? "Hide" : "Reveal"}
-                  </button>
-                </div>
-                <div className="relative mt-1">
-                  <Input
-                    type={showLivekitSecret ? "text" : "password"}
-                    placeholder={telephonyStatus?.has_livekit_secret ? "•••••••••••• (Configured)" : "API Secret..."}
-                    value={telephony.livekit_api_secret}
-                    onChange={(e) => setTelephony({ ...telephony, livekit_api_secret: e.target.value })}
-                    className="pr-9 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowLivekitSecret(!showLivekitSecret)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showLivekitSecret ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  The secret corresponding to the API Key above (from same project).
-                </p>
-              </div>
-
-              <div>
-                <Label className="text-xs font-medium text-slate-700">Vobiz Outbound SIP Trunk ID</Label>
+                <Label className="text-xs font-medium text-slate-700">Sarvam Organization ID</Label>
                 <Input
-                  placeholder="ST_xxxxxx from LiveKit SIP Trunk"
-                  value={telephony.vobiz_sip_trunk_id}
-                  onChange={(e) => setTelephony({ ...telephony, vobiz_sip_trunk_id: e.target.value })}
+                  placeholder="org-xxxxxxxx"
+                  value={telephony.sarvam_org_id}
+                  onChange={(e) => setTelephony({ ...telephony, sarvam_org_id: e.target.value })}
                   className="mt-1 font-mono text-xs"
                 />
+                <p className="mt-1 text-[11px] text-slate-400">Settings → Organisation → General</p>
               </div>
 
+              {/* Workspace ID */}
+              <div>
+                <Label className="text-xs font-medium text-slate-700">Sarvam Workspace ID</Label>
+                <Input
+                  placeholder="ws-xxxxxxxx"
+                  value={telephony.sarvam_workspace_id}
+                  onChange={(e) => setTelephony({ ...telephony, sarvam_workspace_id: e.target.value })}
+                  className="mt-1 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Settings → Workspace → General</p>
+              </div>
+
+              {/* App ID (Agent ID) */}
+              <div>
+                <Label className="text-xs font-medium text-slate-700">Sarvam Agent (App) ID</Label>
+                <Input
+                  placeholder="Conversatio-xxxxxxxx"
+                  value={telephony.sarvam_app_id}
+                  onChange={(e) => setTelephony({ ...telephony, sarvam_app_id: e.target.value })}
+                  className="mt-1 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">From agent URL on indus.sarvam.ai</p>
+              </div>
+
+              {/* Connection ID */}
+              <div>
+                <Label className="text-xs font-medium text-slate-700">Vobiz Connection ID</Label>
+                <Input
+                  placeholder="Calling-UPR-xxxxxxxx"
+                  value={telephony.sarvam_connection_id}
+                  onChange={(e) => setTelephony({ ...telephony, sarvam_connection_id: e.target.value })}
+                  className="mt-1 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">From Phone Numbers → Connection name</p>
+              </div>
+
+              {/* From Number */}
+              <div>
+                <Label className="text-xs font-medium text-slate-700">Vobiz Outbound Number</Label>
+                <Input
+                  placeholder="+61355508136"
+                  value={telephony.sarvam_from_number}
+                  onChange={(e) => setTelephony({ ...telephony, sarvam_from_number: e.target.value })}
+                  className="mt-1 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Your Vobiz number imported into Sarvam</p>
+              </div>
+
+              {/* Human Escalation Target Phone */}
               <div>
                 <Label className="text-xs font-medium text-slate-700">Human Escalation Target Phone (Call Transfer)</Label>
                 <Input
@@ -702,96 +657,7 @@ export const AISettingsPanel = () => {
                 </p>
               </div>
 
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-slate-700">Groq API Key (Recommended for Zero-Lag Calling)</Label>
-                  <button
-                    type="button"
-                    onClick={() => setShowGroqKey(!showGroqKey)}
-                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
-                  >
-                    {showGroqKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showGroqKey ? "Hide" : "Reveal"}
-                  </button>
-                </div>
-                <div className="relative mt-1">
-                  <Input
-                    type={showGroqKey ? "text" : "password"}
-                    placeholder={telephonyStatus?.has_groq_key ? "•••••••••••• (Configured)" : "gsk_..."}
-                    value={telephony.groq_api_key || telephony.grok_api_key || ""}
-                    onChange={(e) => setTelephony({ ...telephony, groq_api_key: e.target.value, grok_api_key: e.target.value })}
-                    className="pr-9 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowGroqKey(!showGroqKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showGroqKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-slate-700">Sarvam AI API Subscription Key</Label>
-                  <button
-                    type="button"
-                    onClick={() => setShowSarvamKey(!showSarvamKey)}
-                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
-                  >
-                    {showSarvamKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showSarvamKey ? "Hide" : "Reveal"}
-                  </button>
-                </div>
-                <div className="relative mt-1">
-                  <Input
-                    type={showSarvamKey ? "text" : "password"}
-                    placeholder={telephonyStatus?.has_sarvam_key ? "•••••••••••• (Configured)" : "Sarvam key..."}
-                    value={telephony.sarvam_api_key}
-                    onChange={(e) => setTelephony({ ...telephony, sarvam_api_key: e.target.value })}
-                    className="pr-9 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowSarvamKey(!showSarvamKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showSarvamKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-slate-700">Deepgram STT API Key</Label>
-                  <button
-                    type="button"
-                    onClick={() => setShowDeepgramKey(!showDeepgramKey)}
-                    className="text-[11px] text-slate-400 hover:text-brand flex items-center gap-1"
-                  >
-                    {showDeepgramKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                    {showDeepgramKey ? "Hide" : "Reveal"}
-                  </button>
-                </div>
-                <div className="relative mt-1">
-                  <Input
-                    type={showDeepgramKey ? "text" : "password"}
-                    placeholder={telephonyStatus?.has_deepgram_key ? "•••••••••••• (Configured)" : "Deepgram key..."}
-                    value={telephony.deepgram_api_key}
-                    onChange={(e) => setTelephony({ ...telephony, deepgram_api_key: e.target.value })}
-                    className="pr-9 font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowDeepgramKey(!showDeepgramKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showDeepgramKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-              </div>
-
+              {/* Sarvam Speaker Voice */}
               <div>
                 <Label className="text-xs font-medium text-slate-700">Sarvam Speaker Voice</Label>
                 <Select value={telephony.sarvam_speaker} onValueChange={(v) => setTelephony({ ...telephony, sarvam_speaker: v })}>
@@ -810,34 +676,10 @@ export const AISettingsPanel = () => {
               </div>
             </div>
 
-            {livekitTestResult && (
-              <div className={`mt-4 rounded-xl p-3.5 text-xs border ${
-                livekitTestResult.ok
-                  ? "bg-emerald-50 text-emerald-900 border-emerald-200"
-                  : "bg-rose-50 text-rose-900 border-rose-200"
-              }`}>
-                <div className="font-semibold flex items-center gap-1.5">
-                  {livekitTestResult.ok ? <Check className="h-4 w-4 text-emerald-600" /> : <AlertTriangle className="h-4 w-4 text-rose-600" />}
-                  {livekitTestResult.ok ? "LiveKit Connection Verified" : "LiveKit Connection Failed"}
-                </div>
-                <p className="mt-1 text-slate-600">{livekitTestResult.message}</p>
-              </div>
-            )}
-
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={testLivekitConnection}
-                disabled={testingLivekit}
-                className="gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 text-xs"
-              >
-                {testingLivekit ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-brand" />}
-                Test LiveKit Cloud Connection
-              </Button>
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-4">
               <Button onClick={saveTelephony} disabled={savingTelephony} className="gap-2 bg-brand hover:bg-brand-dark">
                 {savingTelephony ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                Save Telephony & Credentials
+                Save Sarvam Configuration
               </Button>
             </div>
           </div>
