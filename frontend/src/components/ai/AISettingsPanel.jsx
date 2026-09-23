@@ -571,18 +571,19 @@ export const AISettingsPanel = () => {
               </div>
             )}
 
-            {/* Quick helper instruction card */}
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-600">
-              <div className="font-semibold text-slate-800 flex items-center gap-1.5 mb-1">
-                <KeyRound className="h-3.5 w-3.5 text-brand" /> LiveKit Credentials Copy Karne Ka Sahi Tareeqa (cloud.livekit.io)
-              </div>
-              <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-slate-600">
-                <li>LiveKit Cloud Console kholo: <strong>cloud.livekit.io</strong> &gt; Select Project &gt; <strong>Settings &gt; Keys</strong></li>
-                <li>Naya key banane ke liye <strong>"+ Generate key"</strong> button dabao.</li>
-                <li>Popup aayega jisme <strong>API Key</strong> aur <strong>Secret</strong> dikhenge. Dono ke bagal mein bane <strong>📋 Copy icon</strong> par click karo.</li>
-                <li>Yahan neeche fields mein paste karke <strong>👁️ Eye icon</strong> dabakar confirm kar lo ki letters/numbers dikh rahe hain (dots nahi).</li>
-              </ol>
-            </div>
+{/* Quick helper instruction card
+<div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 text-xs text-slate-600">
+  <div className="font-semibold text-slate-800 flex items-center gap-1.5 mb-1">
+    <KeyRound className="h-3.5 w-3.5 text-brand" /> LiveKit Credentials Copy Karne Ka Sahi Tareeqa (cloud.livekit.io)
+  </div>
+  <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-slate-600">
+    <li>LiveKit Cloud Console kholo: <strong>cloud.livekit.io</strong> &gt; Select Project &gt; <strong>Settings &gt; Keys</strong></li>
+    <li>Naya key banane ke liye <strong>"+ Generate key"</strong> button dabao.</li>
+    <li>Popup aayega jisme <strong>API Key</strong> aur <strong>Secret</strong> dikhenge. Dono ke bagal mein bane <strong>📋 Copy icon</strong> par click karo.</li>
+    <li>Yahan neeche fields mein paste karke <strong>👁️ Eye icon</strong> dabakar confirm kar lo ki letters/numbers dikh rahe hain (dots nahi).</li>
+  </ol>
+</div>
+*/}
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div>
