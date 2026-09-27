@@ -1,0 +1,47 @@
+[
+  {
+    "_id": "6a8ab8154ade1c26b2152752",
+    "agent_id": "6a71d82c8b1be7c94028289e",
+    "agent_name": "Kashish Aggarwal",
+    "minutes": 40.0,
+    "seconds": 2400,
+    "reason": "ystem outage during restore, 2026-08-23 , Manually checked by VA",
+    "adjustment_date": "2026-08-23",
+    "added_by": "uniqueprimereality28-alt",
+    "added_by_id": null,
+    "created_at": "2026-08-23T09:06:29.101298+00:00",
+    "reversed": false,
+    "reversed_by": null,
+    "reversed_at": null
+  },
+  {
+    "_id": "6a8abaa5a65eae54c910ef9a",
+    "agent_id": "6a71d82c8b1be7c94028289e",
+    "agent_name": "Kashish Aggarwal",
+    "minutes": 40.0,
+    "seconds": 2400,
+    "reason": "System outage during duplicate-lead restore",
+    "adjustment_date": "2026-08-23",
+    "added_by": "Vranda Aggarwal",
+    "added_by_id": "6a71b6be0ec2a6851431a347",
+    "created_at": "2026-08-23T09:17:25.363751+00:00",
+    "reversed": true,
+    "reversed_by": "Vranda Aggarwal",
+    "reversed_at": "2026-08-23T09:59:36.853065+00:00"
+  },
+  {
+    "_id": "6a8ac46ba65eae54c910f015",
+    "agent_id": "6a71d82c8b1be7c94028289e",
+    "agent_name": "Kashish Aggarwal",
+    "minutes": 40.0,
+    "seconds": 2400,
+    "reason": "Duplicate lead restore error.",
+    "adjustment_date": "2026-08-23",
+    "added_by": "Vranda Aggarwal",
+    "added_by_id": "6a71b6be0ec2a6851431a347",
+    "created_at": "2026-08-23T09:59:07.721933+00:00",
+    "reversed": true,
+    "reversed_by": "Vranda Aggarwal",
+    "reversed_at": "2026-08-23T09:59:28.697409+00:00"
+  }
+]
