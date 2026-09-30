@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, User2, Phone, PhoneIncoming, PhoneOutgoing, PhoneCall, Sparkles, BadgeCheck,
   Upload, FileDown, Search, Loader2, Clock, UserCheck, CheckCircle2, RefreshCw, ArrowUpDown,
-  PhoneOff, Copy, MessageSquare, X,
+  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
+import { tempMeta } from "../lib/ai";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
+  DropdownMenuSeparator, DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
 import { StatCard } from "../components/StatCard";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -34,13 +39,15 @@ const SIGNALS = {
   no_reply: "Person did not speak", short_call: "Very short call",
 };
 
+// "Not interested" also holds no-answer and picked-up-but-silent calls.
 const TABS = [
   ["all", "All"], ["qualified", "Qualified"], ["interested", "Interested"],
-  ["callback", "Call back"], ["not_interested", "Not interested"], ["no_answer", "No answer"],
+  ["callback", "Call back"], ["not_interested", "Not interested"],
 ];
+const TEMPS = ["hot", "warm", "cold", "lost"];
 
 const SORTS = [
-  ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"],
+  ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"], ["hottest", "Highest AI score"],
   ["longest", "Longest call"], ["shortest", "Shortest call"], ["name", "Name A–Z"],
 ];
 
@@ -87,6 +94,7 @@ export default function AICallLogs() {
   const [direction, setDirection] = useState("all");
   const [conn, setConn] = useState("all");     // all | yes (connected) | no (not connected)
   const [reason, setReason] = useState("");     // not-connected reason
+  const [temp, setTemp] = useState("all");       // AI temperature filter
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [page, setPage] = useState(1);
@@ -117,7 +125,8 @@ export default function AICallLogs() {
   const loadList = useCallback(() => {
     const params = {
       ...range, sort, page, limit: 25,
-      category: tab === "all" ? undefined : tab,
+      category: tab === "all" ? undefined : tab === "not_interested" ? "not_interested_all" : tab,
+      temperature: temp === "all" ? undefined : temp,
       assigned: assigned === "all" ? undefined : assigned,
       direction: direction === "all" ? undefined : direction,
       connected: conn === "all" ? undefined : conn,
@@ -127,11 +136,11 @@ export default function AICallLogs() {
     api.get("/ai-call-logs", { params })
       .then((r) => setList(r.data))
       .catch((e) => { setList({ items: [], total: 0, pages: 1 }); toast.error(apiError(e.response?.data?.detail)); });
-  }, [range, sort, page, tab, assigned, direction, conn, reason, qDebounced]);
+  }, [range, sort, page, tab, temp, assigned, direction, conn, reason, qDebounced]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadList(); }, [loadList]);
-  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, sort, assigned, direction, conn, reason, qDebounced]);
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, temp, sort, assigned, direction, conn, reason, qDebounced]);
 
   const refreshAll = () => { loadStats(); loadList(); };
 
@@ -197,10 +206,41 @@ export default function AICallLogs() {
     }
   };
 
+  /* ----- export (PDF / CSV) ----- */
+  const [exporting, setExporting] = useState(false);
+  const doExport = async (scope, fmt) => {
+    setExporting(true);
+    try {
+      const res = await api.get("/ai-call-logs/export", {
+        params: {
+          fmt, scope, ...range,
+          assigned: assigned === "all" ? undefined : assigned,
+          direction: direction === "all" ? undefined : direction,
+          temperature: temp === "all" ? undefined : temp,
+          q: qDebounced || undefined,
+        },
+        responseType: "blob",
+      });
+      const cd = res.headers?.["content-disposition"] || "";
+      const name = (cd.match(/filename="?([^";]+)"?/) || [])[1] || `ai_calls_${scope}.${fmt}`;
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`${fmt.toUpperCase()} downloaded`);
+    } catch (err) {
+      toast.error("Could not create the export. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const byCat = stats?.by_category || {};
   const tabCount = (key) => {
     if (!stats) return null;
     if (key === "all") return stats.total;
+    if (key === "not_interested") return (byCat.not_interested ?? 0) + (byCat.no_answer ?? 0);
     return byCat[key] ?? 0;
   };
 
@@ -216,6 +256,30 @@ export default function AICallLogs() {
           <p className="mt-1 text-sm text-slate-500">Every call the AI agent made or received — who was interested, and what was said.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={exporting} data-testid="export-btn">
+                {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="text-[11px] font-normal text-slate-500">
+                Uses the date range and filters above
+              </DropdownMenuLabel>
+              {[["interested", "Interested"], ["not_interested", "Not interested"], ["all", "Everything"]].map(([scope, label], i) => (
+                <div key={scope}>
+                  {i > 0 && <DropdownMenuSeparator />}
+                  <DropdownMenuLabel className="text-xs">{label}</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => doExport(scope, "pdf")} data-testid={`export-${scope}-pdf`}>
+                    <FileText className="mr-2 h-4 w-4" /> PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => doExport(scope, "csv")} data-testid={`export-${scope}-csv`}>
+                    <FileSpreadsheet className="mr-2 h-4 w-4" /> CSV (Excel)
+                  </DropdownMenuItem>
+                </div>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate} data-testid="download-template-btn">
             <FileDown className="h-3.5 w-3.5" /> Sample file
           </Button>
@@ -257,7 +321,7 @@ export default function AICallLogs() {
       {/* numbers */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Calls made" value={stats ? stats.total : "…"} sub={stats ? `${stats.outbound} out · ${stats.inbound} in` : ""} icon={PhoneCall} accent="brand" testId="stat-calls" />
-        <StatCard label="Connected" value={stats ? stats.connected : "…"} sub={stats && stats.total ? `${Math.round((stats.connected / stats.total) * 100)}% of calls · ${stats.not_connected} not connected` : ""} icon={Phone} accent="slate" testId="stat-connected" />
+        <StatCard label="Connected" value={stats ? stats.connected : "…"} sub={stats && stats.total ? `${Math.round((stats.connected / stats.total) * 100)}% of calls · ${stats.not_connected} not connected` + (stats.picked_no_speech ? ` · ${stats.picked_no_speech} picked up, silent` : "") : ""} icon={Phone} accent="slate" testId="stat-connected" />
         <StatCard label="Interested" value={stats ? stats.interested : "…"} sub="flagged automatically" icon={Sparkles} accent="amber" testId="stat-interested" />
         <StatCard label="Qualified leads" value={stats ? stats.qualified : "…"} sub={stats ? `${stats.assigned} assigned` : ""} icon={BadgeCheck} accent="emerald" testId="stat-qualified" />
       </div>
@@ -265,6 +329,9 @@ export default function AICallLogs() {
       {/* connected vs not connected */}
       <ConnectionPanel stats={stats} conn={conn} reason={reason}
         onPick={(c, r) => { setConn(c); setReason(r); }} />
+
+      {/* AI lead temperature */}
+      <TemperaturePanel stats={stats} temp={temp} onPick={setTemp} />
 
       {/* hourly chart */}
       <HourChart data={hourData} activeHour={hour} onPick={(h) => {
@@ -320,6 +387,16 @@ export default function AICallLogs() {
           <Button variant="ghost" size="icon" className="h-9 w-9" onClick={refreshAll} title="Refresh"><RefreshCw className="h-4 w-4" /></Button>
         </div>
       </div>
+
+      {temp !== "all" && (
+        <div className="flex items-center gap-2" data-testid="temp-filter-chip">
+          <span className="text-xs text-slate-500">Showing:</span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand-light px-3 py-1 text-xs font-semibold text-brand">
+            AI temperature · {tempMeta(temp).label}
+            <button type="button" onClick={() => setTemp("all")} aria-label="Clear filter"><X className="h-3 w-3" /></button>
+          </span>
+        </div>
+      )}
 
       {(conn !== "all" || reason) && (
         <div className="flex items-center gap-2" data-testid="conn-filter-chip">
@@ -448,6 +525,38 @@ const ConnectionPanel = ({ stats, conn, reason, onPick }) => {
   );
 };
 
+/* ---------- AI lead temperature ---------- */
+const TemperaturePanel = ({ stats, temp, onPick }) => {
+  const by = stats?.by_temperature || {};
+  const scored = TEMPS.reduce((n, t) => n + (by[t] || 0), 0);
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid="temperature-panel">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold text-slate-900">AI lead temperature</h3>
+        <span className="text-xs text-slate-400">Scored from the whole conversation · tap to filter</span>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+        {TEMPS.map((t) => {
+          const m = tempMeta(t);
+          const n = by[t] || 0;
+          const active = temp === t;
+          return (
+            <button key={t} type="button" onClick={() => onPick(active ? "all" : t)} data-testid={`temp-${t}`}
+              className={`rounded-xl border p-3.5 text-left transition-all ${m.cls} ${active ? "ring-2 ring-brand/40" : "hover:brightness-95"}`}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider">
+                <span className={`h-2 w-2 rounded-full ${m.dot}`} />{m.label}
+              </div>
+              <div className="brand-font mt-1.5 text-2xl font-bold">{stats ? n : "…"}</div>
+              <div className="text-[11px] opacity-70">{scored ? Math.round((n / scored) * 100) : 0}% of calls</div>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-[11px] text-slate-400">Hot = 60+ · Warm = 30–59 · Cold = under 30 · Lost = not interested, no answer or silent.</p>
+    </div>
+  );
+};
+
 /* ---------- Calls per hour ---------- */
 const HourChart = ({ data: raw, activeHour, onPick }) => {
   const data = raw || Array(24).fill(0);
@@ -494,6 +603,13 @@ const CallRow = ({ c, checked, onCheck, onOpen }) => {
             <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0 text-[10px] font-semibold ${meta.cls}`}>
               <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}
             </span>
+            {c.temperature && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0 text-[10px] font-semibold ${tempMeta(c.temperature).cls}`}
+                title="AI lead temperature" data-testid={`row-temp-${c.id}`}>
+                <Flame className="h-2.5 w-2.5" />{tempMeta(c.temperature).label}
+                {c.ai_score != null && <span className="opacity-70">· {c.ai_score}</span>}
+              </span>
+            )}
             {c.assigned_to_name && (
               <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0 text-[10px] font-semibold text-indigo-700">
                 <UserCheck className="h-3 w-3" />{c.assigned_to_name.split(" ")[0]}
@@ -524,6 +640,7 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
   const [call, setCall] = useState(null);
   const [remark, setRemark] = useState("");
   const [saving, setSaving] = useState(false);
+  const [scoring, setScoring] = useState(false);
 
   useEffect(() => {
     if (!id) { setCall(null); return; }
@@ -541,6 +658,13 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
     try { const { data } = await api.patch(`/ai-call-logs/${id}`, body); apply(data); if (okMsg) toast.success(okMsg); }
     catch (e) { toast.error(apiError(e.response?.data?.detail)); }
     finally { setSaving(false); }
+  };
+
+  const rescore = async () => {
+    setScoring(true);
+    try { const { data } = await api.post(`/ai-call-logs/${id}/ai-score`); apply(data); toast.success(`AI score: ${data.ai_score}/100`); }
+    catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+    finally { setScoring(false); }
   };
 
   const assign = async (userId) => {
@@ -586,6 +710,36 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
               </div>
               {call.summary || "No summary available for this call."}
             </div>
+
+            {/* AI lead score */}
+            {call.temperature && (
+              <div className="rounded-xl border border-slate-200 bg-white p-3" data-testid="ai-score-card">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                    <Flame className="h-3 w-3" /> AI lead score
+                  </div>
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tempMeta(call.temperature).cls}`}>
+                    {tempMeta(call.temperature).label}
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="brand-font text-2xl font-bold text-slate-900">{call.ai_score ?? 0}<span className="text-sm font-medium text-slate-400"> / 100</span></div>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div className={`h-full rounded-full ${tempMeta(call.temperature).bar}`} style={{ width: `${call.ai_score ?? 0}%` }} />
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-slate-400">
+                    {call.score_source === "ai" ? (call.ai_reason || "Scored by AI from the full conversation.") : "Scored automatically from the full conversation."}
+                  </span>
+                  {call.answered && call.conversation?.length > 0 && !["no_answer", "not_interested"].includes(call.category) && (
+                    <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 text-xs" disabled={scoring} onClick={rescore} data-testid="ai-rescore-btn">
+                      {scoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Re-score with AI
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* why flagged */}
             {call.signals?.length > 0 && (
