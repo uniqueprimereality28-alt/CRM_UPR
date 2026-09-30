@@ -162,9 +162,23 @@ def _speaker_role(label: str) -> str:
     return "agent"
 
 
+_TURN_RX = re.compile(
+    r"(?:(?<=\s)|^)(?:\[?(?P<ts>\d{1,2}:\d{2}(?::\d{2})?)\]?\s*[-–]?\s*)?"
+    r"\[?(?P<lab>agent|assistant|ai|bot|simran|vrinda|vranda|model|user|customer|client|human|caller|lead)\]?\s*[:：]\s*",
+    re.I | re.M,
+)
+
+
+def _turn_time(t: dict) -> str:
+    v = t.get("timestamp") or t.get("time") or t.get("start") or t.get("start_time") or ""
+    return str(v).strip()[:12] if v not in (None, "") else ""
+
+
 def _parse_conversation(v: Any) -> List[dict]:
-    """Accepts a JSON list, a JSON string, or plain 'Agent: ...\\nUser: ...' text.
-    Returns [{speaker: 'agent'|'customer', text: str}]."""
+    """Accepts a JSON list, a JSON string, or text like 'Agent: ... User: ...'
+    (one turn per line OR everything on one line). Returns
+    [{speaker: 'agent'|'customer'|'unknown', text: str, time?: str}].
+    'unknown' is used only when the text has no speaker labels at all."""
     if v is None or str(v).strip() == "":
         return []
     data = v
@@ -183,28 +197,35 @@ def _parse_conversation(v: Any) -> List[dict]:
     if isinstance(data, list):
         for t in data:
             if isinstance(t, dict):
-                text = t.get("text") or t.get("content") or t.get("message") or t.get("utterance") or ""
-                spk = t.get("speaker") or t.get("role") or t.get("from") or t.get("sender") or "agent"
+                text = t.get("text") or t.get("content") or t.get("message") or t.get("utterance") or t.get("transcript") or ""
+                spk = t.get("speaker") or t.get("role") or t.get("from") or t.get("sender") or t.get("participant") or "agent"
                 if str(text).strip():
-                    turns.append({"speaker": _speaker_role(str(spk)), "text": str(text).strip()})
+                    turn = {"speaker": _speaker_role(str(spk)), "text": str(text).strip()}
+                    tm = _turn_time(t)
+                    if tm:
+                        turn["time"] = tm
+                    turns.append(turn)
             elif isinstance(t, str) and t.strip():
                 turns.extend(_parse_conversation(t))
         return turns
-    # Plain text: lines like "Agent: hello" / "User: haan boliye"
-    current: Optional[dict] = None
-    for line in str(data).replace("\r", "").split("\n"):
-        m = re.match(r"^\s*\[?([A-Za-z][A-Za-z _\-]{0,24})\]?\s*[:\-–]\s*(.*)$", line)
-        if m and (_speaker_role(m.group(1)) == "customer" or _norm(m.group(1)) in AGENT_WORDS
-                  or m.group(1).strip().lower() in ("agent", "assistant", "ai", "bot", "user", "customer")):
-            current = {"speaker": _speaker_role(m.group(1)), "text": m.group(2).strip()}
-            turns.append(current)
-        elif line.strip():
-            if current:
-                current["text"] = (current["text"] + " " + line.strip()).strip()
-            else:
-                current = {"speaker": "agent", "text": line.strip()}
-                turns.append(current)
-    return [t for t in turns if t["text"]]
+
+    text = str(data).replace("\r", "")
+    marks = list(_TURN_RX.finditer(text))
+    if not marks:
+        # No speaker labels anywhere — keep every line, but don't guess who spoke.
+        return [{"speaker": "unknown", "text": ln.strip()} for ln in text.split("\n") if ln.strip()]
+    lead_in = text[: marks[0].start()].strip()
+    if lead_in:
+        turns.append({"speaker": "unknown", "text": " ".join(lead_in.split())})
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        body = " ".join(text[m.end(): end].split())
+        if body:
+            turn = {"speaker": _speaker_role(m.group("lab")), "text": body}
+            if m.group("ts"):
+                turn["time"] = m.group("ts")
+            turns.append(turn)
+    return turns
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +282,12 @@ def analyse_call(conversation: List[dict], status: str, disposition: str, durati
     # ---- did the person actually pick up and speak? ----
     status_says_no = bool(NO_ANSWER_STATUS.search(status_l)) and not ANSWERED_STATUS.search(status_l)
     spoke = customer_words >= 2
-    if conversation:
+    unlabeled = bool(conversation) and all(t["speaker"] == "unknown" for t in conversation)
+    if unlabeled:
+        # Transcript has no speaker labels: judge by status/length instead of who spoke.
+        answered = (not status_says_no) and (duration >= 15 or len(all_text.split()) >= 8)
+        spoke = answered
+    elif conversation:
         answered = spoke
     else:
         # No transcript: fall back on status / duration.
@@ -369,6 +395,35 @@ def auto_summary(conversation: List[dict], category: str, signals: List[str]) ->
     return " ".join(p for p in parts if p)
 
 
+_REASON_RULES = [
+    (r"voice ?mail|answering.?machine", "Voicemail"),
+    (r"busy", "Line busy"),
+    (r"switched.?off|unreachable|not.?reachable|out.?of.?(coverage|network)", "Unreachable / switched off"),
+    (r"invalid|wrong.?number|not.?exist|unallocated", "Invalid number"),
+    (r"reject|declin|denied|blocked", "Rejected / cut by person"),
+    (r"cancel", "Cancelled"),
+    (r"fail|error", "Call failed"),
+    (r"no.?answer|not.?answer|unanswered|missed|no.?response|time.?out|ring", "No answer"),
+]
+REASON_NAMES = [r[1] for r in _REASON_RULES] + [
+    "Picked up, no one spoke", "Hung up within seconds", "Not connected (no reason in file)",
+]
+
+
+def not_connected_reason(status: str, signals: List[str], duration: int) -> str:
+    """Plain-English reason a call did not connect. Uses the export's own status
+    first, then what we can tell from the call itself."""
+    s = (status or "").lower()
+    for rx, label in _REASON_RULES:
+        if re.search(rx, s):
+            return label
+    if "no_reply" in signals:
+        return "Picked up, no one spoke"
+    if "short_call" in signals or (duration or 0) < 10:
+        return "Hung up within seconds" if (duration or 0) >= 3 else "No answer"
+    return "Not connected (no reason in file)"
+
+
 def _dedupe(seq: List[str]) -> List[str]:
     out: List[str] = []
     for s in seq:
@@ -468,6 +523,7 @@ def _build_doc(row: dict) -> Optional[dict]:
         "duration_seconds": duration,
         "status": status,
         "answered": result["answered"],
+        "not_connected_reason": None if result["answered"] else not_connected_reason(status, result["signals"], duration),
         "conversation": conversation,
         "summary": summary,
         "summary_auto": summary_is_auto,
@@ -514,8 +570,15 @@ def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
     return q
 
 
-def _list_query(date_from, date_to, category, assigned, direction, q_text) -> dict:
+def _list_query(date_from, date_to, category, assigned, direction, q_text,
+                connected=None, reason=None) -> dict:
     q = _range_query(date_from, date_to)
+    if connected == "yes":
+        q["answered"] = True
+    elif connected == "no":
+        q["answered"] = {"$ne": True}
+    if reason and reason != "all":
+        q["not_connected_reason"] = reason
     if category and category != "all":
         if category == "interested_all":
             q["category"] = {"$in": list(INTERESTED_SET)}
@@ -550,12 +613,28 @@ async def assignees():
     return await _assignees()
 
 
+async def _backfill_reasons() -> None:
+    """Calls imported before reasons existed get one filled in (cheap, runs once)."""
+    missing = db.ai_call_logs.find(
+        {"answered": {"$ne": True}, "not_connected_reason": {"$in": [None, ""]}},
+        {"status": 1, "signals": 1, "duration_seconds": 1},
+    )
+    async for d in missing:
+        await db.ai_call_logs.update_one(
+            {"_id": d["_id"]},
+            {"$set": {"not_connected_reason": not_connected_reason(
+                d.get("status") or "", d.get("signals") or [], d.get("duration_seconds") or 0)}},
+        )
+
+
 @router.get("/stats")
 async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
     """Headline numbers + calls-per-hour for the chosen window (all IST)."""
+    await _backfill_reasons()
     q = _range_query(date_from, date_to)
     docs = await db.ai_call_logs.find(
-        q, {"started_at": 1, "category": 1, "answered": 1, "assigned_to": 1, "direction": 1}
+        q, {"started_at": 1, "category": 1, "answered": 1, "assigned_to": 1, "direction": 1,
+            "not_connected_reason": 1}
     ).to_list(50000)
 
     total = len(docs)
@@ -577,7 +656,15 @@ async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
     for d in docs:
         counts_by_cat[d.get("category") or "other"] = counts_by_cat.get(d.get("category") or "other", 0) + 1
 
+    reasons: dict = {}
+    for d in docs:
+        if not d.get("answered"):
+            r = d.get("not_connected_reason") or "Not connected (no reason in file)"
+            reasons[r] = reasons.get(r, 0) + 1
+    reasons_list = sorted(({"reason": k, "count": v} for k, v in reasons.items()), key=lambda x: -x["count"])
+
     return {
+        "connected": answered, "not_connected": total - answered, "reasons": reasons_list,
         "total": total, "answered": answered, "interested": interested, "qualified": qualified,
         "assigned": assigned, "inbound": inbound, "outbound": total - inbound,
         "by_hour": by_hour, "by_category": counts_by_cat,
@@ -588,10 +675,11 @@ async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
 async def list_logs(
     date_from: Optional[str] = None, date_to: Optional[str] = None,
     category: Optional[str] = None, assigned: Optional[str] = None,
-    direction: Optional[str] = None,
+    direction: Optional[str] = None, connected: Optional[str] = None, reason: Optional[str] = None,
     q: Optional[str] = None, sort: str = "newest", page: int = 1, limit: int = 25,
 ):
-    query = _list_query(date_from, date_to, category, assigned, direction, q)
+    await _backfill_reasons()
+    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason)
     total = await db.ai_call_logs.count_documents(query)
     limit = max(1, min(limit, 100))
     page = max(1, page)
@@ -633,6 +721,9 @@ async def download_template():
     ws.append(["C-1002", "9811122233", "", "inbound", "2026-09-30 14:20:00", 41, "completed",
                "Agent: Namaste, Unique Prime Reality.\nUser: Mujhe abhi interested nahi hai, mat call karo."])
     ws.append(["C-1003", "9899900011", "Neha", "outbound", "2026-09-30 15:02:00", 0, "no-answer", ""])
+    ws.append(["C-1004", "9810011122", "", "outbound", "2026-09-30 15:10:00", 0, "busy", ""])
+    ws.append(["C-1005", "9990011223", "", "outbound", "2026-09-30 15:18:00", 0, "failed", ""])
+    ws.append(["C-1006", "9718800011", "", "outbound", "2026-09-30 15:25:00", 22, "voicemail", ""])
     for c in ws[1]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E79")
@@ -652,7 +743,7 @@ async def download_template():
         ["direction", "Optional", "inbound or outbound (default outbound)", "outbound"],
         ["name", "Optional", "Customer name if known", "Rahul Sharma"],
         ["duration_seconds", "Optional", "Length of the call in seconds (or mm:ss)", "96"],
-        ["status", "Optional", "completed / no-answer / busy / failed", "completed"],
+        ["status", "Recommended", "completed / no-answer / busy / failed / voicemail / switched-off. This becomes the \"not connected\" reason on the dashboard.", "no-answer"],
         ["summary", "Optional", "AI's own summary of the call, if the export has one", ""],
         ["", "", "", ""],
         ["Note", "", "Extra columns (credits, usage, campaign id, cost...) are ignored automatically. "
@@ -710,11 +801,34 @@ async def import_calls(file: UploadFile = File(...)):
         existing.add(e["call_key"])
 
     ts = now_iso()
-    fresh, seen = [], set()
+    fresh, seen, updated = [], set(), 0
     for d in docs:
-        if d["call_key"] in existing or d["call_key"] in seen:
+        if d["call_key"] in seen:
             continue
         seen.add(d["call_key"])
+        if d["call_key"] in existing:
+            # Re-upload of a call we already have: refresh what the file says
+            # (conversation, status, flags) but never touch remarks, assignment
+            # or a category the team set by hand.
+            old = await db.ai_call_logs.find_one(
+                {"call_key": d["call_key"]},
+                {"category_manual": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1},
+            )
+            upd = {k: d[k] for k in (
+                "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
+                "conversation", "signals", "score", "category_auto")}
+            if not (old or {}).get("category_manual"):
+                upd["category"] = d["category"]
+            if d.get("name"):
+                upd["name"] = d["name"]
+            if not d["summary_auto"] or (old or {}).get("summary_auto", True):
+                upd["summary"] = d["summary"]
+                upd["summary_auto"] = d["summary_auto"]
+            if d.get("remark") and not (old or {}).get("remark"):
+                upd["remark"] = d["remark"]
+            await db.ai_call_logs.update_one({"call_key": d["call_key"]}, {"$set": upd})
+            updated += 1
+            continue
         d["imported_at"] = ts
         fresh.append(d)
     if fresh:
@@ -724,7 +838,8 @@ async def import_calls(file: UploadFile = File(...)):
     await db.ai_call_logs.create_index("started_at")
     return {
         "added": len(fresh),
-        "duplicates": len(docs) - len(fresh),
+        "updated": updated,
+        "duplicates": updated,
         "skipped": skipped,
         "interested_found": sum(1 for d in fresh if d["category"] in INTERESTED_SET),
     }
