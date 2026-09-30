@@ -33,12 +33,12 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from server import db, now_iso, Lead, _log_activity
-from ai_calling import require_vranda_only, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
+from ai_calling import require_ai_logs_access, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
 from ai_call_export import build_csv, build_pdf
 
 logger = logging.getLogger("crm.ai_call_logs")
 
-router = APIRouter(prefix="/api/ai-call-logs", dependencies=[Depends(require_vranda_only)])
+router = APIRouter(prefix="/api/ai-call-logs", dependencies=[Depends(require_ai_logs_access)])
 
 IST = timezone(timedelta(hours=5, minutes=30))  # India has no DST
 
@@ -1147,7 +1147,7 @@ async def _resolve_assignee(user_id: Optional[str]) -> Optional[dict]:
 
 
 @router.post("/bulk-assign")
-async def bulk_assign(payload: BulkAssignIn, user: dict = Depends(require_vranda_only)):
+async def bulk_assign(payload: BulkAssignIn, user: dict = Depends(require_ai_logs_access)):
     assignee = await _resolve_assignee(payload.user_id)
     oids = [ObjectId(i) for i in payload.ids if ObjectId.is_valid(i)][:500]
     logs = await db.ai_call_logs.find({"_id": {"$in": oids}}).to_list(500)
@@ -1157,7 +1157,7 @@ async def bulk_assign(payload: BulkAssignIn, user: dict = Depends(require_vranda
 
 
 @router.post("/{log_id}/assign")
-async def assign_log(log_id: str, payload: AssignIn, user: dict = Depends(require_vranda_only)):
+async def assign_log(log_id: str, payload: AssignIn, user: dict = Depends(require_ai_logs_access)):
     if not ObjectId.is_valid(log_id):
         raise HTTPException(404, "Call not found")
     log = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
