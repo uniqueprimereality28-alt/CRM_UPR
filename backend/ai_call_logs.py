@@ -1,0 +1,847 @@
+"""
+AI Call Logs — a clean, read-friendly log of calls made/received by the AI
+calling agent (Sarvam), imported from the call export file.
+
+WHAT IT DOES
+- Import a CSV / XLSX / JSON export (POST /api/ai-call-logs/import).
+  Only useful fields are stored. Usage, credits, cost, campaign IDs and any
+  other unknown columns are dropped on import and never reach the database.
+- Auto-flags every call: interested / qualified / callback / not interested /
+  no answer, and writes a short summary of each call (if the file has none).
+- Stats + hourly counts for any date/time window.
+- Remarks, manual category override, auto summary.
+- Assign a call's lead ONLY to Vranda or Sandeep (AI_CALLING_USERNAMES).
+
+ACCESS: same rule as the rest of the AI calling module — only the accounts
+in AI_CALLING_USERNAMES (Vranda + Sandeep). Nobody else can read or write.
+
+Nothing in ai_calling.py is changed; this module has its own collection
+(`ai_call_logs`) so imported history never interferes with live AI calls.
+"""
+import csv
+import hashlib
+import io
+import json
+import logging
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Any, List, Optional
+
+from bson import ObjectId
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+from server import db, now_iso, Lead, _log_activity
+from ai_calling import require_vranda_only, AI_CALLING_USERNAMES
+
+logger = logging.getLogger("crm.ai_call_logs")
+
+router = APIRouter(prefix="/api/ai-call-logs", dependencies=[Depends(require_vranda_only)])
+
+IST = timezone(timedelta(hours=5, minutes=30))  # India has no DST
+
+CATEGORIES = ["qualified", "interested", "callback", "not_interested", "no_answer", "other"]
+# Categories that count as "interested people" in the headline number.
+INTERESTED_SET = {"qualified", "interested"}
+
+# Sort order used when "Best leads first" is chosen.
+CATEGORY_RANK = {"qualified": 0, "interested": 1, "callback": 2, "other": 3, "no_answer": 4, "not_interested": 5}
+
+
+# ---------------------------------------------------------------------------
+# Column mapping — the export's headers can vary, so match loosely.
+# Keys are normalised (lowercase, letters/digits only).
+# ---------------------------------------------------------------------------
+def _norm(s: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+ALIASES = {
+    "call_id": ["callid", "id", "calluuid", "uuid", "sessionid", "conversationid", "interactionid"],
+    "phone": ["phone", "phonenumber", "mobile", "mobilenumber", "number", "customernumber", "contactnumber",
+              "userphonenumber", "tonumber", "callee", "customerphone", "leadphone", "contact"],
+    "from_number": ["fromnumber", "caller", "callernumber"],
+    "name": ["name", "customername", "leadname", "contactname", "customer"],
+    "direction": ["direction", "calltype", "type", "callDirection".lower()],
+    "started_at": ["startedat", "starttime", "calltime", "callstarttime", "timestamp", "datetime", "createdat",
+                   "calldate", "date", "time"],
+    "date_only": ["dateonly", "day"],
+    "duration": ["duration", "durationseconds", "callduration", "talktime", "durationsec", "callDurationSeconds".lower()],
+    "status": ["status", "callstatus", "outcome", "result", "callresult"],
+    "disposition": ["disposition", "calldisposition", "intent", "leadstatus", "interest", "interestlevel"],
+    "conversation": ["conversation", "transcript", "messages", "chat", "callTranscript".lower(), "dialogue"],
+    "summary": ["summary", "callsummary", "analysis", "aisummary", "notes"],
+    "remark": ["remark", "remarks", "comment", "comments", "note"],
+}
+
+AGENT_WORDS = {"agent", "assistant", "ai", "bot", "system", "simran", "vrinda", "vranda", "model", "aiagent"}
+CUSTOMER_WORDS = {"user", "customer", "client", "human", "caller", "lead", "person", "visitor", "contact"}
+
+
+def _pick(row: dict, key: str) -> Any:
+    """Return the first non-empty value in `row` matching any alias of `key`."""
+    for alias in ALIASES[key]:
+        v = row.get(alias)
+        if v is not None and str(v).strip() != "" and str(v).strip().lower() != "nan":
+            return v
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Parsers
+# ---------------------------------------------------------------------------
+def _clean_phone(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if re.fullmatch(r"\d+\.0", s):  # Excel float artefact
+        s = s[:-2]
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    if len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    return digits
+
+
+def _parse_duration(v: Any) -> int:
+    if v is None or str(v).strip() == "":
+        return 0
+    if isinstance(v, (int, float)):
+        return max(0, int(v))
+    s = str(v).strip().lower()
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return max(0, int(float(s)))
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", s):
+        parts = [int(p) for p in s.split(":")]
+        return parts[0] * 60 + parts[1] if len(parts) == 2 else parts[0] * 3600 + parts[1] * 60 + parts[2]
+    total = 0
+    for num, unit in re.findall(r"(\d+)\s*(h|m|s)", s):
+        total += int(num) * {"h": 3600, "m": 60, "s": 1}[unit]
+    return total
+
+
+_DT_FORMATS = [
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
+    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y %I:%M %p", "%d/%m/%Y %I:%M:%S %p",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%d %b %Y %H:%M", "%d %b %Y %I:%M %p",
+    "%d-%b-%Y %H:%M", "%d-%b-%Y %I:%M %p", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y",
+]
+
+
+def _parse_datetime(v: Any) -> Optional[datetime]:
+    """Parse to an aware datetime. Times without a timezone are treated as IST."""
+    if v is None or str(v).strip() == "":
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=IST)
+    if isinstance(v, (int, float)):  # unix seconds / millis
+        ts = float(v)
+        if ts > 1e12:
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    s = str(v).strip()
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=IST)
+    except ValueError:
+        pass
+    for fmt in _DT_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
+
+
+def _speaker_role(label: str) -> str:
+    l = re.sub(r"[^a-z]", "", (label or "").lower())
+    if l in CUSTOMER_WORDS or any(l.startswith(w) for w in ("user", "customer", "client", "human")):
+        return "customer"
+    return "agent"
+
+
+def _parse_conversation(v: Any) -> List[dict]:
+    """Accepts a JSON list, a JSON string, or plain 'Agent: ...\\nUser: ...' text.
+    Returns [{speaker: 'agent'|'customer', text: str}]."""
+    if v is None or str(v).strip() == "":
+        return []
+    data = v
+    if isinstance(v, str):
+        s = v.strip()
+        if s[:1] in "[{":
+            try:
+                data = json.loads(s)
+            except ValueError:
+                data = s
+        else:
+            data = s
+    if isinstance(data, dict):
+        data = data.get("messages") or data.get("transcript") or data.get("conversation") or []
+    turns: List[dict] = []
+    if isinstance(data, list):
+        for t in data:
+            if isinstance(t, dict):
+                text = t.get("text") or t.get("content") or t.get("message") or t.get("utterance") or ""
+                spk = t.get("speaker") or t.get("role") or t.get("from") or t.get("sender") or "agent"
+                if str(text).strip():
+                    turns.append({"speaker": _speaker_role(str(spk)), "text": str(text).strip()})
+            elif isinstance(t, str) and t.strip():
+                turns.extend(_parse_conversation(t))
+        return turns
+    # Plain text: lines like "Agent: hello" / "User: haan boliye"
+    current: Optional[dict] = None
+    for line in str(data).replace("\r", "").split("\n"):
+        m = re.match(r"^\s*\[?([A-Za-z][A-Za-z _\-]{0,24})\]?\s*[:\-–]\s*(.*)$", line)
+        if m and (_speaker_role(m.group(1)) == "customer" or _norm(m.group(1)) in AGENT_WORDS
+                  or m.group(1).strip().lower() in ("agent", "assistant", "ai", "bot", "user", "customer")):
+            current = {"speaker": _speaker_role(m.group(1)), "text": m.group(2).strip()}
+            turns.append(current)
+        elif line.strip():
+            if current:
+                current["text"] = (current["text"] + " " + line.strip()).strip()
+            else:
+                current = {"speaker": "agent", "text": line.strip()}
+                turns.append(current)
+    return [t for t in turns if t["text"]]
+
+
+# ---------------------------------------------------------------------------
+# Auto-flagging
+# ---------------------------------------------------------------------------
+def _rx(words: List[str]) -> re.Pattern:
+    return re.compile("|".join(words), re.I)
+
+
+# Signals a real prospect gives (English + Hinglish + a little Devanagari).
+SIG_INTERESTED = _rx([r"\binterested\b", r"\binterest hai\b", r"\bpasand\b", r"\bdetails? (bhej|send|share)",
+                      r"\bsend (me )?(the )?(details|brochure|price)", r"\bbhej do\b", r"\bbata(o|iye)\b.*\b(price|rate)",
+                      "रुचि", "इंटरेस्ट", "डिटेल्स भेज"])
+SIG_VISIT = _rx([r"\bsite ?visit\b", r"\bvisit\b", r"\bcome (and )?see\b", r"\bmilna\b", r"\bdekhne aa",
+                 r"\baa(ta|unga|yenge)\b", "साइट विजिट", "देखने"])
+SIG_BUDGET = _rx([r"\bbudget\b", r"\b\d+(\.\d+)?\s*(lakh|lac|crore|cr|l)\b", r"\b(lakh|crore)\b", "बजट", "लाख", "करोड़"])
+SIG_BHK = _rx([r"\b[1-6]\s?bhk\b", r"\bbedroom\b", r"\bflat\b", r"\bapartment\b", r"\bplot\b", r"\bvilla\b",
+               r"\bshop\b", r"\bfloor\b", r"\bpenthouse\b", "बीएचके"])
+SIG_LOCATION = _rx([r"\bsector\s?\d+", r"\bgurgaon\b", r"\bgurugram\b", r"\bdelhi\b", r"\bnoida\b", r"\bdwarka\b",
+                    r"\bgolf course\b", r"\bsohna\b", r"\bnear\b.*\b(metro|school)\b", "गुड़गांव"])
+SIG_WHATSAPP = _rx([r"\bwhats ?app\b", r"\bbrochure\b", r"\bmessage (me|kar)", "व्हाट्सएप"])
+SIG_CALLBACK = _rx([r"\bcall (me )?(back|later|tomorrow|kal)\b", r"\bcallback\b", r"\bbusy\b", r"\blater\b",
+                    r"\bbaad (me|mein)\b", r"\bkal\b.*\bcall\b", r"\bphir se\b", "बाद में", "कल फोन", "व्यस्त"])
+SIG_YES = _rx([r"\b(haan|han|ha|yes|yeah|sure|ok(ay)?|theek hai|bilkul|zaroor)\b", "हाँ", "हां", "जी हाँ", "ठीक है"])
+SIG_NO = _rx([r"\bnot interested\b", r"\bno interest\b", r"\bnahi chahiye\b", r"\bnahin chahiye\b",
+              r"\bdon'?t (call|want|need)\b", r"\bstop calling\b", r"\bmat kar", r"\bnahi karna\b",
+              r"\binterested nahi\b", r"\bnot looking\b", r"\bnot required\b", r"\bno need\b",
+              "नहीं चाहिए", "रुचि नहीं", "इंटरेस्टेड नहीं", "मत करो"])
+SIG_WRONG = _rx([r"\bwrong number\b", r"\bgalat number\b", r"\bnot me\b", r"\bnot (the )?owner\b", "गलत नंबर"])
+
+NO_ANSWER_STATUS = _rx([r"no.?answer", r"not.?answer", r"unanswered", r"busy", r"failed", r"voice ?mail",
+                        r"not.?connect", r"missed", r"unreachable", r"switched.?off", r"rejected", r"no.?response",
+                        r"cancel", r"timeout", r"time.?out"])
+ANSWERED_STATUS = _rx([r"complete", r"answer", r"connect", r"success", r"picked", r"received", r"done"])
+
+SIGNAL_LABELS = {
+    "interested": "Showed interest", "visit": "Talked about site visit", "budget": "Shared budget",
+    "bhk": "Shared property type / BHK", "location": "Mentioned location", "whatsapp": "Asked for details on WhatsApp",
+    "callback": "Asked to call later", "not_interested": "Said not interested", "wrong_number": "Wrong number",
+    "no_reply": "Customer did not speak", "short_call": "Very short call",
+}
+
+
+def analyse_call(conversation: List[dict], status: str, disposition: str, duration: int,
+                 summary: str = "") -> dict:
+    """Returns {category, answered, signals[], score}. Deterministic, no
+    external calls — cheap enough to run on every imported row."""
+    customer_text = " ".join(t["text"] for t in conversation if t["speaker"] == "customer")
+    all_text = " ".join(t["text"] for t in conversation)
+    customer_words = len(customer_text.split())
+    status_l = (status or "").lower()
+    hint = f"{disposition or ''} {summary or ''}".lower()
+
+    # ---- did the person actually pick up and speak? ----
+    status_says_no = bool(NO_ANSWER_STATUS.search(status_l)) and not ANSWERED_STATUS.search(status_l)
+    spoke = customer_words >= 2
+    if conversation:
+        answered = spoke
+    else:
+        # No transcript: fall back on status / duration.
+        answered = (not status_says_no) and duration >= 20
+
+    signals: List[str] = []
+    if not answered:
+        if conversation and not spoke and duration >= 5 and not status_says_no:
+            signals.append("no_reply")
+        elif duration < 15:
+            signals.append("short_call")
+        return {"category": "no_answer", "answered": False, "signals": signals, "score": -1}
+
+    # Judge on what the *customer* said; agent lines only feed the fallback below
+    # so the AI's own pitch ("would you like a site visit?") doesn't count as interest.
+    txt = customer_text if customer_words else all_text
+    if SIG_WRONG.search(txt) or SIG_WRONG.search(hint):
+        return {"category": "not_interested", "answered": True,
+                "signals": ["wrong_number"], "score": -5}
+
+    score = 0
+    if SIG_INTERESTED.search(txt): signals.append("interested"); score += 2
+    if SIG_VISIT.search(txt): signals.append("visit"); score += 3
+    if SIG_BUDGET.search(txt): signals.append("budget"); score += 2
+    if SIG_BHK.search(txt): signals.append("bhk"); score += 1
+    if SIG_LOCATION.search(txt): signals.append("location"); score += 1
+    if SIG_WHATSAPP.search(txt): signals.append("whatsapp"); score += 2
+    if SIG_CALLBACK.search(txt): signals.append("callback")
+    if score == 0 and len(SIG_YES.findall(txt)) >= 2 and customer_words >= 6:
+        score += 1  # engaged, said yes a few times
+
+    # Hints from the export's own disposition / summary (if present)
+    if re.search(r"\b(not interested|declined|do not call|dnc|wrong number)\b", hint):
+        score -= 3; signals.append("not_interested")
+    elif re.search(r"\b(interested|qualified|hot|warm|site visit|appointment)\b", hint):
+        score += 2
+
+    said_no = bool(SIG_NO.search(txt))
+    if said_no:
+        signals.append("not_interested")
+        if "interested" in signals:  # "interested nahi hai" is not interest
+            signals.remove("interested")
+            score -= 2
+
+    # ---- decide ----
+    strong = {"visit", "budget", "whatsapp"} & set(signals)
+    if said_no and not strong:
+        return {"category": "not_interested", "answered": True,
+                "signals": _dedupe(signals), "score": -3}
+    if "not_interested" in signals and score <= 0:
+        return {"category": "not_interested", "answered": True,
+                "signals": _dedupe(signals), "score": score}
+
+    # qualified = clear intent + at least one concrete requirement or a visit
+    concrete = {"visit", "budget", "bhk", "location"} & set(signals)
+    if score >= 5 or ("visit" in signals) or (score >= 4 and len(concrete) >= 2):
+        cat = "qualified"
+    elif score >= 2:
+        cat = "interested"
+    elif "callback" in signals:
+        cat = "callback"
+    elif customer_words < 8 and duration < 25:
+        cat = "no_answer" if not customer_words else "other"
+        if cat == "no_answer":
+            signals.append("short_call")
+    else:
+        cat = "other"
+    return {"category": cat, "answered": cat != "no_answer",
+            "signals": _dedupe(signals), "score": score}
+
+
+_CAT_LINE = {
+    "qualified": "Qualified lead — clear interest with real requirements.",
+    "interested": "Showed interest.",
+    "callback": "Asked to be called back later.",
+    "not_interested": "Not interested.",
+    "no_answer": "Call was not picked up or the person did not speak.",
+    "other": "Spoke with the agent, no clear interest yet.",
+}
+_RX_BUDGET = re.compile(r"(\d+(?:\.\d+)?)\s*(lakh|lac|crore|cr)\b", re.I)
+_RX_BHK = re.compile(r"\b([1-6])\s?bhk\b", re.I)
+_RX_SECTOR = re.compile(r"\bsector\s?(\d+)", re.I)
+
+
+def auto_summary(conversation: List[dict], category: str, signals: List[str]) -> str:
+    """Short plain-English summary used when the export has no summary of its own."""
+    parts = [_CAT_LINE.get(category, "")]
+    txt = " ".join(t["text"] for t in conversation if t["speaker"] == "customer")
+    facts = []
+    b = _RX_BUDGET.search(txt)
+    if b:
+        facts.append(f"budget {b.group(1)} {b.group(2).lower()}")
+    k = _RX_BHK.search(txt)
+    if k:
+        facts.append(f"{k.group(1)} BHK")
+    sc = _RX_SECTOR.search(txt)
+    if sc:
+        facts.append(f"Sector {sc.group(1)}")
+    if facts:
+        parts.append("Mentioned: " + ", ".join(facts) + ".")
+    if "visit" in signals:
+        parts.append("Open to a site visit.")
+    if "whatsapp" in signals:
+        parts.append("Wants details on WhatsApp.")
+    return " ".join(p for p in parts if p)
+
+
+def _dedupe(seq: List[str]) -> List[str]:
+    out: List[str] = []
+    for s in seq:
+        if s not in out:
+            out.append(s)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# File reading
+# ---------------------------------------------------------------------------
+def _read_rows(filename: str, raw: bytes) -> List[dict]:
+    name = (filename or "").lower()
+    if name.endswith(".json"):
+        data = json.loads(raw.decode("utf-8-sig"))
+        if isinstance(data, dict):
+            data = data.get("calls") or data.get("data") or data.get("items") or data.get("results") or [data]
+        return [{_norm(k): v for k, v in (r or {}).items()} for r in data if isinstance(r, dict)]
+    if name.endswith((".xlsx", ".xlsm")):
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        rows: List[dict] = []
+        for ws in wb.worksheets:
+            it = ws.iter_rows(values_only=True)
+            header = None
+            for r in it:
+                if header is None:
+                    if r and any(c is not None and str(c).strip() for c in r):
+                        header = [_norm(c) for c in r]
+                    continue
+                if r and any(c is not None and str(c).strip() for c in r):
+                    rows.append({header[i]: r[i] for i in range(min(len(header), len(r))) if header[i]})
+            if rows:
+                break  # first sheet that has data
+        return rows
+    # CSV / TSV / txt
+    text = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeError:
+            continue
+    text = text or ""
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    return [{_norm(k): v for k, v in r.items() if k} for r in reader]
+
+
+def _build_doc(row: dict) -> Optional[dict]:
+    phone = _clean_phone(_pick(row, "phone"))
+    direction_raw = str(_pick(row, "direction") or "").lower()
+    if not phone:
+        phone = _clean_phone(_pick(row, "from_number"))
+    if not phone:
+        return None
+
+    started = _parse_datetime(_pick(row, "started_at"))
+    if started is None:
+        return None
+    # Some exports keep date and time in two columns
+    time_only = row.get("timeonly") or row.get("calltimeonly")
+    if time_only and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", str(time_only).strip()):
+        d = _parse_datetime(_pick(row, "date_only"))
+        if d:
+            h, m, *s = [int(x) for x in str(time_only).strip().split(":")]
+            started = d.replace(hour=h, minute=m, second=(s[0] if s else 0))
+
+    conversation = _parse_conversation(_pick(row, "conversation"))
+    duration = _parse_duration(_pick(row, "duration"))
+    status = str(_pick(row, "status") or "").strip()
+    disposition = str(_pick(row, "disposition") or "").strip()
+    summary = str(_pick(row, "summary") or "").strip()
+    remark = str(_pick(row, "remark") or "").strip()
+
+    if "in" in direction_raw and "out" not in direction_raw:
+        direction = "inbound"
+    else:
+        direction = "outbound"
+
+    call_id = str(_pick(row, "call_id") or "").strip()
+    call_key = call_id or hashlib.sha1(f"{phone}|{started.isoformat()}".encode()).hexdigest()[:20]
+
+    result = analyse_call(conversation, status, disposition, duration, summary)
+    summary_is_auto = not summary
+    if summary_is_auto:
+        summary = auto_summary(conversation, result["category"], result["signals"])
+    return {
+        "call_key": call_key,
+        "phone": phone,
+        "name": str(_pick(row, "name") or "").strip(),
+        "direction": direction,
+        "started_at": started.astimezone(timezone.utc).isoformat(),
+        "duration_seconds": duration,
+        "status": status,
+        "answered": result["answered"],
+        "conversation": conversation,
+        "summary": summary,
+        "summary_auto": summary_is_auto,
+        "remark": remark,
+        "category": result["category"],
+        "category_auto": result["category"],
+        "signals": result["signals"],
+        "score": result["score"],
+        "assigned_to": None,
+        "assigned_to_name": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+LIST_FIELDS = {"conversation": 0}  # excluded from list queries for speed
+
+
+def _out(doc: dict, with_conversation: bool = False) -> dict:
+    d = dict(doc)
+    d["id"] = str(d.pop("_id"))
+    turns = d.get("conversation") or []
+    d["turns"] = len(turns)
+    if not with_conversation:
+        d.pop("conversation", None)
+    # first customer line makes a nice preview when there's no summary
+    return d
+
+
+def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
+    q: dict = {}
+    rng: dict = {}
+    if date_from:
+        d = _parse_datetime(date_from)
+        if d:
+            rng["$gte"] = d.astimezone(timezone.utc).isoformat()
+    if date_to:
+        d = _parse_datetime(date_to)
+        if d:
+            rng["$lte"] = d.astimezone(timezone.utc).isoformat()
+    if rng:
+        q["started_at"] = rng
+    return q
+
+
+def _list_query(date_from, date_to, category, assigned, direction, q_text) -> dict:
+    q = _range_query(date_from, date_to)
+    if category and category != "all":
+        if category == "interested_all":
+            q["category"] = {"$in": list(INTERESTED_SET)}
+        else:
+            q["category"] = category
+    if assigned == "unassigned":
+        q["assigned_to"] = None
+    elif assigned and assigned != "all":
+        q["assigned_to"] = assigned
+    if direction in ("inbound", "outbound"):
+        q["direction"] = direction
+    if q_text:
+        rx = {"$regex": re.escape(q_text.strip()), "$options": "i"}
+        q["$or"] = [{"name": rx}, {"phone": rx}, {"summary": rx}, {"remark": rx}]
+    return q
+
+
+async def _assignees() -> List[dict]:
+    users = await db.users.find({"username": {"$in": list(AI_CALLING_USERNAMES)}, "active": {"$ne": False}}).to_list(10)
+    order = {"vranda.aggarwal": 0, "sandeep.chauhan": 1}
+    users.sort(key=lambda u: order.get(u.get("username"), 9))
+    return [{"id": str(u["_id"]), "name": u.get("name") or u.get("username"), "username": u.get("username")}
+            for u in users]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+@router.get("/assignees")
+async def assignees():
+    """Only these two people can ever receive AI-call leads."""
+    return await _assignees()
+
+
+@router.get("/stats")
+async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
+    """Headline numbers + calls-per-hour for the chosen window (all IST)."""
+    q = _range_query(date_from, date_to)
+    docs = await db.ai_call_logs.find(
+        q, {"started_at": 1, "category": 1, "answered": 1, "assigned_to": 1, "direction": 1}
+    ).to_list(50000)
+
+    total = len(docs)
+    answered = sum(1 for d in docs if d.get("answered"))
+    qualified = sum(1 for d in docs if d.get("category") == "qualified")
+    interested = sum(1 for d in docs if d.get("category") in INTERESTED_SET)
+    assigned = sum(1 for d in docs if d.get("assigned_to"))
+    inbound = sum(1 for d in docs if d.get("direction") == "inbound")
+
+    by_hour = [0] * 24
+    for d in docs:
+        try:
+            h = datetime.fromisoformat(d["started_at"]).astimezone(IST).hour
+            by_hour[h] += 1
+        except Exception:
+            continue
+
+    counts_by_cat = {c: 0 for c in CATEGORIES}
+    for d in docs:
+        counts_by_cat[d.get("category") or "other"] = counts_by_cat.get(d.get("category") or "other", 0) + 1
+
+    return {
+        "total": total, "answered": answered, "interested": interested, "qualified": qualified,
+        "assigned": assigned, "inbound": inbound, "outbound": total - inbound,
+        "by_hour": by_hour, "by_category": counts_by_cat,
+    }
+
+
+@router.get("")
+async def list_logs(
+    date_from: Optional[str] = None, date_to: Optional[str] = None,
+    category: Optional[str] = None, assigned: Optional[str] = None,
+    direction: Optional[str] = None,
+    q: Optional[str] = None, sort: str = "newest", page: int = 1, limit: int = 25,
+):
+    query = _list_query(date_from, date_to, category, assigned, direction, q)
+    total = await db.ai_call_logs.count_documents(query)
+    limit = max(1, min(limit, 100))
+    page = max(1, page)
+
+    if sort == "best":
+        # rank by category then score — done in Python because category rank isn't a Mongo field
+        docs = await db.ai_call_logs.find(query, LIST_FIELDS).to_list(20000)
+        docs.sort(key=lambda d: (CATEGORY_RANK.get(d.get("category"), 3), -(d.get("score") or 0),
+                                 -(d.get("duration_seconds") or 0)))
+        docs = docs[(page - 1) * limit: page * limit]
+    else:
+        key, direction_ = {
+            "newest": ("started_at", -1), "oldest": ("started_at", 1),
+            "longest": ("duration_seconds", -1), "shortest": ("duration_seconds", 1),
+            "name": ("name", 1),
+        }.get(sort, ("started_at", -1))
+        docs = await (db.ai_call_logs.find(query, LIST_FIELDS)
+                      .sort(key, direction_).skip((page - 1) * limit).limit(limit).to_list(limit))
+    return {"items": [_out(d) for d in docs], "total": total, "page": page, "pages": max(1, -(-total // limit))}
+
+
+@router.get("/template")
+async def download_template():
+    """A ready-to-fill Excel file showing exactly what an upload should look like."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Calls"
+    headers = ["call_id", "phone", "name", "direction", "start_time", "duration_seconds", "status", "conversation"]
+    ws.append(headers)
+    ws.append(["C-1001", "9876543210", "Rahul Sharma", "outbound", "2026-09-30 14:05:00", 96, "completed",
+               "Agent: Namaste, main Simran bol rahi hoon Unique Prime Reality se.\n"
+               "User: Haan boliye.\n"
+               "Agent: Aap Gurgaon me flat dekh rahe the?\n"
+               "User: Haan, 3 BHK chahiye, budget 1.5 crore hai.\n"
+               "Agent: Kya main WhatsApp par details bhej doon? Site visit bhi kara sakte hain.\n"
+               "User: Ji bhej do, Sunday ko visit kar lenge."])
+    ws.append(["C-1002", "9811122233", "", "inbound", "2026-09-30 14:20:00", 41, "completed",
+               "Agent: Namaste, Unique Prime Reality.\nUser: Mujhe abhi interested nahi hai, mat call karo."])
+    ws.append(["C-1003", "9899900011", "Neha", "outbound", "2026-09-30 15:02:00", 0, "no-answer", ""])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F4E79")
+    widths = [12, 14, 18, 12, 20, 18, 12, 90]
+    for i, w in enumerate(widths):
+        ws.column_dimensions[chr(65 + i)].width = w
+    for row in ws.iter_rows(min_row=2):
+        row[7].alignment = Alignment(wrap_text=True, vertical="top")
+
+    help_ws = wb.create_sheet("How to fill")
+    help_rows = [
+        ["Column", "Required?", "What to put", "Example"],
+        ["phone", "YES", "Customer's phone number (10 digits, +91 / 0 prefix is fine)", "9876543210"],
+        ["start_time", "YES", "When the call started (India time). Date + time.", "2026-09-30 14:05:00"],
+        ["conversation", "Recommended", "The full chat. One line per turn, starting with Agent: or User:", "Agent: Hello...\\nUser: Haan boliye"],
+        ["call_id", "Recommended", "Unique ID of the call. Stops duplicates if you upload the same call twice.", "C-1001"],
+        ["direction", "Optional", "inbound or outbound (default outbound)", "outbound"],
+        ["name", "Optional", "Customer name if known", "Rahul Sharma"],
+        ["duration_seconds", "Optional", "Length of the call in seconds (or mm:ss)", "96"],
+        ["status", "Optional", "completed / no-answer / busy / failed", "completed"],
+        ["summary", "Optional", "AI's own summary of the call, if the export has one", ""],
+        ["", "", "", ""],
+        ["Note", "", "Extra columns (credits, usage, campaign id, cost...) are ignored automatically. "
+                     "CSV, XLSX and JSON files all work.", ""],
+    ]
+    for r in help_rows:
+        help_ws.append(r)
+    for c in help_ws[1]:
+        c.font = Font(bold=True)
+    for col, w in zip("ABCD", (18, 14, 70, 32)):
+        help_ws.column_dimensions[col].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="ai_call_logs_template.xlsx"'},
+    )
+
+
+@router.post("/import")
+async def import_calls(file: UploadFile = File(...)):
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "The file is empty.")
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(400, "File is too large (max 25 MB).")
+    try:
+        rows = _read_rows(file.filename or "", raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("call log import: unreadable file: %s", e)
+        raise HTTPException(400, "Could not read this file. Please upload a .csv, .xlsx or .json export.")
+    if not rows:
+        raise HTTPException(400, "No rows found in the file.")
+
+    docs: List[dict] = []
+    skipped = 0
+    for r in rows:
+        d = _build_doc(r)
+        if d is None:
+            skipped += 1
+        else:
+            docs.append(d)
+    if not docs:
+        raise HTTPException(
+            400,
+            "No usable calls found. Each row needs at least a phone number and a start time. "
+            "Download the template to see the format.",
+        )
+
+    keys = [d["call_key"] for d in docs]
+    existing = set()
+    async for e in db.ai_call_logs.find({"call_key": {"$in": keys}}, {"call_key": 1}):
+        existing.add(e["call_key"])
+
+    ts = now_iso()
+    fresh, seen = [], set()
+    for d in docs:
+        if d["call_key"] in existing or d["call_key"] in seen:
+            continue
+        seen.add(d["call_key"])
+        d["imported_at"] = ts
+        fresh.append(d)
+    if fresh:
+        await db.ai_call_logs.insert_many(fresh)
+
+    await db.ai_call_logs.create_index("call_key", unique=False)
+    await db.ai_call_logs.create_index("started_at")
+    return {
+        "added": len(fresh),
+        "duplicates": len(docs) - len(fresh),
+        "skipped": skipped,
+        "interested_found": sum(1 for d in fresh if d["category"] in INTERESTED_SET),
+    }
+
+
+@router.get("/{log_id}")
+async def get_log(log_id: str):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    d = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+    if not d:
+        raise HTTPException(404, "Call not found")
+    return _out(d, with_conversation=True)
+
+
+class LogPatch(BaseModel):
+    remark: Optional[str] = None
+    category: Optional[str] = None
+
+
+@router.patch("/{log_id}")
+async def patch_log(log_id: str, payload: LogPatch):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    updates: dict = {}
+    if payload.remark is not None:
+        updates["remark"] = payload.remark.strip()[:2000]
+    if payload.category is not None:
+        if payload.category not in CATEGORIES:
+            raise HTTPException(400, "Unknown category")
+        updates["category"] = payload.category
+        updates["category_manual"] = True
+    if not updates:
+        raise HTTPException(400, "Nothing to update")
+    res = await db.ai_call_logs.find_one_and_update(
+        {"_id": ObjectId(log_id)}, {"$set": updates}, return_document=True
+    )
+    if not res:
+        raise HTTPException(404, "Call not found")
+    return _out(res, with_conversation=True)
+
+
+class AssignIn(BaseModel):
+    user_id: Optional[str] = None  # null = unassign
+
+
+class BulkAssignIn(AssignIn):
+    ids: List[str]
+
+
+async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) -> None:
+    """Set the assignee on the call log AND mirror it onto the CRM lead
+    (created if this phone number isn't in the CRM yet)."""
+    upd = {
+        "assigned_to": assignee["id"] if assignee else None,
+        "assigned_to_name": assignee["name"] if assignee else None,
+        "assigned_at": now_iso() if assignee else None,
+    }
+    await db.ai_call_logs.update_one({"_id": log["_id"]}, {"$set": upd})
+    if not assignee:
+        return
+
+    digits = log.get("phone", "")[-10:]
+    lead = await db.leads.find_one({"phone": {"$regex": re.escape(digits) + "$"}}) if digits else None
+    tag = {"qualified": "hot", "interested": "warm"}.get(log.get("category"))
+    if lead:
+        lead_set = {"assigned_to": assignee["id"], "assigned_to_name": assignee["name"],
+                    "assigned_at": now_iso(), "updated_at": now_iso()}
+        if tag and not lead.get("tag"):
+            lead_set["tag"] = tag
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": lead_set})
+        lead_id = str(lead["_id"])
+    else:
+        note = (log.get("summary") or "").strip()
+        new_lead = Lead(
+            name=log.get("name") or f"AI lead {digits[-4:]}", phone=log.get("phone"), source="AI Calling",
+            status="qualified" if log.get("category") == "qualified" else "new", tag=tag,
+            notes=note or None, remark=log.get("remark") or None,
+            assigned_to=assignee["id"], assigned_to_name=assignee["name"], assigned_at=now_iso(),
+            created_at=now_iso(), updated_at=now_iso(),
+        ).to_mongo()
+        res = await db.leads.insert_one(new_lead)
+        lead_id = str(res.inserted_id)
+    await db.ai_call_logs.update_one({"_id": log["_id"]}, {"$set": {"lead_id": lead_id}})
+    try:
+        await _log_activity(lead_id, actor, "assigned",
+                            f"AI call lead assigned to {assignee['name']} by {actor.get('name')}")
+    except Exception:  # noqa: BLE001 — activity log must never block assignment
+        logger.exception("activity log failed")
+
+
+async def _resolve_assignee(user_id: Optional[str]) -> Optional[dict]:
+    if not user_id:
+        return None
+    for a in await _assignees():
+        if a["id"] == user_id:
+            return a
+    raise HTTPException(403, "AI call leads can only be assigned to Vranda or Sandeep.")
+
+
+@router.post("/bulk-assign")
+async def bulk_assign(payload: BulkAssignIn, user: dict = Depends(require_vranda_only)):
+    assignee = await _resolve_assignee(payload.user_id)
+    oids = [ObjectId(i) for i in payload.ids if ObjectId.is_valid(i)][:500]
+    logs = await db.ai_call_logs.find({"_id": {"$in": oids}}).to_list(500)
+    for lg in logs:
+        await _apply_assignment(lg, assignee, user)
+    return {"updated": len(logs), "assigned_to_name": assignee["name"] if assignee else None}
+
+
+@router.post("/{log_id}/assign")
+async def assign_log(log_id: str, payload: AssignIn, user: dict = Depends(require_vranda_only)):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    log = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+    if not log:
+        raise HTTPException(404, "Call not found")
+    assignee = await _resolve_assignee(payload.user_id)
+    await _apply_assignment(log, assignee, user)
+    return _out(await db.ai_call_logs.find_one({"_id": log["_id"]}), with_conversation=True)
