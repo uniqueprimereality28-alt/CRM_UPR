@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, User2, Phone, PhoneIncoming, PhoneOutgoing, PhoneCall, Sparkles, BadgeCheck,
   Upload, FileDown, Search, Loader2, Clock, UserCheck, CheckCircle2, RefreshCw, ArrowUpDown,
-  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet,
+  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet, CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
@@ -47,7 +47,7 @@ const TABS = [
 const TEMPS = ["hot", "warm", "cold", "lost"];
 
 const SORTS = [
-  ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"], ["hottest", "Highest AI score"],
+  ["followup", "Follow-up soonest"], ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"], ["hottest", "Highest AI score"],
   ["longest", "Longest call"], ["shortest", "Shortest call"], ["name", "Name A–Z"],
 ];
 
@@ -56,6 +56,24 @@ const pad = (n) => String(n).padStart(2, "0");
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fmtWhen = (iso) =>
   iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", hour12: true }) : "—";
+// Follow-up helpers
+const fuState = (c) => {
+  if (!c.followup_needed) return null;
+  if (c.followup_done) return "done";
+  if (c.followup_at && new Date(c.followup_at).getTime() < Date.now()) return "overdue";
+  return "pending";
+};
+const FU_CLS = {
+  overdue: "border-rose-200 bg-rose-50 text-rose-700",
+  pending: "border-amber-200 bg-amber-50 text-amber-700",
+  done: "border-emerald-200 bg-emerald-50 text-emerald-700",
+};
+const FU_LABEL = { overdue: "Overdue", pending: "Follow up", done: "Done" };
+const toLocalInput = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
 const hourLabel = (h) => `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "AM" : "PM"}`;
 const initials = (s) => (s || "?").trim().slice(0, 1).toUpperCase();
 const maskPhone = (p) => (p ? `+91 ${p.slice(0, 5)} ${p.slice(5)}` : "");
@@ -95,6 +113,7 @@ export default function AICallLogs() {
   const [conn, setConn] = useState("all");     // all | yes (connected) | no (not connected)
   const [reason, setReason] = useState("");     // not-connected reason
   const [temp, setTemp] = useState("all");       // AI temperature filter
+  const [followup, setFollowup] = useState("all"); // all | pending | overdue | done
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [page, setPage] = useState(1);
@@ -120,6 +139,7 @@ export default function AICallLogs() {
       ...range, sort, page, limit: 25,
       category: tab === "all" ? undefined : tab === "not_interested" ? "not_interested_all" : tab,
       temperature: temp === "all" ? undefined : temp,
+      followup: followup === "all" ? undefined : followup,
       assigned: assigned === "all" ? undefined : assigned,
       direction: direction === "all" ? undefined : direction,
       connected: conn === "all" ? undefined : conn,
@@ -129,11 +149,11 @@ export default function AICallLogs() {
     api.get("/ai-call-logs", { params })
       .then((r) => setList(r.data))
       .catch((e) => { setList({ items: [], total: 0, pages: 1 }); toast.error(apiError(e.response?.data?.detail)); });
-  }, [range, sort, page, tab, temp, assigned, direction, conn, reason, qDebounced]);
+  }, [range, sort, page, tab, temp, followup, assigned, direction, conn, reason, qDebounced]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadList(); }, [loadList]);
-  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, temp, sort, assigned, direction, conn, reason, qDebounced]);
+  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, temp, followup, sort, assigned, direction, conn, reason, qDebounced]);
 
   const refreshAll = () => { loadStats(); loadList(); };
 
@@ -330,6 +350,17 @@ export default function AICallLogs() {
               <ArrowUpDown className="mr-1.5 h-3.5 w-3.5 text-slate-400" /><SelectValue />
             </SelectTrigger>
             <SelectContent>{SORTS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+          </Select>
+          <Select value={followup} onValueChange={setFollowup}>
+            <SelectTrigger className="h-9 w-[150px] text-sm" data-testid="followup-filter">
+              <CalendarClock className="mr-1.5 h-3.5 w-3.5 text-slate-400" /><SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Any follow-up</SelectItem>
+              <SelectItem value="pending">To follow up</SelectItem>
+              <SelectItem value="overdue">Overdue</SelectItem>
+              <SelectItem value="done">Done</SelectItem>
+            </SelectContent>
           </Select>
           <Select value={assigned} onValueChange={setAssigned}>
             <SelectTrigger className="h-9 w-[160px] text-sm" data-testid="assigned-filter"><SelectValue /></SelectTrigger>
@@ -567,6 +598,13 @@ const CallRow = ({ c, checked, onCheck, onOpen }) => {
                 {c.ai_score != null && <span className="opacity-70">· {c.ai_score}</span>}
               </span>
             )}
+            {fuState(c) && (
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0 text-[10px] font-semibold ${FU_CLS[fuState(c)]}`}
+                title={c.followup_reason || "Follow-up"} data-testid={`row-followup-${c.id}`}>
+                <CalendarClock className="h-2.5 w-2.5" />{FU_LABEL[fuState(c)]}
+                {fuState(c) !== "done" && <span className="opacity-80">· {fmtWhen(c.followup_at)}</span>}
+              </span>
+            )}
             {c.assigned_to_name && (
               <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0 text-[10px] font-semibold text-indigo-700">
                 <UserCheck className="h-3 w-3" />{c.assigned_to_name.split(" ")[0]}
@@ -588,6 +626,58 @@ const CallRow = ({ c, checked, onCheck, onOpen }) => {
         </div>
         <span className="hidden shrink-0 text-[11px] text-slate-400 sm:block">{fmtWhen(c.started_at)}</span>
       </button>
+    </div>
+  );
+};
+
+/* ---------- Follow-up card ---------- */
+const FollowupCard = ({ call, onSave }) => {
+  const [when, setWhen] = useState(toLocalInput(call.followup_at));
+  const [note, setNote] = useState(call.followup_note || "");
+  useEffect(() => { setWhen(toLocalInput(call.followup_at)); setNote(call.followup_note || ""); },
+    [call.id, call.followup_at, call.followup_note]);
+  const st = fuState(call);
+  const src = { stated: "Time said on the call", suggested: "Suggested time (none was said)", manual: "Set by your team" }[call.followup_time_source];
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3" data-testid="followup-card">
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <CalendarClock className="h-3 w-3" /> Follow-up
+        </div>
+        {st && <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${FU_CLS[st]}`}>{FU_LABEL[st]}</span>}
+      </div>
+      {call.followup_needed ? (
+        <div className="mb-2 text-sm text-slate-700">
+          <div className="font-medium">{call.followup_reason || "Follow-up needed"}</div>
+          <div className="text-xs text-slate-500">
+            {fmtWhen(call.followup_at)}{call.followup_when_text ? ` · "${call.followup_when_text}"` : ""}{src ? ` · ${src}` : ""}
+          </div>
+        </div>
+      ) : (
+        <div className="mb-2 text-xs text-slate-400">No follow-up needed for this call. You can still set one below.</div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)}
+          className="h-8 w-[210px] text-xs" data-testid="followup-time-input" />
+        <Button size="sm" variant="outline" className="h-8 text-xs" disabled={!when}
+          onClick={() => onSave({ followup_at: new Date(when).toISOString() }, "Follow-up saved")} data-testid="followup-save">
+          Save time
+        </Button>
+        {call.followup_needed && (
+          <>
+            <Button size="sm" variant="outline" className="h-8 text-xs"
+              onClick={() => onSave({ followup_done: !call.followup_done }, call.followup_done ? "Marked pending" : "Marked done")}
+              data-testid="followup-done">
+              {call.followup_done ? "Mark pending" : "Mark done"}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-8 text-xs text-slate-500"
+              onClick={() => onSave({ followup_at: "" }, "Follow-up removed")}>Remove</Button>
+          </>
+        )}
+      </div>
+      <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Follow-up note (optional)"
+        className="mt-2 h-8 text-xs" maxLength={500}
+        onBlur={() => note !== (call.followup_note || "") && onSave({ followup_note: note }, "Note saved")} />
     </div>
   );
 };
@@ -697,6 +787,9 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
                 </div>
               </div>
             )}
+
+            {/* follow-up */}
+            <FollowupCard call={call} onSave={(body, msg) => patch(body, msg)} />
 
             {/* why flagged */}
             {call.signals?.length > 0 && (
