@@ -35,7 +35,11 @@ from server import db, get_current_user, require_admin, now_iso
 logger = logging.getLogger("crm.ai")
 
 
+# Who can RECEIVE AI-call leads (assignment targets) — unchanged.
 AI_CALLING_USERNAMES = {"vranda.aggarwal", "sandeep.chauhan"}
+# Who can SEE / USE the AI Calling tab, AI Call Logs and every /api/ai endpoint.
+# Vranda only — admins (incl. Sandeep) no longer get it.
+AI_ACCESS_USERNAMES = {"vranda.aggarwal"}
 
 
 async def require_vranda_only(user: dict = Depends(get_current_user)) -> dict:
@@ -43,7 +47,7 @@ async def require_vranda_only(user: dict = Depends(get_current_user)) -> dict:
     AI_CALLING_USERNAMES — intentionally not tied to the 'superadmin' role,
     so it stays exclusive to these specific accounts even if other users
     hold that role later."""
-    if user.get("username") not in AI_CALLING_USERNAMES:
+    if user.get("username") not in AI_ACCESS_USERNAMES:
         raise HTTPException(status_code=403, detail="This feature is not available on your account.")
     return user
 
