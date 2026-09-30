@@ -56,12 +56,14 @@ export function AuthProvider({ children }) {
   // The AI Calling tab, AI Call Logs and all AI temperature / score badges are
   // exclusive to Vranda's account (not admins, not even other superadmins).
   const isVranda = user?.username === "vranda.aggarwal";
+  // AI Call Logs is open to Vranda and Sandeep (AI Calling tab stays Vranda-only).
+  const canViewAICallLogs = isVranda || user?.username === "sandeep.chauhan";
 
   return (
     <AuthContext.Provider value={{
       user, loading, login, logout, refresh,
       isAdmin, isTL, isSales, isEmployee, isHR, isManager,
-      canViewAll, canEditAll, mustMarkAttendance, attendanceExempt, isWFH, isVranda,
+      canViewAll, canEditAll, mustMarkAttendance, attendanceExempt, isWFH, isVranda, canViewAICallLogs,
     }}>
       {children}
     </AuthContext.Provider>
