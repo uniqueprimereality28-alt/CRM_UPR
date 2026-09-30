@@ -1,581 +1,962 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Bot, User2, Phone, PhoneIncoming, PhoneOutgoing, PhoneCall, Sparkles, BadgeCheck,
-  Upload, FileDown, Search, Loader2, Clock, UserCheck, CheckCircle2, RefreshCw, ArrowUpDown,
-} from "lucide-react";
-import { toast } from "sonner";
-import { api, apiError, fmtDuration } from "../lib/api";
-import { StatCard } from "../components/StatCard";
-import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Textarea } from "../components/ui/textarea";
-import { Checkbox } from "../components/ui/checkbox";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "../components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
+"""
+AI Call Logs — a clean, read-friendly log of calls made/received by the AI
+calling agent (Sarvam), imported from the call export file.
 
-/* ---------- look & feel per category ---------- */
-const CAT = {
-  qualified:      { label: "Qualified",      cls: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" },
-  interested:     { label: "Interested",     cls: "border-orange-200 bg-orange-50 text-orange-700",   dot: "bg-orange-500" },
-  callback:       { label: "Call back",      cls: "border-sky-200 bg-sky-50 text-sky-700",             dot: "bg-sky-500" },
-  other:          { label: "Talked",         cls: "border-slate-200 bg-slate-50 text-slate-600",       dot: "bg-slate-400" },
-  not_interested: { label: "Not interested", cls: "border-rose-200 bg-rose-50 text-rose-700",          dot: "bg-rose-500" },
-  no_answer:      { label: "No answer",      cls: "border-slate-200 bg-slate-100 text-slate-500",      dot: "bg-slate-300" },
-};
-const catMeta = (c) => CAT[c] || CAT.other;
+WHAT IT DOES
+- Import a CSV / XLSX / JSON export (POST /api/ai-call-logs/import).
+  Only useful fields are stored. Usage, credits, cost, campaign IDs and any
+  other unknown columns are dropped on import and never reach the database.
+- Auto-flags every call: interested / qualified / callback / not interested /
+  no answer, and writes a short summary of each call (if the file has none).
+- Stats + hourly counts for any date/time window.
+- Remarks, manual category override, auto summary.
+- Assign a call's lead ONLY to Vranda or Sandeep (AI_CALLING_USERNAMES).
 
-const SIGNALS = {
-  interested: "Showed interest", visit: "Talked about site visit", budget: "Shared budget",
-  bhk: "Shared property type / BHK", location: "Mentioned location", whatsapp: "Wants details on WhatsApp",
-  callback: "Asked to call later", not_interested: "Said not interested", wrong_number: "Wrong number",
-  no_reply: "Person did not speak", short_call: "Very short call",
-};
+ACCESS: same rule as the rest of the AI calling module — only the accounts
+in AI_CALLING_USERNAMES (Vranda + Sandeep). Nobody else can read or write.
 
-const TABS = [
-  ["all", "All"], ["qualified", "Qualified"], ["interested", "Interested"],
-  ["callback", "Call back"], ["not_interested", "Not interested"], ["no_answer", "No answer"],
-];
+Nothing in ai_calling.py is changed; this module has its own collection
+(`ai_call_logs`) so imported history never interferes with live AI calls.
+"""
+import csv
+import hashlib
+import io
+import json
+import logging
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Any, List, Optional
 
-const SORTS = [
-  ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"],
-  ["longest", "Longest call"], ["shortest", "Shortest call"], ["name", "Name A–Z"],
-];
+from bson import ObjectId
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel
 
-/* ---------- helpers ---------- */
-const pad = (n) => String(n).padStart(2, "0");
-const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const fmtWhen = (iso) =>
-  iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit", hour12: true }) : "—";
-const hourLabel = (h) => `${h % 12 === 0 ? 12 : h % 12} ${h < 12 ? "AM" : "PM"}`;
-const initials = (s) => (s || "?").trim().slice(0, 1).toUpperCase();
-const maskPhone = (p) => (p ? `+91 ${p.slice(0, 5)} ${p.slice(5)}` : "");
+from server import db, now_iso, Lead, _log_activity
+from ai_calling import require_vranda_only, AI_CALLING_USERNAMES
 
-// Turns the filter inputs into the ISO range the API expects (browser = IST).
-function buildRange({ from, to, hour }) {
-  let df = null, dt = null;
-  if (from) {
-    const start = hour === "" ? "00:00" : `${pad(hour)}:00`;
-    df = new Date(`${from}T${start}:00`).toISOString();
-  }
-  const endDay = hour === "" ? (to || from) : from; // an hour only makes sense within one day
-  if (endDay) {
-    const end = hour === "" ? "23:59:59" : `${pad(hour)}:59:59`;
-    dt = new Date(`${endDay}T${end}`).toISOString();
-  }
-  return { date_from: df, date_to: dt };
+logger = logging.getLogger("crm.ai_call_logs")
+
+router = APIRouter(prefix="/api/ai-call-logs", dependencies=[Depends(require_vranda_only)])
+
+IST = timezone(timedelta(hours=5, minutes=30))  # India has no DST
+
+CATEGORIES = ["qualified", "interested", "callback", "not_interested", "no_answer", "other"]
+# Categories that count as "interested people" in the headline number.
+INTERESTED_SET = {"qualified", "interested"}
+
+# Sort order used when "Best leads first" is chosen.
+CATEGORY_RANK = {"qualified": 0, "interested": 1, "callback": 2, "other": 3, "no_answer": 4, "not_interested": 5}
+
+
+# ---------------------------------------------------------------------------
+# Column mapping — the export's headers can vary, so match loosely.
+# Keys are normalised (lowercase, letters/digits only).
+# ---------------------------------------------------------------------------
+def _norm(s: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+ALIASES = {
+    "call_id": ["callid", "id", "calluuid", "uuid", "sessionid", "conversationid", "interactionid"],
+    "phone": ["phone", "phonenumber", "mobile", "mobilenumber", "number", "customernumber", "contactnumber",
+              "userphonenumber", "tonumber", "callee", "customerphone", "leadphone", "contact"],
+    "from_number": ["fromnumber", "caller", "callernumber"],
+    "name": ["name", "customername", "leadname", "contactname", "customer"],
+    "direction": ["direction", "calltype", "type", "callDirection".lower()],
+    "started_at": ["startedat", "starttime", "calltime", "callstarttime", "timestamp", "datetime", "createdat",
+                   "calldate", "date", "time"],
+    "date_only": ["dateonly", "day"],
+    "duration": ["duration", "durationseconds", "callduration", "talktime", "durationsec", "callDurationSeconds".lower()],
+    "status": ["status", "callstatus", "outcome", "result", "callresult"],
+    "disposition": ["disposition", "calldisposition", "intent", "leadstatus", "interest", "interestlevel"],
+    "conversation": ["conversation", "transcript", "messages", "chat", "callTranscript".lower(), "dialogue"],
+    "summary": ["summary", "callsummary", "analysis", "aisummary", "notes"],
+    "remark": ["remark", "remarks", "comment", "comments", "note"],
 }
 
-export default function AICallLogs() {
-  const [assignees, setAssignees] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [list, setList] = useState(null);
-  const [openId, setOpenId] = useState(null);
-  const [selected, setSelected] = useState(new Set());
-  const [importing, setImporting] = useState(false);
-  const fileRef = useRef(null);
+AGENT_WORDS = {"agent", "assistant", "ai", "bot", "system", "simran", "vrinda", "vranda", "model", "aiagent"}
+CUSTOMER_WORDS = {"user", "customer", "client", "human", "caller", "lead", "person", "visitor", "contact"}
 
-  // filters
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [hour, setHour] = useState(""); // "" = whole day
-  const [tab, setTab] = useState("all");
-  const [sort, setSort] = useState("newest");
-  const [assigned, setAssigned] = useState("all");
-  const [direction, setDirection] = useState("all");
-  const [q, setQ] = useState("");
-  const [qDebounced, setQDebounced] = useState("");
-  const [page, setPage] = useState(1);
 
-  useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 350);
-    return () => clearTimeout(t);
-  }, [q]);
+def _pick(row: dict, key: str) -> Any:
+    """Return the first non-empty value in `row` matching any alias of `key`."""
+    for alias in ALIASES[key]:
+        v = row.get(alias)
+        if v is not None and str(v).strip() != "" and str(v).strip().lower() != "nan":
+            return v
+    return None
 
-  const range = useMemo(() => buildRange({ from, to, hour }), [from, to, hour]);
 
-  useEffect(() => {
-    api.get("/ai-call-logs/assignees").then((r) => setAssignees(r.data)).catch(() => {});
-  }, []);
+# ---------------------------------------------------------------------------
+# Parsers
+# ---------------------------------------------------------------------------
+def _clean_phone(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if re.fullmatch(r"\d+\.0", s):  # Excel float artefact
+        s = s[:-2]
+    digits = re.sub(r"\D", "", s)
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    if len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    return digits
 
-  const [hourData, setHourData] = useState(null);
-  const dayRange = useMemo(() => buildRange({ from, to: hour === "" ? to : from, hour: "" }), [from, to, hour]);
-  useEffect(() => {
-    api.get("/ai-call-logs/stats", { params: { ...dayRange } })
-      .then((r) => setHourData(r.data.by_hour)).catch(() => setHourData(Array(24).fill(0)));
-  }, [dayRange, stats?.total]);
 
-  const loadStats = useCallback(() => {
-    api.get("/ai-call-logs/stats", { params: { ...range } })
-      .then((r) => setStats(r.data)).catch(() => setStats({ total: 0, by_hour: Array(24).fill(0), by_category: {} }));
-  }, [range]);
+def _parse_duration(v: Any) -> int:
+    if v is None or str(v).strip() == "":
+        return 0
+    if isinstance(v, (int, float)):
+        return max(0, int(v))
+    s = str(v).strip().lower()
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return max(0, int(float(s)))
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", s):
+        parts = [int(p) for p in s.split(":")]
+        return parts[0] * 60 + parts[1] if len(parts) == 2 else parts[0] * 3600 + parts[1] * 60 + parts[2]
+    total = 0
+    for num, unit in re.findall(r"(\d+)\s*(h|m|s)", s):
+        total += int(num) * {"h": 3600, "m": 60, "s": 1}[unit]
+    return total
 
-  const loadList = useCallback(() => {
-    const params = {
-      ...range, sort, page, limit: 25,
-      category: tab === "all" ? undefined : tab,
-      assigned: assigned === "all" ? undefined : assigned,
-      direction: direction === "all" ? undefined : direction,
-      q: qDebounced || undefined,
-    };
-    api.get("/ai-call-logs", { params })
-      .then((r) => setList(r.data))
-      .catch((e) => { setList({ items: [], total: 0, pages: 1 }); toast.error(apiError(e.response?.data?.detail)); });
-  }, [range, sort, page, tab, assigned, direction, qDebounced]);
 
-  useEffect(() => { loadStats(); }, [loadStats]);
-  useEffect(() => { loadList(); }, [loadList]);
-  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, sort, assigned, direction, qDebounced]);
+_DT_FORMATS = [
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
+    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y %I:%M %p", "%d/%m/%Y %I:%M:%S %p",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%d %b %Y %H:%M", "%d %b %Y %I:%M %p",
+    "%d-%b-%Y %H:%M", "%d-%b-%Y %I:%M %p", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y",
+]
 
-  const refreshAll = () => { loadStats(); loadList(); };
 
-  /* ----- import & template ----- */
-  const onFile = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setImporting(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const { data } = await api.post("/ai-call-logs/import", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      toast.success(
-        `${data.added} calls added` +
-        (data.duplicates ? ` · ${data.duplicates} already there` : "") +
-        (data.skipped ? ` · ${data.skipped} rows skipped` : "")
-      );
-      refreshAll();
-    } catch (err) {
-      toast.error(apiError(err.response?.data?.detail));
-    } finally {
-      setImporting(false);
-    }
-  };
+def _parse_datetime(v: Any) -> Optional[datetime]:
+    """Parse to an aware datetime. Times without a timezone are treated as IST."""
+    if v is None or str(v).strip() == "":
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=IST)
+    if isinstance(v, (int, float)):  # unix seconds / millis
+        ts = float(v)
+        if ts > 1e12:
+            ts /= 1000.0
+        return datetime.fromtimestamp(ts, tz=timezone.utc)
+    s = str(v).strip()
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=IST)
+    except ValueError:
+        pass
+    for fmt in _DT_FORMATS:
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
 
-  const downloadTemplate = async () => {
-    try {
-      const res = await api.get("/ai-call-logs/template", { responseType: "blob" });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement("a");
-      a.href = url; a.download = "ai_call_logs_template.xlsx";
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      toast.error("Could not download the template.");
-    }
-  };
 
-  /* ----- quick date chips ----- */
-  const setQuick = (kind) => {
-    const today = new Date();
-    setHour("");
-    if (kind === "all") { setFrom(""); setTo(""); }
-    if (kind === "today") { setFrom(ymd(today)); setTo(ymd(today)); }
-    if (kind === "yesterday") { const y = new Date(today); y.setDate(y.getDate() - 1); setFrom(ymd(y)); setTo(ymd(y)); }
-    if (kind === "7d") { const s = new Date(today); s.setDate(s.getDate() - 6); setFrom(ymd(s)); setTo(ymd(today)); }
-  };
+def _speaker_role(label: str) -> str:
+    l = re.sub(r"[^a-z]", "", (label or "").lower())
+    if l in CUSTOMER_WORDS or any(l.startswith(w) for w in ("user", "customer", "client", "human")):
+        return "customer"
+    return "agent"
 
-  /* ----- selection & bulk assign ----- */
-  const toggle = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allOnPage = list?.items?.length > 0 && list.items.every((i) => selected.has(i.id));
-  const toggleAll = () => setSelected(allOnPage ? new Set() : new Set(list.items.map((i) => i.id)));
 
-  const bulkAssign = async (userId) => {
-    try {
-      const { data } = await api.post("/ai-call-logs/bulk-assign", { ids: [...selected], user_id: userId === "none" ? null : userId });
-      toast.success(data.assigned_to_name ? `${data.updated} leads assigned to ${data.assigned_to_name}` : `${data.updated} leads unassigned`);
-      setSelected(new Set());
-      refreshAll();
-    } catch (err) {
-      toast.error(apiError(err.response?.data?.detail));
-    }
-  };
+_TURN_RX = re.compile(
+    r"(?:(?<=\s)|^)(?:\[?(?P<ts>\d{1,2}:\d{2}(?::\d{2})?)\]?\s*[-–]?\s*)?"
+    r"\[?(?P<lab>agent|assistant|ai|bot|simran|vrinda|vranda|model|user|customer|client|human|caller|lead)\]?\s*[:：]\s*",
+    re.I | re.M,
+)
 
-  const byCat = stats?.by_category || {};
-  const tabCount = (key) => {
-    if (!stats) return null;
-    if (key === "all") return stats.total;
-    return byCat[key] ?? 0;
-  };
 
-  return (
-    <div className="space-y-6" data-testid="ai-call-logs-page">
-      {/* header */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-brand">
-            <Bot className="h-4 w-4" /> AI Agent
-          </div>
-          <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Call Logs</h1>
-          <p className="mt-1 text-sm text-slate-500">Every call the AI agent made or received — who was interested, and what was said.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate} data-testid="download-template-btn">
-            <FileDown className="h-3.5 w-3.5" /> Sample file
-          </Button>
-          <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={importing}
-            onClick={() => fileRef.current?.click()} data-testid="import-calls-btn">
-            {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload calls
-          </Button>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm,.json" className="hidden" onChange={onFile} />
-        </div>
-      </div>
+def _turn_time(t: dict) -> str:
+    v = t.get("timestamp") or t.get("time") or t.get("start") or t.get("start_time") or ""
+    return str(v).strip()[:12] if v not in (None, "") else ""
 
-      {/* when */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">When</span>
-          {[["all", "All time"], ["today", "Today"], ["yesterday", "Yesterday"], ["7d", "Last 7 days"]].map(([k, l]) => (
-            <button key={k} type="button" onClick={() => setQuick(k)} data-testid={`quick-${k}`}
-              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:border-brand hover:text-brand">
-              {l}
-            </button>
-          ))}
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Input type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (!to || e.target.value > to) setTo(e.target.value); }}
-              className="h-8 w-[140px] text-xs" data-testid="date-from" />
-            <span className="text-xs text-slate-400">to</span>
-            <Input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)}
-              className="h-8 w-[140px] text-xs" data-testid="date-to" />
-            <Select value={hour === "" ? "any" : String(hour)} onValueChange={(v) => setHour(v === "any" ? "" : Number(v))}>
-              <SelectTrigger className="h-8 w-[130px] text-xs" data-testid="hour-select"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">Whole day</SelectItem>
-                {Array.from({ length: 24 }, (_, h) => <SelectItem key={h} value={String(h)}>{hourLabel(h)} hour</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
 
-      {/* numbers */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Calls made" value={stats ? stats.total : "…"} sub={stats ? `${stats.outbound} out · ${stats.inbound} in` : ""} icon={PhoneCall} accent="brand" testId="stat-calls" />
-        <StatCard label="Picked up" value={stats ? stats.answered : "…"} sub={stats && stats.total ? `${Math.round((stats.answered / stats.total) * 100)}% of calls` : ""} icon={Phone} accent="slate" testId="stat-answered" />
-        <StatCard label="Interested" value={stats ? stats.interested : "…"} sub="flagged automatically" icon={Sparkles} accent="amber" testId="stat-interested" />
-        <StatCard label="Qualified leads" value={stats ? stats.qualified : "…"} sub={stats ? `${stats.assigned} assigned` : ""} icon={BadgeCheck} accent="emerald" testId="stat-qualified" />
-      </div>
+def _parse_conversation(v: Any) -> List[dict]:
+    """Accepts a JSON list, a JSON string, or text like 'Agent: ... User: ...'
+    (one turn per line OR everything on one line). Returns
+    [{speaker: 'agent'|'customer'|'unknown', text: str, time?: str}].
+    'unknown' is used only when the text has no speaker labels at all."""
+    if v is None or str(v).strip() == "":
+        return []
+    data = v
+    if isinstance(v, str):
+        s = v.strip()
+        if s[:1] in "[{":
+            try:
+                data = json.loads(s)
+            except ValueError:
+                data = s
+        else:
+            data = s
+    if isinstance(data, dict):
+        data = data.get("messages") or data.get("transcript") or data.get("conversation") or []
+    turns: List[dict] = []
+    if isinstance(data, list):
+        for t in data:
+            if isinstance(t, dict):
+                text = t.get("text") or t.get("content") or t.get("message") or t.get("utterance") or t.get("transcript") or ""
+                spk = t.get("speaker") or t.get("role") or t.get("from") or t.get("sender") or t.get("participant") or "agent"
+                if str(text).strip():
+                    turn = {"speaker": _speaker_role(str(spk)), "text": str(text).strip()}
+                    tm = _turn_time(t)
+                    if tm:
+                        turn["time"] = tm
+                    turns.append(turn)
+            elif isinstance(t, str) and t.strip():
+                turns.extend(_parse_conversation(t))
+        return turns
 
-      {/* hourly chart */}
-      <HourChart data={hourData} activeHour={hour} onPick={(h) => {
-        if (!from) { const t = ymd(new Date()); setFrom(t); setTo(t); }
-        setHour(hour === h ? "" : h);
-      }} />
+    text = str(data).replace("\r", "")
+    marks = list(_TURN_RX.finditer(text))
+    if not marks:
+        # No speaker labels anywhere — keep every line, but don't guess who spoke.
+        return [{"speaker": "unknown", "text": ln.strip()} for ln in text.split("\n") if ln.strip()]
+    lead_in = text[: marks[0].start()].strip()
+    if lead_in:
+        turns.append({"speaker": "unknown", "text": " ".join(lead_in.split())})
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        body = " ".join(text[m.end(): end].split())
+        if body:
+            turn = {"speaker": _speaker_role(m.group("lab")), "text": body}
+            if m.group("ts"):
+                turn["time"] = m.group("ts")
+            turns.append(turn)
+    return turns
 
-      {/* tabs + tools */}
-      <div className="space-y-3">
-        <div className="flex flex-wrap gap-1.5" data-testid="category-tabs">
-          {TABS.map(([key, label]) => {
-            const active = tab === key;
-            const n = tabCount(key);
-            return (
-              <button key={key} type="button" onClick={() => setTab(key)} data-testid={`tab-${key}`}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors ${
-                  active ? "border-brand bg-brand text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-brand/40"}`}>
-                {label}
-                {n !== null && <span className={`rounded-full px-1.5 text-[11px] ${active ? "bg-white/20" : "bg-slate-100 text-slate-500"}`}>{n}</span>}
-              </button>
-            );
-          })}
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[200px] flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, number or remark"
-              className="h-9 pl-8 text-sm" data-testid="search-input" />
-          </div>
-          <Select value={sort} onValueChange={setSort}>
-            <SelectTrigger className="h-9 w-[170px] text-sm" data-testid="sort-select">
-              <ArrowUpDown className="mr-1.5 h-3.5 w-3.5 text-slate-400" /><SelectValue />
-            </SelectTrigger>
-            <SelectContent>{SORTS.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={assigned} onValueChange={setAssigned}>
-            <SelectTrigger className="h-9 w-[160px] text-sm" data-testid="assigned-filter"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Anyone</SelectItem>
-              <SelectItem value="unassigned">Not assigned</SelectItem>
-              {assignees.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={direction} onValueChange={setDirection}>
-            <SelectTrigger className="h-9 w-[130px] text-sm" data-testid="direction-filter"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">In + Out</SelectItem>
-              <SelectItem value="outbound">Outgoing</SelectItem>
-              <SelectItem value="inbound">Incoming</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={refreshAll} title="Refresh"><RefreshCw className="h-4 w-4" /></Button>
-        </div>
-      </div>
+# ---------------------------------------------------------------------------
+# Auto-flagging
+# ---------------------------------------------------------------------------
+def _rx(words: List[str]) -> re.Pattern:
+    return re.compile("|".join(words), re.I)
 
-      {/* bulk bar */}
-      {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/30 bg-brand-light px-4 py-2.5" data-testid="bulk-bar">
-          <span className="text-sm font-semibold text-brand">{selected.size} selected</span>
-          <Select onValueChange={bulkAssign}>
-            <SelectTrigger className="h-8 w-[190px] bg-white text-sm" data-testid="bulk-assign-select"><SelectValue placeholder="Assign to…" /></SelectTrigger>
-            <SelectContent>
-              {assignees.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-              <SelectItem value="none">Remove assignment</SelectItem>
-            </SelectContent>
-          </Select>
-          <button type="button" className="ml-auto text-xs text-slate-500 hover:text-slate-800" onClick={() => setSelected(new Set())}>Clear</button>
-        </div>
-      )}
 
-      {/* list */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        {list === null ? (
-          <div className="grid h-40 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>
-        ) : list.items.length === 0 ? (
-          <div className="p-10 text-center">
-            <PhoneCall className="mx-auto h-8 w-8 text-slate-300" />
-            <p className="mt-3 text-sm text-slate-500">
-              {stats?.total === 0 && !from && !q ? "No calls yet — click “Upload calls” to add your call file." : "No calls match these filters."}
-            </p>
-          </div>
-        ) : (
-          <>
-            <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-4 py-2">
-              <Checkbox checked={allOnPage} onCheckedChange={toggleAll} aria-label="Select all" />
-              <span className="text-xs text-slate-500">{list.total} calls</span>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {list.items.map((c) => (
-                <CallRow key={c.id} c={c} checked={selected.has(c.id)} onCheck={() => toggle(c.id)} onOpen={() => setOpenId(c.id)} />
-              ))}
-            </div>
-            {list.pages > 1 && (
-              <div className="flex items-center justify-center gap-3 border-t border-slate-100 py-3">
-                <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
-                <span className="text-xs text-slate-500">Page {page} of {list.pages}</span>
-                <Button size="sm" variant="outline" disabled={page >= list.pages} onClick={() => setPage((p) => p + 1)}>Next</Button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+# Signals a real prospect gives (English + Hinglish + a little Devanagari).
+SIG_INTERESTED = _rx([r"\binterested\b", r"\binterest hai\b", r"\bpasand\b", r"\bdetails? (bhej|send|share)",
+                      r"\bsend (me )?(the )?(details|brochure|price)", r"\bbhej do\b", r"\bbata(o|iye)\b.*\b(price|rate)",
+                      "रुचि", "इंटरेस्ट", "डिटेल्स भेज"])
+SIG_VISIT = _rx([r"\bsite ?visit\b", r"\bvisit\b", r"\bcome (and )?see\b", r"\bmilna\b", r"\bdekhne aa",
+                 r"\baa(ta|unga|yenge)\b", "साइट विजिट", "देखने"])
+SIG_BUDGET = _rx([r"\bbudget\b", r"\b\d+(\.\d+)?\s*(lakh|lac|crore|cr|l)\b", r"\b(lakh|crore)\b", "बजट", "लाख", "करोड़"])
+SIG_BHK = _rx([r"\b[1-6]\s?bhk\b", r"\bbedroom\b", r"\bflat\b", r"\bapartment\b", r"\bplot\b", r"\bvilla\b",
+               r"\bshop\b", r"\bfloor\b", r"\bpenthouse\b", "बीएचके"])
+SIG_LOCATION = _rx([r"\bsector\s?\d+", r"\bgurgaon\b", r"\bgurugram\b", r"\bdelhi\b", r"\bnoida\b", r"\bdwarka\b",
+                    r"\bgolf course\b", r"\bsohna\b", r"\bnear\b.*\b(metro|school)\b", "गुड़गांव"])
+SIG_WHATSAPP = _rx([r"\bwhats ?app\b", r"\bbrochure\b", r"\bmessage (me|kar)", "व्हाट्सएप"])
+SIG_CALLBACK = _rx([r"\bcall (me )?(back|later|tomorrow|kal)\b", r"\bcallback\b", r"\bbusy\b", r"\blater\b",
+                    r"\bbaad (me|mein)\b", r"\bkal\b.*\bcall\b", r"\bphir se\b", "बाद में", "कल फोन", "व्यस्त"])
+SIG_YES = _rx([r"\b(haan|han|ha|yes|yeah|sure|ok(ay)?|theek hai|bilkul|zaroor)\b", "हाँ", "हां", "जी हाँ", "ठीक है"])
+SIG_NO = _rx([r"\bnot interested\b", r"\bno interest\b", r"\bnahi chahiye\b", r"\bnahin chahiye\b",
+              r"\bdon'?t (call|want|need)\b", r"\bstop calling\b", r"\bmat kar", r"\bnahi karna\b",
+              r"\binterested nahi\b", r"\bnot looking\b", r"\bnot required\b", r"\bno need\b",
+              "नहीं चाहिए", "रुचि नहीं", "इंटरेस्टेड नहीं", "मत करो"])
+SIG_WRONG = _rx([r"\bwrong number\b", r"\bgalat number\b", r"\bnot me\b", r"\bnot (the )?owner\b", "गलत नंबर"])
 
-      <CallSheet id={openId} assignees={assignees} onClose={() => setOpenId(null)} onChanged={refreshAll} />
-    </div>
-  );
+NO_ANSWER_STATUS = _rx([r"no.?answer", r"not.?answer", r"unanswered", r"busy", r"failed", r"voice ?mail",
+                        r"not.?connect", r"missed", r"unreachable", r"switched.?off", r"rejected", r"no.?response",
+                        r"cancel", r"timeout", r"time.?out"])
+ANSWERED_STATUS = _rx([r"complete", r"answer", r"connect", r"success", r"picked", r"received", r"done"])
+
+SIGNAL_LABELS = {
+    "interested": "Showed interest", "visit": "Talked about site visit", "budget": "Shared budget",
+    "bhk": "Shared property type / BHK", "location": "Mentioned location", "whatsapp": "Asked for details on WhatsApp",
+    "callback": "Asked to call later", "not_interested": "Said not interested", "wrong_number": "Wrong number",
+    "no_reply": "Customer did not speak", "short_call": "Very short call",
 }
 
-/* ---------- Calls per hour ---------- */
-const HourChart = ({ data: raw, activeHour, onPick }) => {
-  const data = raw || Array(24).fill(0);
-  const max = Math.max(1, ...data);
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid="hour-chart">
-      <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold text-slate-900">Calls by hour</h3>
-        <span className="text-xs text-slate-400">Tap a bar to see only that hour</span>
-      </div>
-      <div className="mt-4 flex h-28 items-end gap-1">
-        {data.map((n, h) => {
-          const active = activeHour === h;
-          return (
-            <button key={h} type="button" onClick={() => onPick(h)} title={`${hourLabel(h)} — ${n} call${n === 1 ? "" : "s"}`}
-              data-testid={`hour-bar-${h}`} className="group flex h-full flex-1 flex-col items-center justify-end gap-1">
-              <span className={`text-[10px] font-semibold ${n ? "text-slate-600" : "text-transparent"}`}>{n || 0}</span>
-              <div className={`w-full rounded-t-md transition-all ${active ? "bg-brand" : n ? "bg-brand/40 group-hover:bg-brand/70" : "bg-slate-100"}`}
-                style={{ height: `${Math.max(4, (n / max) * 100)}%`, maxHeight: "72%" }} />
-            </button>
-          );
-        })}
-      </div>
-      <div className="mt-1.5 flex justify-between text-[10px] text-slate-400">
-        <span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span>
-      </div>
-    </div>
-  );
-};
 
-/* ---------- One row ---------- */
-const CallRow = ({ c, checked, onCheck, onOpen }) => {
-  const meta = catMeta(c.category);
-  return (
-    <div className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50/70" data-testid={`log-row-${c.id}`}>
-      <Checkbox checked={checked} onCheckedChange={onCheck} aria-label="Select call" />
-      <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand-light text-sm font-bold text-brand">
-          {initials(c.name || c.phone)}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-semibold text-slate-800">{c.name || maskPhone(c.phone)}</span>
-            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0 text-[10px] font-semibold ${meta.cls}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}
-            </span>
-            {c.assigned_to_name && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0 text-[10px] font-semibold text-indigo-700">
-                <UserCheck className="h-3 w-3" />{c.assigned_to_name.split(" ")[0]}
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-slate-500">
-            {c.name && <span>{maskPhone(c.phone)}</span>}
-            <span className="inline-flex items-center gap-1">
-              {c.direction === "inbound" ? <PhoneIncoming className="h-3 w-3" /> : <PhoneOutgoing className="h-3 w-3" />}
-              {c.direction === "inbound" ? "Incoming" : "Outgoing"}
-            </span>
-            <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" />{fmtDuration(c.duration_seconds)}</span>
-          </div>
-          {(c.remark || c.summary) && <div className="mt-0.5 line-clamp-1 text-xs text-slate-400">{c.remark || c.summary}</div>}
-        </div>
-        <span className="hidden shrink-0 text-[11px] text-slate-400 sm:block">{fmtWhen(c.started_at)}</span>
-      </button>
-    </div>
-  );
-};
+def analyse_call(conversation: List[dict], status: str, disposition: str, duration: int,
+                 summary: str = "") -> dict:
+    """Returns {category, answered, signals[], score}. Deterministic, no
+    external calls — cheap enough to run on every imported row."""
+    customer_text = " ".join(t["text"] for t in conversation if t["speaker"] == "customer")
+    all_text = " ".join(t["text"] for t in conversation)
+    customer_words = len(customer_text.split())
+    status_l = (status or "").lower()
+    hint = f"{disposition or ''} {summary or ''}".lower()
 
-/* ---------- Conversation panel ---------- */
-const CallSheet = ({ id, assignees, onClose, onChanged }) => {
-  const [call, setCall] = useState(null);
-  const [remark, setRemark] = useState("");
-  const [saving, setSaving] = useState(false);
-  const endRef = useRef(null);
+    # ---- did the person actually pick up and speak? ----
+    status_says_no = bool(NO_ANSWER_STATUS.search(status_l)) and not ANSWERED_STATUS.search(status_l)
+    spoke = customer_words >= 2
+    unlabeled = bool(conversation) and all(t["speaker"] == "unknown" for t in conversation)
+    if unlabeled:
+        # Transcript has no speaker labels: judge by status/length instead of who spoke.
+        answered = (not status_says_no) and (duration >= 15 or len(all_text.split()) >= 8)
+        spoke = answered
+    elif conversation:
+        answered = spoke
+    else:
+        # No transcript: fall back on status / duration.
+        answered = (not status_says_no) and duration >= 20
 
-  useEffect(() => {
-    if (!id) { setCall(null); return; }
-    setCall(null);
-    api.get(`/ai-call-logs/${id}`)
-      .then((r) => { setCall(r.data); setRemark(r.data.remark || ""); })
-      .catch((e) => { toast.error(apiError(e.response?.data?.detail)); onClose(); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    signals: List[str] = []
+    if not answered:
+        if conversation and not spoke and duration >= 5 and not status_says_no:
+            signals.append("no_reply")
+        elif duration < 15:
+            signals.append("short_call")
+        return {"category": "no_answer", "answered": False, "signals": signals, "score": -1}
 
-  const apply = (data) => { setCall(data); setRemark(data.remark || ""); onChanged(); };
+    # Judge on what the *customer* said; agent lines only feed the fallback below
+    # so the AI's own pitch ("would you like a site visit?") doesn't count as interest.
+    txt = customer_text if customer_words else all_text
+    if SIG_WRONG.search(txt) or SIG_WRONG.search(hint):
+        return {"category": "not_interested", "answered": True,
+                "signals": ["wrong_number"], "score": -5}
 
-  const patch = async (body, okMsg) => {
-    setSaving(true);
-    try { const { data } = await api.patch(`/ai-call-logs/${id}`, body); apply(data); if (okMsg) toast.success(okMsg); }
-    catch (e) { toast.error(apiError(e.response?.data?.detail)); }
-    finally { setSaving(false); }
-  };
+    score = 0
+    if SIG_INTERESTED.search(txt): signals.append("interested"); score += 2
+    if SIG_VISIT.search(txt): signals.append("visit"); score += 3
+    if SIG_BUDGET.search(txt): signals.append("budget"); score += 2
+    if SIG_BHK.search(txt): signals.append("bhk"); score += 1
+    if SIG_LOCATION.search(txt): signals.append("location"); score += 1
+    if SIG_WHATSAPP.search(txt): signals.append("whatsapp"); score += 2
+    if SIG_CALLBACK.search(txt): signals.append("callback")
+    if score == 0 and len(SIG_YES.findall(txt)) >= 2 and customer_words >= 6:
+        score += 1  # engaged, said yes a few times
 
-  const assign = async (userId) => {
-    try {
-      const { data } = await api.post(`/ai-call-logs/${id}/assign`, { user_id: userId === "none" ? null : userId });
-      apply(data);
-      toast.success(data.assigned_to_name ? `Assigned to ${data.assigned_to_name}` : "Assignment removed");
-    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
-  };
+    # Hints from the export's own disposition / summary (if present)
+    if re.search(r"\b(not interested|declined|do not call|dnc|wrong number)\b", hint):
+        score -= 3; signals.append("not_interested")
+    elif re.search(r"\b(interested|qualified|hot|warm|site visit|appointment)\b", hint):
+        score += 2
 
-  const meta = call ? catMeta(call.category) : null;
+    said_no = bool(SIG_NO.search(txt))
+    if said_no:
+        signals.append("not_interested")
+        if "interested" in signals:  # "interested nahi hai" is not interest
+            signals.remove("interested")
+            score -= 2
 
-  return (
-    <Sheet open={!!id} onOpenChange={(v) => !v && onClose()}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-lg" data-testid="call-sheet">
-        <SheetHeader className="border-b border-slate-100 px-5 py-4">
-          <SheetTitle className="flex items-center gap-2 text-base">
-            <PhoneCall className="h-4 w-4 text-brand" />
-            {call ? (call.name || maskPhone(call.phone)) : "Loading…"}
-          </SheetTitle>
-          {call && (
-            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-slate-500">
-              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${meta.cls}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}
-              </span>
-              <span>{maskPhone(call.phone)}</span><span>·</span>
-              <span>{fmtWhen(call.started_at)}</span><span>·</span>
-              <span>{fmtDuration(call.duration_seconds)}</span>
-            </div>
-          )}
-        </SheetHeader>
+    # ---- decide ----
+    strong = {"visit", "budget", "whatsapp"} & set(signals)
+    if said_no and not strong:
+        return {"category": "not_interested", "answered": True,
+                "signals": _dedupe(signals), "score": -3}
+    if "not_interested" in signals and score <= 0:
+        return {"category": "not_interested", "answered": True,
+                "signals": _dedupe(signals), "score": score}
 
-        {!call ? (
-          <div className="grid flex-1 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand" /></div>
-        ) : (
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-            <div className="rounded-xl border border-brand/15 bg-brand-light/50 p-3 text-sm text-slate-700" data-testid="call-summary">
-              <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-brand">
-                <Sparkles className="h-3 w-3" /> Summary
-              </div>
-              {call.summary || "No summary available for this call."}
-            </div>
+    # qualified = clear intent + at least one concrete requirement or a visit
+    concrete = {"visit", "budget", "bhk", "location"} & set(signals)
+    if score >= 5 or ("visit" in signals) or (score >= 4 and len(concrete) >= 2):
+        cat = "qualified"
+    elif score >= 2:
+        cat = "interested"
+    elif "callback" in signals:
+        cat = "callback"
+    elif customer_words < 8 and duration < 25:
+        cat = "no_answer" if not customer_words else "other"
+        if cat == "no_answer":
+            signals.append("short_call")
+    else:
+        cat = "other"
+    return {"category": cat, "answered": cat != "no_answer",
+            "signals": _dedupe(signals), "score": score}
 
-            {/* why flagged */}
-            {call.signals?.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {call.signals.map((s) => (
-                  <span key={s} className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500" />{SIGNALS[s] || s}
-                  </span>
-                ))}
-              </div>
-            )}
 
-            {/* conversation */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <div className="mb-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Conversation</div>
-              {call.conversation?.length ? (
-                <div className="space-y-2.5">
-                  {call.conversation.map((t, i) => {
-                    const isAgent = t.speaker === "agent";
-                    return (
-                      <div key={i} className={`flex gap-2 ${isAgent ? "" : "flex-row-reverse"}`}>
-                        <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${isAgent ? "bg-brand-light text-brand" : "bg-emerald-50 text-emerald-600"}`}>
-                          {isAgent ? <Bot className="h-3.5 w-3.5" /> : <User2 className="h-3.5 w-3.5" />}
-                        </div>
-                        <div className="max-w-[80%]">
-                          <div className={`mb-0.5 text-[10px] font-medium text-slate-400 ${isAgent ? "" : "text-right"}`}>{isAgent ? "AI agent" : (call.name || "Customer")}</div>
-                          <div className={`rounded-2xl px-3 py-2 text-sm leading-snug ${isAgent ? "rounded-tl-sm bg-brand-light text-slate-800" : "rounded-tr-sm bg-emerald-50 text-slate-800"}`}>
-                            {t.text}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div ref={endRef} />
-                </div>
-              ) : (
-                <p className="py-4 text-center text-sm text-slate-400">No conversation was recorded for this call.</p>
-              )}
-            </div>
+_CAT_LINE = {
+    "qualified": "Qualified lead — clear interest with real requirements.",
+    "interested": "Showed interest.",
+    "callback": "Asked to be called back later.",
+    "not_interested": "Not interested.",
+    "no_answer": "Call was not picked up or the person did not speak.",
+    "other": "Spoke with the agent, no clear interest yet.",
+}
+_RX_BUDGET = re.compile(r"(\d+(?:\.\d+)?)\s*(lakh|lac|crore|cr)\b", re.I)
+_RX_BHK = re.compile(r"\b([1-6])\s?bhk\b", re.I)
+_RX_SECTOR = re.compile(r"\bsector\s?(\d+)", re.I)
 
-            {/* remark */}
-            <div>
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Your remark</div>
-              <Textarea value={remark} onChange={(e) => setRemark(e.target.value)} rows={3}
-                placeholder="Write a note about this call…" className="text-sm" data-testid="remark-input" />
-              <div className="mt-2 flex justify-end">
-                <Button size="sm" disabled={saving || remark === (call.remark || "")} onClick={() => patch({ remark }, "Remark saved")}
-                  className="bg-brand hover:bg-brand-dark" data-testid="save-remark-btn">
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save remark"}
-                </Button>
-              </div>
-            </div>
 
-            {/* actions */}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Assign lead to</div>
-                <Select value={call.assigned_to || "none"} onValueChange={assign}>
-                  <SelectTrigger className="h-9 text-sm" data-testid="assign-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Not assigned</SelectItem>
-                    {assignees.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Mark as</div>
-                <Select value={call.category} onValueChange={(v) => patch({ category: v }, "Updated")}>
-                  <SelectTrigger className="h-9 text-sm" data-testid="category-select"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(CAT).map(([k, m]) => <SelectItem key={k} value={k}>{m.label}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
-  );
-};
+def auto_summary(conversation: List[dict], category: str, signals: List[str]) -> str:
+    """Short plain-English summary used when the export has no summary of its own."""
+    parts = [_CAT_LINE.get(category, "")]
+    txt = " ".join(t["text"] for t in conversation if t["speaker"] == "customer")
+    facts = []
+    b = _RX_BUDGET.search(txt)
+    if b:
+        facts.append(f"budget {b.group(1)} {b.group(2).lower()}")
+    k = _RX_BHK.search(txt)
+    if k:
+        facts.append(f"{k.group(1)} BHK")
+    sc = _RX_SECTOR.search(txt)
+    if sc:
+        facts.append(f"Sector {sc.group(1)}")
+    if facts:
+        parts.append("Mentioned: " + ", ".join(facts) + ".")
+    if "visit" in signals:
+        parts.append("Open to a site visit.")
+    if "whatsapp" in signals:
+        parts.append("Wants details on WhatsApp.")
+    return " ".join(p for p in parts if p)
+
+
+_REASON_RULES = [
+    (r"voice ?mail|answering.?machine", "Voicemail"),
+    (r"busy", "Line busy"),
+    (r"switched.?off|unreachable|not.?reachable|out.?of.?(coverage|network)", "Unreachable / switched off"),
+    (r"invalid|wrong.?number|not.?exist|unallocated", "Invalid number"),
+    (r"reject|declin|denied|blocked", "Rejected / cut by person"),
+    (r"cancel", "Cancelled"),
+    (r"fail|error", "Call failed"),
+    (r"no.?answer|not.?answer|unanswered|missed|no.?response|time.?out|ring", "No answer"),
+]
+REASON_NAMES = [r[1] for r in _REASON_RULES] + [
+    "Picked up, no one spoke", "Hung up within seconds", "Not connected (no reason in file)",
+]
+
+
+def not_connected_reason(status: str, signals: List[str], duration: int) -> str:
+    """Plain-English reason a call did not connect. Uses the export's own status
+    first, then what we can tell from the call itself."""
+    s = (status or "").lower()
+    for rx, label in _REASON_RULES:
+        if re.search(rx, s):
+            return label
+    if "no_reply" in signals:
+        return "Picked up, no one spoke"
+    if "short_call" in signals or (duration or 0) < 10:
+        return "Hung up within seconds" if (duration or 0) >= 3 else "No answer"
+    return "Not connected (no reason in file)"
+
+
+def _dedupe(seq: List[str]) -> List[str]:
+    out: List[str] = []
+    for s in seq:
+        if s not in out:
+            out.append(s)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# File reading
+# ---------------------------------------------------------------------------
+def _read_rows(filename: str, raw: bytes) -> List[dict]:
+    name = (filename or "").lower()
+    if name.endswith(".json"):
+        data = json.loads(raw.decode("utf-8-sig"))
+        if isinstance(data, dict):
+            data = data.get("calls") or data.get("data") or data.get("items") or data.get("results") or [data]
+        return [{_norm(k): v for k, v in (r or {}).items()} for r in data if isinstance(r, dict)]
+    if name.endswith((".xlsx", ".xlsm")):
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        rows: List[dict] = []
+        for ws in wb.worksheets:
+            it = ws.iter_rows(values_only=True)
+            header = None
+            for r in it:
+                if header is None:
+                    if r and any(c is not None and str(c).strip() for c in r):
+                        header = [_norm(c) for c in r]
+                    continue
+                if r and any(c is not None and str(c).strip() for c in r):
+                    rows.append({header[i]: r[i] for i in range(min(len(header), len(r))) if header[i]})
+            if rows:
+                break  # first sheet that has data
+        return rows
+    # CSV / TSV / txt
+    text = None
+    for enc in ("utf-8-sig", "utf-16", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeError:
+            continue
+    text = text or ""
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dialect = csv.excel
+    reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+    return [{_norm(k): v for k, v in r.items() if k} for r in reader]
+
+
+def _build_doc(row: dict) -> Optional[dict]:
+    phone = _clean_phone(_pick(row, "phone"))
+    direction_raw = str(_pick(row, "direction") or "").lower()
+    if not phone:
+        phone = _clean_phone(_pick(row, "from_number"))
+    if not phone:
+        return None
+
+    started = _parse_datetime(_pick(row, "started_at"))
+    if started is None:
+        return None
+    # Some exports keep date and time in two columns
+    time_only = row.get("timeonly") or row.get("calltimeonly")
+    if time_only and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", str(time_only).strip()):
+        d = _parse_datetime(_pick(row, "date_only"))
+        if d:
+            h, m, *s = [int(x) for x in str(time_only).strip().split(":")]
+            started = d.replace(hour=h, minute=m, second=(s[0] if s else 0))
+
+    conversation = _parse_conversation(_pick(row, "conversation"))
+    duration = _parse_duration(_pick(row, "duration"))
+    status = str(_pick(row, "status") or "").strip()
+    disposition = str(_pick(row, "disposition") or "").strip()
+    summary = str(_pick(row, "summary") or "").strip()
+    remark = str(_pick(row, "remark") or "").strip()
+
+    if "in" in direction_raw and "out" not in direction_raw:
+        direction = "inbound"
+    else:
+        direction = "outbound"
+
+    call_id = str(_pick(row, "call_id") or "").strip()
+    call_key = call_id or hashlib.sha1(f"{phone}|{started.isoformat()}".encode()).hexdigest()[:20]
+
+    result = analyse_call(conversation, status, disposition, duration, summary)
+    summary_is_auto = not summary
+    if summary_is_auto:
+        summary = auto_summary(conversation, result["category"], result["signals"])
+    return {
+        "call_key": call_key,
+        "phone": phone,
+        "name": str(_pick(row, "name") or "").strip(),
+        "direction": direction,
+        "started_at": started.astimezone(timezone.utc).isoformat(),
+        "duration_seconds": duration,
+        "status": status,
+        "answered": result["answered"],
+        "not_connected_reason": None if result["answered"] else not_connected_reason(status, result["signals"], duration),
+        "conversation": conversation,
+        "summary": summary,
+        "summary_auto": summary_is_auto,
+        "remark": remark,
+        "category": result["category"],
+        "category_auto": result["category"],
+        "signals": result["signals"],
+        "score": result["score"],
+        "assigned_to": None,
+        "assigned_to_name": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Serialisation helpers
+# ---------------------------------------------------------------------------
+LIST_FIELDS = {"conversation": 0}  # excluded from list queries for speed
+
+
+def _out(doc: dict, with_conversation: bool = False) -> dict:
+    d = dict(doc)
+    d["id"] = str(d.pop("_id"))
+    turns = d.get("conversation") or []
+    d["turns"] = len(turns)
+    if not with_conversation:
+        d.pop("conversation", None)
+    # first customer line makes a nice preview when there's no summary
+    return d
+
+
+def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
+    q: dict = {}
+    rng: dict = {}
+    if date_from:
+        d = _parse_datetime(date_from)
+        if d:
+            rng["$gte"] = d.astimezone(timezone.utc).isoformat()
+    if date_to:
+        d = _parse_datetime(date_to)
+        if d:
+            rng["$lte"] = d.astimezone(timezone.utc).isoformat()
+    if rng:
+        q["started_at"] = rng
+    return q
+
+
+def _list_query(date_from, date_to, category, assigned, direction, q_text,
+                connected=None, reason=None) -> dict:
+    q = _range_query(date_from, date_to)
+    if connected == "yes":
+        q["answered"] = True
+    elif connected == "no":
+        q["answered"] = {"$ne": True}
+    if reason and reason != "all":
+        q["not_connected_reason"] = reason
+    if category and category != "all":
+        if category == "interested_all":
+            q["category"] = {"$in": list(INTERESTED_SET)}
+        else:
+            q["category"] = category
+    if assigned == "unassigned":
+        q["assigned_to"] = None
+    elif assigned and assigned != "all":
+        q["assigned_to"] = assigned
+    if direction in ("inbound", "outbound"):
+        q["direction"] = direction
+    if q_text:
+        rx = {"$regex": re.escape(q_text.strip()), "$options": "i"}
+        q["$or"] = [{"name": rx}, {"phone": rx}, {"summary": rx}, {"remark": rx}]
+    return q
+
+
+async def _assignees() -> List[dict]:
+    users = await db.users.find({"username": {"$in": list(AI_CALLING_USERNAMES)}, "active": {"$ne": False}}).to_list(10)
+    order = {"vranda.aggarwal": 0, "sandeep.chauhan": 1}
+    users.sort(key=lambda u: order.get(u.get("username"), 9))
+    return [{"id": str(u["_id"]), "name": u.get("name") or u.get("username"), "username": u.get("username")}
+            for u in users]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+@router.get("/assignees")
+async def assignees():
+    """Only these two people can ever receive AI-call leads."""
+    return await _assignees()
+
+
+async def _backfill_reasons() -> None:
+    """Calls imported before reasons existed get one filled in (cheap, runs once)."""
+    missing = db.ai_call_logs.find(
+        {"answered": {"$ne": True}, "not_connected_reason": {"$in": [None, ""]}},
+        {"status": 1, "signals": 1, "duration_seconds": 1},
+    )
+    async for d in missing:
+        await db.ai_call_logs.update_one(
+            {"_id": d["_id"]},
+            {"$set": {"not_connected_reason": not_connected_reason(
+                d.get("status") or "", d.get("signals") or [], d.get("duration_seconds") or 0)}},
+        )
+
+
+@router.get("/stats")
+async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
+    """Headline numbers + calls-per-hour for the chosen window (all IST)."""
+    await _backfill_reasons()
+    q = _range_query(date_from, date_to)
+    docs = await db.ai_call_logs.find(
+        q, {"started_at": 1, "category": 1, "answered": 1, "assigned_to": 1, "direction": 1,
+            "not_connected_reason": 1}
+    ).to_list(50000)
+
+    total = len(docs)
+    answered = sum(1 for d in docs if d.get("answered"))
+    qualified = sum(1 for d in docs if d.get("category") == "qualified")
+    interested = sum(1 for d in docs if d.get("category") in INTERESTED_SET)
+    assigned = sum(1 for d in docs if d.get("assigned_to"))
+    inbound = sum(1 for d in docs if d.get("direction") == "inbound")
+
+    by_hour = [0] * 24
+    for d in docs:
+        try:
+            h = datetime.fromisoformat(d["started_at"]).astimezone(IST).hour
+            by_hour[h] += 1
+        except Exception:
+            continue
+
+    counts_by_cat = {c: 0 for c in CATEGORIES}
+    for d in docs:
+        counts_by_cat[d.get("category") or "other"] = counts_by_cat.get(d.get("category") or "other", 0) + 1
+
+    reasons: dict = {}
+    for d in docs:
+        if not d.get("answered"):
+            r = d.get("not_connected_reason") or "Not connected (no reason in file)"
+            reasons[r] = reasons.get(r, 0) + 1
+    reasons_list = sorted(({"reason": k, "count": v} for k, v in reasons.items()), key=lambda x: -x["count"])
+
+    return {
+        "connected": answered, "not_connected": total - answered, "reasons": reasons_list,
+        "total": total, "answered": answered, "interested": interested, "qualified": qualified,
+        "assigned": assigned, "inbound": inbound, "outbound": total - inbound,
+        "by_hour": by_hour, "by_category": counts_by_cat,
+    }
+
+
+@router.get("")
+async def list_logs(
+    date_from: Optional[str] = None, date_to: Optional[str] = None,
+    category: Optional[str] = None, assigned: Optional[str] = None,
+    direction: Optional[str] = None, connected: Optional[str] = None, reason: Optional[str] = None,
+    q: Optional[str] = None, sort: str = "newest", page: int = 1, limit: int = 25,
+):
+    await _backfill_reasons()
+    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason)
+    total = await db.ai_call_logs.count_documents(query)
+    limit = max(1, min(limit, 100))
+    page = max(1, page)
+
+    if sort == "best":
+        # rank by category then score — done in Python because category rank isn't a Mongo field
+        docs = await db.ai_call_logs.find(query, LIST_FIELDS).to_list(20000)
+        docs.sort(key=lambda d: (CATEGORY_RANK.get(d.get("category"), 3), -(d.get("score") or 0),
+                                 -(d.get("duration_seconds") or 0)))
+        docs = docs[(page - 1) * limit: page * limit]
+    else:
+        key, direction_ = {
+            "newest": ("started_at", -1), "oldest": ("started_at", 1),
+            "longest": ("duration_seconds", -1), "shortest": ("duration_seconds", 1),
+            "name": ("name", 1),
+        }.get(sort, ("started_at", -1))
+        docs = await (db.ai_call_logs.find(query, LIST_FIELDS)
+                      .sort(key, direction_).skip((page - 1) * limit).limit(limit).to_list(limit))
+    return {"items": [_out(d) for d in docs], "total": total, "page": page, "pages": max(1, -(-total // limit))}
+
+
+@router.get("/template")
+async def download_template():
+    """A ready-to-fill Excel file showing exactly what an upload should look like."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Calls"
+    headers = ["call_id", "phone", "name", "direction", "start_time", "duration_seconds", "status", "conversation"]
+    ws.append(headers)
+    ws.append(["C-1001", "9876543210", "Rahul Sharma", "outbound", "2026-09-30 14:05:00", 96, "completed",
+               "Agent: Namaste, main Simran bol rahi hoon Unique Prime Reality se.\n"
+               "User: Haan boliye.\n"
+               "Agent: Aap Gurgaon me flat dekh rahe the?\n"
+               "User: Haan, 3 BHK chahiye, budget 1.5 crore hai.\n"
+               "Agent: Kya main WhatsApp par details bhej doon? Site visit bhi kara sakte hain.\n"
+               "User: Ji bhej do, Sunday ko visit kar lenge."])
+    ws.append(["C-1002", "9811122233", "", "inbound", "2026-09-30 14:20:00", 41, "completed",
+               "Agent: Namaste, Unique Prime Reality.\nUser: Mujhe abhi interested nahi hai, mat call karo."])
+    ws.append(["C-1003", "9899900011", "Neha", "outbound", "2026-09-30 15:02:00", 0, "no-answer", ""])
+    ws.append(["C-1004", "9810011122", "", "outbound", "2026-09-30 15:10:00", 0, "busy", ""])
+    ws.append(["C-1005", "9990011223", "", "outbound", "2026-09-30 15:18:00", 0, "failed", ""])
+    ws.append(["C-1006", "9718800011", "", "outbound", "2026-09-30 15:25:00", 22, "voicemail", ""])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F4E79")
+    widths = [12, 14, 18, 12, 20, 18, 12, 90]
+    for i, w in enumerate(widths):
+        ws.column_dimensions[chr(65 + i)].width = w
+    for row in ws.iter_rows(min_row=2):
+        row[7].alignment = Alignment(wrap_text=True, vertical="top")
+
+    help_ws = wb.create_sheet("How to fill")
+    help_rows = [
+        ["Column", "Required?", "What to put", "Example"],
+        ["phone", "YES", "Customer's phone number (10 digits, +91 / 0 prefix is fine)", "9876543210"],
+        ["start_time", "YES", "When the call started (India time). Date + time.", "2026-09-30 14:05:00"],
+        ["conversation", "Recommended", "The full chat. One line per turn, starting with Agent: or User:", "Agent: Hello...\\nUser: Haan boliye"],
+        ["call_id", "Recommended", "Unique ID of the call. Stops duplicates if you upload the same call twice.", "C-1001"],
+        ["direction", "Optional", "inbound or outbound (default outbound)", "outbound"],
+        ["name", "Optional", "Customer name if known", "Rahul Sharma"],
+        ["duration_seconds", "Optional", "Length of the call in seconds (or mm:ss)", "96"],
+        ["status", "Recommended", "completed / no-answer / busy / failed / voicemail / switched-off. This becomes the \"not connected\" reason on the dashboard.", "no-answer"],
+        ["summary", "Optional", "AI's own summary of the call, if the export has one", ""],
+        ["", "", "", ""],
+        ["Note", "", "Extra columns (credits, usage, campaign id, cost...) are ignored automatically. "
+                     "CSV, XLSX and JSON files all work.", ""],
+    ]
+    for r in help_rows:
+        help_ws.append(r)
+    for c in help_ws[1]:
+        c.font = Font(bold=True)
+    for col, w in zip("ABCD", (18, 14, 70, 32)):
+        help_ws.column_dimensions[col].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="ai_call_logs_template.xlsx"'},
+    )
+
+
+@router.post("/import")
+async def import_calls(file: UploadFile = File(...)):
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "The file is empty.")
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(400, "File is too large (max 25 MB).")
+    try:
+        rows = _read_rows(file.filename or "", raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("call log import: unreadable file: %s", e)
+        raise HTTPException(400, "Could not read this file. Please upload a .csv, .xlsx or .json export.")
+    if not rows:
+        raise HTTPException(400, "No rows found in the file.")
+
+    docs: List[dict] = []
+    skipped = 0
+    for r in rows:
+        d = _build_doc(r)
+        if d is None:
+            skipped += 1
+        else:
+            docs.append(d)
+    if not docs:
+        raise HTTPException(
+            400,
+            "No usable calls found. Each row needs at least a phone number and a start time. "
+            "Download the template to see the format.",
+        )
+
+    keys = [d["call_key"] for d in docs]
+    existing = set()
+    async for e in db.ai_call_logs.find({"call_key": {"$in": keys}}, {"call_key": 1}):
+        existing.add(e["call_key"])
+
+    ts = now_iso()
+    fresh, seen, updated = [], set(), 0
+    for d in docs:
+        if d["call_key"] in seen:
+            continue
+        seen.add(d["call_key"])
+        if d["call_key"] in existing:
+            # Re-upload of a call we already have: refresh what the file says
+            # (conversation, status, flags) but never touch remarks, assignment
+            # or a category the team set by hand.
+            old = await db.ai_call_logs.find_one(
+                {"call_key": d["call_key"]},
+                {"category_manual": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1},
+            )
+            upd = {k: d[k] for k in (
+                "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
+                "conversation", "signals", "score", "category_auto")}
+            if not (old or {}).get("category_manual"):
+                upd["category"] = d["category"]
+            if d.get("name"):
+                upd["name"] = d["name"]
+            if not d["summary_auto"] or (old or {}).get("summary_auto", True):
+                upd["summary"] = d["summary"]
+                upd["summary_auto"] = d["summary_auto"]
+            if d.get("remark") and not (old or {}).get("remark"):
+                upd["remark"] = d["remark"]
+            await db.ai_call_logs.update_one({"call_key": d["call_key"]}, {"$set": upd})
+            updated += 1
+            continue
+        d["imported_at"] = ts
+        fresh.append(d)
+    if fresh:
+        await db.ai_call_logs.insert_many(fresh)
+
+    await db.ai_call_logs.create_index("call_key", unique=False)
+    await db.ai_call_logs.create_index("started_at")
+    return {
+        "added": len(fresh),
+        "updated": updated,
+        "duplicates": updated,
+        "skipped": skipped,
+        "interested_found": sum(1 for d in fresh if d["category"] in INTERESTED_SET),
+    }
+
+
+@router.get("/{log_id}")
+async def get_log(log_id: str):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    d = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+    if not d:
+        raise HTTPException(404, "Call not found")
+    return _out(d, with_conversation=True)
+
+
+class LogPatch(BaseModel):
+    remark: Optional[str] = None
+    category: Optional[str] = None
+
+
+@router.patch("/{log_id}")
+async def patch_log(log_id: str, payload: LogPatch):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    updates: dict = {}
+    if payload.remark is not None:
+        updates["remark"] = payload.remark.strip()[:2000]
+    if payload.category is not None:
+        if payload.category not in CATEGORIES:
+            raise HTTPException(400, "Unknown category")
+        updates["category"] = payload.category
+        updates["category_manual"] = True
+    if not updates:
+        raise HTTPException(400, "Nothing to update")
+    res = await db.ai_call_logs.find_one_and_update(
+        {"_id": ObjectId(log_id)}, {"$set": updates}, return_document=True
+    )
+    if not res:
+        raise HTTPException(404, "Call not found")
+    return _out(res, with_conversation=True)
+
+
+class AssignIn(BaseModel):
+    user_id: Optional[str] = None  # null = unassign
+
+
+class BulkAssignIn(AssignIn):
+    ids: List[str]
+
+
+async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) -> None:
+    """Set the assignee on the call log AND mirror it onto the CRM lead
+    (created if this phone number isn't in the CRM yet)."""
+    upd = {
+        "assigned_to": assignee["id"] if assignee else None,
+        "assigned_to_name": assignee["name"] if assignee else None,
+        "assigned_at": now_iso() if assignee else None,
+    }
+    await db.ai_call_logs.update_one({"_id": log["_id"]}, {"$set": upd})
+    if not assignee:
+        return
+
+    digits = log.get("phone", "")[-10:]
+    lead = await db.leads.find_one({"phone": {"$regex": re.escape(digits) + "$"}}) if digits else None
+    tag = {"qualified": "hot", "interested": "warm"}.get(log.get("category"))
+    if lead:
+        lead_set = {"assigned_to": assignee["id"], "assigned_to_name": assignee["name"],
+                    "assigned_at": now_iso(), "updated_at": now_iso()}
+        if tag and not lead.get("tag"):
+            lead_set["tag"] = tag
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": lead_set})
+        lead_id = str(lead["_id"])
+    else:
+        note = (log.get("summary") or "").strip()
+        new_lead = Lead(
+            name=log.get("name") or f"AI lead {digits[-4:]}", phone=log.get("phone"), source="AI Calling",
+            status="qualified" if log.get("category") == "qualified" else "new", tag=tag,
+            notes=note or None, remark=log.get("remark") or None,
+            assigned_to=assignee["id"], assigned_to_name=assignee["name"], assigned_at=now_iso(),
+            created_at=now_iso(), updated_at=now_iso(),
+        ).to_mongo()
+        res = await db.leads.insert_one(new_lead)
+        lead_id = str(res.inserted_id)
+    await db.ai_call_logs.update_one({"_id": log["_id"]}, {"$set": {"lead_id": lead_id}})
+    try:
+        await _log_activity(lead_id, actor, "assigned",
+                            f"AI call lead assigned to {assignee['name']} by {actor.get('name')}")
+    except Exception:  # noqa: BLE001 — activity log must never block assignment
+        logger.exception("activity log failed")
+
+
+async def _resolve_assignee(user_id: Optional[str]) -> Optional[dict]:
+    if not user_id:
+        return None
+    for a in await _assignees():
+        if a["id"] == user_id:
+            return a
+    raise HTTPException(403, "AI call leads can only be assigned to Vranda or Sandeep.")
+
+
+@router.post("/bulk-assign")
+async def bulk_assign(payload: BulkAssignIn, user: dict = Depends(require_vranda_only)):
+    assignee = await _resolve_assignee(payload.user_id)
+    oids = [ObjectId(i) for i in payload.ids if ObjectId.is_valid(i)][:500]
+    logs = await db.ai_call_logs.find({"_id": {"$in": oids}}).to_list(500)
+    for lg in logs:
+        await _apply_assignment(lg, assignee, user)
+    return {"updated": len(logs), "assigned_to_name": assignee["name"] if assignee else None}
+
+
+@router.post("/{log_id}/assign")
+async def assign_log(log_id: str, payload: AssignIn, user: dict = Depends(require_vranda_only)):
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    log = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+    if not log:
+        raise HTTPException(404, "Call not found")
+    assignee = await _resolve_assignee(payload.user_id)
+    await _apply_assignment(log, assignee, user)
+    return _out(await db.ai_call_logs.find_one({"_id": log["_id"]}), with_conversation=True)
