@@ -468,6 +468,150 @@ def not_connected_reason(status: str, signals: List[str], duration: int) -> str:
     return "Not connected (no reason in file)"
 
 
+# ---------------------------------------------------------------------------
+# Follow-up detection — "call me tomorrow at 5", "kal shaam ko", "send on WhatsApp"
+# Runs on every imported call and on existing calls (backfill), no AI credits used.
+# ---------------------------------------------------------------------------
+_WEEKDAYS = {
+    "monday": 0, "somvar": 0, "सोमवार": 0, "tuesday": 1, "mangalwar": 1, "mangalvar": 1, "मंगलवार": 1,
+    "wednesday": 2, "budhwar": 2, "budhvar": 2, "बुधवार": 2, "thursday": 3, "guruwar": 3, "veerwar": 3,
+    "brihaspatiwar": 3, "गुरुवार": 3, "friday": 4, "shukrawar": 4, "shukravar": 4, "शुक्रवार": 4,
+    "saturday": 5, "shaniwar": 5, "shanivar": 5, "शनिवार": 5, "sunday": 6, "raviwar": 6, "itwar": 6, "रविवार": 6,
+}
+_RX_FU_DAYS_AHEAD = re.compile(r"\b(\d{1,2})\s*(?:din|days?)\s*(?:baad|bad|later|mein|me)?\b|\bafter\s*(\d{1,2})\s*days?\b|\bin\s*(\d{1,2})\s*days?\b", re.I)
+_RX_FU_TODAY = re.compile(r"\b(today|aaj)\b|आज", re.I)
+_RX_FU_TOMORROW = re.compile(r"\b(tomorrow|tmrw|kal)\b|कल", re.I)
+_RX_FU_DAYAFTER = re.compile(r"\b(day after tomorrow|parso|parson)\b|परसों|परसो", re.I)
+_RX_FU_NEXTWEEK = re.compile(r"\b(next week|agle hafte|agle week|next monday)\b|अगले हफ्ते|अगले सप्ताह", re.I)
+_RX_FU_NEXTMONTH = re.compile(r"\b(next month|agle mahine|agle month)\b|अगले महीने", re.I)
+_RX_FU_CLOCK = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|baje|bje|o'?clock)\b|(\d{1,2})(?::(\d{2}))?\s*बजे", re.I)
+_PART_OF_DAY = [
+    (re.compile(r"\b(subah|morning)\b|सुबह", re.I), 10),
+    (re.compile(r"\b(dopahar|afternoon|lunch)\b|दोपहर", re.I), 14),
+    (re.compile(r"\b(shaam|sham|evening)\b|शाम", re.I), 18),
+    (re.compile(r"\b(raat|night)\b|रात", re.I), 20),
+]
+DEFAULT_FOLLOWUP_HOUR = 11
+
+
+def _extract_followup_when(text: str, base: datetime) -> tuple:
+    """Find a day + time the customer (or agent) agreed on. `base` is the call
+    start in IST. Returns (datetime_ist | None, phrase_found | '', has_explicit_day_or_time)."""
+    t = text or ""
+    day_offset: Optional[int] = None
+    phrase: List[str] = []
+    m = _RX_FU_DAYAFTER.search(t)
+    if m:
+        day_offset = 2; phrase.append(m.group(0))
+    elif _RX_FU_NEXTWEEK.search(t):
+        day_offset = 7; phrase.append(_RX_FU_NEXTWEEK.search(t).group(0))
+    elif _RX_FU_NEXTMONTH.search(t):
+        day_offset = 30; phrase.append(_RX_FU_NEXTMONTH.search(t).group(0))
+    elif _RX_FU_TOMORROW.search(t):
+        day_offset = 1; phrase.append(_RX_FU_TOMORROW.search(t).group(0))
+    elif _RX_FU_TODAY.search(t):
+        day_offset = 0; phrase.append(_RX_FU_TODAY.search(t).group(0))
+    else:
+        n = _RX_FU_DAYS_AHEAD.search(t)
+        if n:
+            num = int(next(g for g in n.groups() if g))
+            if 1 <= num <= 60:
+                day_offset = num; phrase.append(n.group(0).strip())
+        if day_offset is None:
+            low = t.lower()
+            for word, wd in _WEEKDAYS.items():
+                if re.search(r"(?<![a-z])" + re.escape(word) + r"(?![a-z])", low) or word in t:
+                    day_offset = (wd - base.weekday()) % 7 or 7
+                    phrase.append(word)
+                    break
+
+    hour: Optional[int] = None
+    minute = 0
+    c = _RX_FU_CLOCK.search(t)
+    if c:
+        h = int(c.group(1) or c.group(4))
+        minute = int(c.group(2) or c.group(5) or 0)
+        unit = (c.group(3) or "baje").lower()
+        if 0 <= h <= 23 and minute < 60:
+            if unit == "pm" and h < 12:
+                h += 12
+            elif unit == "am" and h == 12:
+                h = 0
+            elif unit not in ("am", "pm") and h <= 12:
+                # "5 baje": pick the sensible half of the day for a business call
+                pod = next((hh for rx, hh in _PART_OF_DAY if rx.search(t)), None)
+                if pod is not None:
+                    h = h + 12 if (pod >= 14 and h < 12) else h
+                elif 1 <= h <= 7:
+                    h += 12
+            hour = h
+            phrase.append(c.group(0).strip())
+    if hour is None:
+        for rx, hh in _PART_OF_DAY:
+            pm = rx.search(t)
+            if pm:
+                hour = hh; phrase.append(pm.group(0)); break
+
+    if day_offset is None and hour is None:
+        return None, "", False
+    explicit_hour = hour is not None
+    if hour is None:
+        hour = DEFAULT_FOLLOWUP_HOUR
+    if day_offset is None:
+        # Only a time was given: same day if still ahead of the call, else next day.
+        cand = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        day_offset = 0 if cand > base else 1
+    when = (base + timedelta(days=day_offset)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return when, " ".join(dict.fromkeys(phrase)), True
+
+
+def detect_followup(conversation: List[dict], category: str, signals: List[str],
+                    answered: bool, started_at: Optional[datetime]) -> dict:
+    """Decides whether a call needs a follow-up, why, and when.
+    followup_time_source: 'stated' = the customer gave a day/time, 'suggested' = we
+    picked next day 11:00 because the lead is worth chasing but no time was said."""
+    empty = {"followup_needed": False, "followup_reason": "", "followup_at": None,
+             "followup_when_text": "", "followup_time_source": None}
+    if not answered or category in NOT_INTERESTED_SET or "wrong_number" in (signals or []):
+        return empty
+    sig = set(signals or [])
+    reasons: List[str] = []
+    if "callback" in sig:
+        reasons.append("Asked to be called back")
+    if "whatsapp" in sig:
+        reasons.append("Wants details on WhatsApp")
+    if "visit" in sig:
+        reasons.append("Talked about a site visit")
+    if category in INTERESTED_SET and not reasons:
+        reasons.append("Interested lead")
+    if category == "callback" and not reasons:
+        reasons.append("Asked to be called back")
+    if not reasons:
+        return empty
+
+    base = (started_at or datetime.now(timezone.utc)).astimezone(IST)
+    customer_text = " ".join(t["text"] for t in conversation if t.get("speaker") == "customer")
+    # Agent confirmations ("Theek hai, kal 5 baje call karungi") also carry the agreed time.
+    agent_confirm = " ".join(t["text"] for t in conversation
+                             if t.get("speaker") != "customer"
+                             and re.search(r"\b(call|phone|contact|milte|baat)\b|कॉल|फोन", t.get("text", ""), re.I))
+    when, phrase, explicit = _extract_followup_when(customer_text, base)
+    if when is None and agent_confirm:
+        when, phrase, explicit = _extract_followup_when(agent_confirm, base)
+    if when is not None:
+        source = "stated"
+    else:
+        when = (base + timedelta(days=1)).replace(hour=DEFAULT_FOLLOWUP_HOUR, minute=0, second=0, microsecond=0)
+        phrase, source = "", "suggested"
+    return {
+        "followup_needed": True,
+        "followup_reason": "; ".join(reasons),
+        "followup_at": when.astimezone(timezone.utc).isoformat(),
+        "followup_when_text": phrase,
+        "followup_time_source": source,
+    }
+
+
 def _dedupe(seq: List[str]) -> List[str]:
     out: List[str] = []
     for s in seq:
@@ -560,7 +704,11 @@ def _build_doc(row: dict) -> Optional[dict]:
     summary_is_auto = not summary
     if summary_is_auto:
         summary = auto_summary(conversation, result["category"], result["signals"])
+    followup = detect_followup(conversation, result["category"], result["signals"],
+                               result["answered"], started)
     return {
+        **followup,
+        "followup_done": False,
         "call_key": call_key,
         "phone": phone,
         "name": str(_pick(row, "name") or "").strip(),
@@ -620,8 +768,17 @@ def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
 
 
 def _list_query(date_from, date_to, category, assigned, direction, q_text,
-                connected=None, reason=None, temperature=None) -> dict:
+                connected=None, reason=None, temperature=None, followup=None) -> dict:
     q = _range_query(date_from, date_to)
+    if followup == "pending":
+        q["followup_needed"] = True
+        q["followup_done"] = {"$ne": True}
+    elif followup == "done":
+        q["followup_done"] = True
+    elif followup == "overdue":
+        q["followup_needed"] = True
+        q["followup_done"] = {"$ne": True}
+        q["followup_at"] = {"$lt": datetime.now(timezone.utc).isoformat()}
     if connected == "yes":
         q["answered"] = True
     elif connected == "no":
@@ -705,10 +862,23 @@ async def _backfill_scores() -> None:
             {"_id": d["_id"]}, {"$set": {"ai_score": sc, "temperature": temp, "score_source": "rules"}})
 
 
+async def _backfill_followups() -> None:
+    """Existing calls (and any new upload) get follow-up + time detected once.
+    Hand-edited follow-ups are never touched."""
+    cur = db.ai_call_logs.find({"followup_needed": {"$exists": False}})
+    async for d in cur:
+        started = _parse_datetime(d.get("started_at"))
+        f = detect_followup(d.get("conversation") or [], d.get("category") or "other",
+                            d.get("signals") or [], bool(d.get("answered")), started)
+        f["followup_done"] = False
+        await db.ai_call_logs.update_one({"_id": d["_id"]}, {"$set": f})
+
+
 async def _run_backfills() -> None:
     await _backfill_reasons()
     await _backfill_pickups()
     await _backfill_scores()
+    await _backfill_followups()
 
 
 @router.get("/stats")
@@ -770,11 +940,11 @@ async def list_logs(
     date_from: Optional[str] = None, date_to: Optional[str] = None,
     category: Optional[str] = None, assigned: Optional[str] = None,
     direction: Optional[str] = None, connected: Optional[str] = None, reason: Optional[str] = None,
-    temperature: Optional[str] = None,
+    temperature: Optional[str] = None, followup: Optional[str] = None,
     q: Optional[str] = None, sort: str = "newest", page: int = 1, limit: int = 25,
 ):
     await _run_backfills()
-    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason, temperature)
+    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason, temperature, followup)
     total = await db.ai_call_logs.count_documents(query)
     limit = max(1, min(limit, 100))
     page = max(1, page)
@@ -789,7 +959,7 @@ async def list_logs(
         key, direction_ = {
             "newest": ("started_at", -1), "oldest": ("started_at", 1),
             "longest": ("duration_seconds", -1), "shortest": ("duration_seconds", 1),
-            "name": ("name", 1), "hottest": ("ai_score", -1),
+            "name": ("name", 1), "hottest": ("ai_score", -1), "followup": ("followup_at", 1),
         }.get(sort, ("started_at", -1))
         docs = await (db.ai_call_logs.find(query, LIST_FIELDS)
                       .sort(key, direction_).skip((page - 1) * limit).limit(limit).to_list(limit))
@@ -951,7 +1121,8 @@ async def import_calls(file: UploadFile = File(...)):
             # or a category the team set by hand.
             old = await db.ai_call_logs.find_one(
                 {"call_key": d["call_key"]},
-                {"category_manual": 1, "category": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1},
+                {"category_manual": 1, "category": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1,
+                 "followup_manual": 1},
             )
             upd = {k: d[k] for k in (
                 "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
@@ -963,6 +1134,10 @@ async def import_calls(file: UploadFile = File(...)):
                 upd["ai_score"], upd["temperature"] = rate_call(
                     d["conversation"], old["category"], d["signals"], d["duration_seconds"], d["answered"])
             upd["score_source"] = "rules"
+            if not (old or {}).get("followup_manual"):
+                for k in ("followup_needed", "followup_reason", "followup_at",
+                          "followup_when_text", "followup_time_source"):
+                    upd[k] = d[k]
             if d.get("name"):
                 upd["name"] = d["name"]
             if not d["summary_auto"] or (old or {}).get("summary_auto", True):
@@ -1002,6 +1177,9 @@ async def get_log(log_id: str):
 class LogPatch(BaseModel):
     remark: Optional[str] = None
     category: Optional[str] = None
+    followup_at: Optional[str] = None       # ISO datetime; empty string clears the follow-up
+    followup_note: Optional[str] = None
+    followup_done: Optional[bool] = None
 
 
 @router.patch("/{log_id}")
@@ -1016,6 +1194,20 @@ async def patch_log(log_id: str, payload: LogPatch):
             raise HTTPException(400, "Unknown category")
         updates["category"] = payload.category
         updates["category_manual"] = True
+    if payload.followup_at is not None:
+        if payload.followup_at.strip() == "":
+            updates.update({"followup_needed": False, "followup_at": None, "followup_when_text": "",
+                            "followup_time_source": None, "followup_manual": True})
+        else:
+            when = _parse_datetime(payload.followup_at)
+            if when is None:
+                raise HTTPException(400, "Could not read that follow-up date/time")
+            updates.update({"followup_needed": True, "followup_at": when.astimezone(timezone.utc).isoformat(),
+                            "followup_time_source": "manual", "followup_manual": True, "followup_done": False})
+    if payload.followup_note is not None:
+        updates["followup_note"] = payload.followup_note.strip()[:500]
+    if payload.followup_done is not None:
+        updates["followup_done"] = bool(payload.followup_done)
     if not updates:
         raise HTTPException(400, "Nothing to update")
     if "category" in updates:
