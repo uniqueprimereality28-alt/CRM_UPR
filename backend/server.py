@@ -3274,6 +3274,10 @@ from ai_calling import ai_router, ai_public_router, seed_ai_defaults
 app.include_router(ai_router)
 app.include_router(ai_public_router)
 
+# AI Call Logs (imported Sarvam call history) — same Vranda/Sandeep-only access.
+from ai_call_logs import router as ai_call_logs_router
+app.include_router(ai_call_logs_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
