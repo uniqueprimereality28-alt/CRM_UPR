@@ -40,6 +40,9 @@ AI_CALLING_USERNAMES = {"vranda.aggarwal", "sandeep.chauhan"}
 # Who can SEE / USE the AI Calling tab, AI Call Logs and every /api/ai endpoint.
 # Vranda only — admins (incl. Sandeep) no longer get it.
 AI_ACCESS_USERNAMES = {"vranda.aggarwal"}
+# Who can SEE the AI Call Logs page (and its /api/ai-call-logs endpoints):
+# Vranda + Sandeep. The AI Calling tab itself stays Vranda-only.
+AI_LOGS_USERNAMES = AI_ACCESS_USERNAMES | {"sandeep.chauhan"}
 
 
 async def require_vranda_only(user: dict = Depends(get_current_user)) -> dict:
@@ -48,6 +51,13 @@ async def require_vranda_only(user: dict = Depends(get_current_user)) -> dict:
     so it stays exclusive to these specific accounts even if other users
     hold that role later."""
     if user.get("username") not in AI_ACCESS_USERNAMES:
+        raise HTTPException(status_code=403, detail="This feature is not available on your account.")
+    return user
+
+
+async def require_ai_logs_access(user: dict = Depends(get_current_user)) -> dict:
+    """AI Call Logs — open to Vranda and Sandeep only."""
+    if user.get("username") not in AI_LOGS_USERNAMES:
         raise HTTPException(status_code=403, detail="This feature is not available on your account.")
     return user
 
