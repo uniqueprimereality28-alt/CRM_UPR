@@ -14,7 +14,7 @@ import { api, assetUrl } from "../lib/api";
 import { Button } from "./ui/button";
 
 export const Layout = ({ children }) => {
-  const { user, logout, isAdmin, isTL, isEmployee, isManager, attendanceExempt, isVranda } = useAuth();
+  const { user, logout, isAdmin, isTL, isEmployee, isManager, attendanceExempt, isVranda, canViewAICallLogs } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [alertCount, setAlertCount] = useState(0);
@@ -47,7 +47,7 @@ export const Layout = ({ children }) => {
     { to: "/chat", label: "Team Chat", icon: MessagesSquare, id: "nav-chat", badge: alertCount },
     isAdmin && { to: "/reports", label: "Reports", icon: FileBarChart2, id: "nav-reports" },
     isVranda && { to: "/ai-calling", label: "AI Calling", icon: Bot, id: "nav-ai-calling" },
-    isVranda && { to: "/ai-call-logs", label: "AI Call Logs", icon: Headphones, id: "nav-ai-call-logs" },
+    canViewAICallLogs && { to: "/ai-call-logs", label: "AI Call Logs", icon: Headphones, id: "nav-ai-call-logs" },
     isAdmin && { to: "/settings", label: "Settings", icon: SettingsIcon, id: "nav-settings" },
     { to: "/profile", label: "Profile", icon: UserCog, id: "nav-profile" },
   ].filter(Boolean);
