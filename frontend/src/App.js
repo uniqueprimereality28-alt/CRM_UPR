@@ -30,6 +30,7 @@ const Chat = lazy(() => import("./pages/Chat"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Settings = lazy(() => import("./pages/Settings"));
 const AICalling = lazy(() => import("./pages/AICalling"));
+const AICallLogs = lazy(() => import("./pages/AICallLogs"));
 
 const Splash = () => (
   <div className="grid min-h-screen place-items-center">
@@ -199,6 +200,15 @@ function App() {
               element={
                 <Protected usernames={["vranda.aggarwal", "sandeep.chauhan"]}>
                   <AICalling />
+                </Protected>
+              }
+            />
+
+            <Route
+              path="/ai-call-logs"
+              element={
+                <Protected usernames={["vranda.aggarwal", "sandeep.chauhan"]}>
+                  <AICallLogs />
                 </Protected>
               }
             />
