@@ -198,7 +198,7 @@ function App() {
             <Route
               path="/ai-calling"
               element={
-                <Protected usernames={["vranda.aggarwal", "sandeep.chauhan"]}>
+                <Protected usernames={["vranda.aggarwal"]}>
                   <AICalling />
                 </Protected>
               }
@@ -207,7 +207,7 @@ function App() {
             <Route
               path="/ai-call-logs"
               element={
-                <Protected usernames={["vranda.aggarwal", "sandeep.chauhan"]}>
+                <Protected usernames={["vranda.aggarwal"]}>
                   <AICallLogs />
                 </Protected>
               }
