@@ -28,12 +28,13 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, List, Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 from server import db, now_iso, Lead, _log_activity
-from ai_calling import require_vranda_only, AI_CALLING_USERNAMES
+from ai_calling import require_vranda_only, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
+from ai_call_export import build_csv, build_pdf
 
 logger = logging.getLogger("crm.ai_call_logs")
 
@@ -44,9 +45,17 @@ IST = timezone(timedelta(hours=5, minutes=30))  # India has no DST
 CATEGORIES = ["qualified", "interested", "callback", "not_interested", "no_answer", "other"]
 # Categories that count as "interested people" in the headline number.
 INTERESTED_SET = {"qualified", "interested"}
+# "No answer" and "picked up but did not speak" both count as NOT interested.
+NOT_INTERESTED_SET = {"not_interested", "no_answer"}
+TEMPERATURES = ["hot", "warm", "cold", "lost"]
 
 # Sort order used when "Best leads first" is chosen.
 CATEGORY_RANK = {"qualified": 0, "interested": 1, "callback": 2, "other": 3, "no_answer": 4, "not_interested": 5}
+
+# ---- AI lead score (0-100) — same hot / warm / cold bands as the AI Calling module
+HOT_FROM, WARM_FROM = 60, 30
+SIGNAL_POINTS = {"interested": 20, "visit": 25, "budget": 15, "bhk": 8,
+                 "location": 7, "whatsapp": 12, "callback": 5}
 
 
 # ---------------------------------------------------------------------------
@@ -296,9 +305,12 @@ def analyse_call(conversation: List[dict], status: str, disposition: str, durati
     signals: List[str] = []
     if not answered:
         if conversation and not spoke and duration >= 5 and not status_says_no:
-            signals.append("no_reply")
-        elif duration < 15:
+            # Phone WAS picked up, the person just did not speak. That is a
+            # CONNECTED call — and counts as not interested.
+            return {"category": "not_interested", "answered": True, "signals": ["no_reply"], "score": -1}
+        if duration < 15:
             signals.append("short_call")
+        # Never picked up at all: not connected (also counted as not interested).
         return {"category": "no_answer", "answered": False, "signals": signals, "score": -1}
 
     # Judge on what the *customer* said; agent lines only feed the fallback below
@@ -357,6 +369,38 @@ def analyse_call(conversation: List[dict], status: str, disposition: str, durati
         cat = "other"
     return {"category": cat, "answered": cat != "no_answer",
             "signals": _dedupe(signals), "score": score}
+
+
+def temperature_band(score: int, category: str) -> str:
+    if category in NOT_INTERESTED_SET:
+        return "lost"
+    if score >= HOT_FROM:
+        return "hot"
+    if score >= WARM_FROM:
+        return "warm"
+    return "cold"
+
+
+def rate_call(conversation: List[dict], category: str, signals: List[str],
+              duration: int, answered: bool) -> tuple:
+    """AI lead score 0-100 from the WHOLE conversation + its temperature.
+    Looks at what the customer said (interest, budget, BHK, location, visit,
+    WhatsApp), how much they engaged (turns / words) and how long they stayed.
+    Returns (score, temperature)."""
+    if not answered or category in NOT_INTERESTED_SET or "wrong_number" in (signals or []):
+        return 0, "lost"
+    theirs = [t for t in (conversation or []) if t.get("speaker") != "agent"]
+    words = sum(len((t.get("text") or "").split()) for t in theirs)
+    pts = sum(SIGNAL_POINTS.get(s, 0) for s in (signals or []))
+    pts += min(12, len(theirs) * 2)      # back-and-forth
+    pts += min(8, words // 8)            # how much they talked
+    pts += min(8, (duration or 0) // 20)  # how long they stayed
+    if category == "qualified":
+        pts = max(pts, HOT_FROM)          # a hand-marked / clear qualified lead is at least hot
+    elif category == "interested":
+        pts = max(pts, WARM_FROM)
+    score = max(0, min(100, int(pts)))
+    return score, temperature_band(score, category)
 
 
 _CAT_LINE = {
@@ -511,6 +555,8 @@ def _build_doc(row: dict) -> Optional[dict]:
     call_key = call_id or hashlib.sha1(f"{phone}|{started.isoformat()}".encode()).hexdigest()[:20]
 
     result = analyse_call(conversation, status, disposition, duration, summary)
+    ai_score, temperature = rate_call(conversation, result["category"], result["signals"],
+                                      duration, result["answered"])
     summary_is_auto = not summary
     if summary_is_auto:
         summary = auto_summary(conversation, result["category"], result["signals"])
@@ -532,6 +578,9 @@ def _build_doc(row: dict) -> Optional[dict]:
         "category_auto": result["category"],
         "signals": result["signals"],
         "score": result["score"],
+        "ai_score": ai_score,
+        "temperature": temperature,
+        "score_source": "rules",
         "assigned_to": None,
         "assigned_to_name": None,
     }
@@ -571,7 +620,7 @@ def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
 
 
 def _list_query(date_from, date_to, category, assigned, direction, q_text,
-                connected=None, reason=None) -> dict:
+                connected=None, reason=None, temperature=None) -> dict:
     q = _range_query(date_from, date_to)
     if connected == "yes":
         q["answered"] = True
@@ -582,8 +631,12 @@ def _list_query(date_from, date_to, category, assigned, direction, q_text,
     if category and category != "all":
         if category == "interested_all":
             q["category"] = {"$in": list(INTERESTED_SET)}
+        elif category == "not_interested_all":
+            q["category"] = {"$in": list(NOT_INTERESTED_SET)}
         else:
             q["category"] = category
+    if temperature and temperature != "all":
+        q["temperature"] = temperature
     if assigned == "unassigned":
         q["assigned_to"] = None
     elif assigned and assigned != "all":
@@ -627,14 +680,45 @@ async def _backfill_reasons() -> None:
         )
 
 
+async def _backfill_pickups() -> None:
+    """Older imports counted "picked up, no one spoke" as NOT connected.
+    Those are connected calls (and count as not interested) — fix them once."""
+    await db.ai_call_logs.update_many(
+        {"answered": {"$ne": True}, "signals": "no_reply"},
+        {"$set": {"answered": True, "not_connected_reason": None}},
+    )
+    await db.ai_call_logs.update_many(
+        {"answered": True, "signals": "no_reply", "category": "no_answer",
+         "category_manual": {"$ne": True}},
+        {"$set": {"category": "not_interested", "category_auto": "not_interested"}},
+    )
+
+
+async def _backfill_scores() -> None:
+    """Calls imported before AI scoring existed get a score + temperature (once)."""
+    cur = db.ai_call_logs.find({"ai_score": {"$exists": False}})
+    async for d in cur:
+        sc, temp = rate_call(d.get("conversation") or [], d.get("category") or "other",
+                             d.get("signals") or [], d.get("duration_seconds") or 0,
+                             bool(d.get("answered")))
+        await db.ai_call_logs.update_one(
+            {"_id": d["_id"]}, {"$set": {"ai_score": sc, "temperature": temp, "score_source": "rules"}})
+
+
+async def _run_backfills() -> None:
+    await _backfill_reasons()
+    await _backfill_pickups()
+    await _backfill_scores()
+
+
 @router.get("/stats")
 async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
     """Headline numbers + calls-per-hour for the chosen window (all IST)."""
-    await _backfill_reasons()
+    await _run_backfills()
     q = _range_query(date_from, date_to)
     docs = await db.ai_call_logs.find(
         q, {"started_at": 1, "category": 1, "answered": 1, "assigned_to": 1, "direction": 1,
-            "not_connected_reason": 1}
+            "not_connected_reason": 1, "signals": 1, "temperature": 1}
     ).to_list(50000)
 
     total = len(docs)
@@ -656,6 +740,14 @@ async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
     for d in docs:
         counts_by_cat[d.get("category") or "other"] = counts_by_cat.get(d.get("category") or "other", 0) + 1
 
+    by_temperature = {t: 0 for t in TEMPERATURES}
+    for d in docs:
+        t = d.get("temperature")
+        if t in by_temperature:
+            by_temperature[t] += 1
+    picked_silent = sum(1 for d in docs if d.get("answered") and "no_reply" in (d.get("signals") or []))
+    not_interested_total = sum(1 for d in docs if d.get("category") in NOT_INTERESTED_SET)
+
     reasons: dict = {}
     for d in docs:
         if not d.get("answered"):
@@ -668,6 +760,8 @@ async def stats(date_from: Optional[str] = None, date_to: Optional[str] = None):
         "total": total, "answered": answered, "interested": interested, "qualified": qualified,
         "assigned": assigned, "inbound": inbound, "outbound": total - inbound,
         "by_hour": by_hour, "by_category": counts_by_cat,
+        "by_temperature": by_temperature, "picked_no_speech": picked_silent,
+        "not_interested_total": not_interested_total,
     }
 
 
@@ -676,10 +770,11 @@ async def list_logs(
     date_from: Optional[str] = None, date_to: Optional[str] = None,
     category: Optional[str] = None, assigned: Optional[str] = None,
     direction: Optional[str] = None, connected: Optional[str] = None, reason: Optional[str] = None,
+    temperature: Optional[str] = None,
     q: Optional[str] = None, sort: str = "newest", page: int = 1, limit: int = 25,
 ):
-    await _backfill_reasons()
-    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason)
+    await _run_backfills()
+    query = _list_query(date_from, date_to, category, assigned, direction, q, connected, reason, temperature)
     total = await db.ai_call_logs.count_documents(query)
     limit = max(1, min(limit, 100))
     page = max(1, page)
@@ -694,7 +789,7 @@ async def list_logs(
         key, direction_ = {
             "newest": ("started_at", -1), "oldest": ("started_at", 1),
             "longest": ("duration_seconds", -1), "shortest": ("duration_seconds", 1),
-            "name": ("name", 1),
+            "name": ("name", 1), "hottest": ("ai_score", -1),
         }.get(sort, ("started_at", -1))
         docs = await (db.ai_call_logs.find(query, LIST_FIELDS)
                       .sort(key, direction_).skip((page - 1) * limit).limit(limit).to_list(limit))
@@ -765,6 +860,50 @@ async def download_template():
     )
 
 
+EXPORT_SCOPES = {
+    "interested": ("interested_all", "Interested calls"),
+    "not_interested": ("not_interested_all", "Not interested calls"),
+    "all": (None, "All calls (interested and not interested)"),
+}
+
+
+@router.get("/export")
+async def export_calls(
+    fmt: str = Query("pdf", pattern="^(pdf|csv)$"),
+    scope: str = Query("interested", pattern="^(interested|not_interested|all)$"),
+    date_from: Optional[str] = None, date_to: Optional[str] = None,
+    assigned: Optional[str] = None, direction: Optional[str] = None,
+    temperature: Optional[str] = None, q: Optional[str] = None,
+):
+    """Download interested / not interested calls as PDF or CSV.
+    Same date / assignee / direction / temperature filters as the list."""
+    await _run_backfills()
+    category, title = EXPORT_SCOPES[scope]
+    query = _list_query(date_from, date_to, category, assigned, direction, q, None, None, temperature)
+    docs = await db.ai_call_logs.find(query).sort("started_at", -1).to_list(20000)
+    rows = [_out(d, with_conversation=True) for d in docs]
+    for r in rows:
+        r["result"] = ("Interested" if r.get("category") in INTERESTED_SET
+                       else "Not interested" if r.get("category") in NOT_INTERESTED_SET else "Undecided")
+
+    stamp = datetime.now(IST).strftime("%Y-%m-%d_%H%M")
+    fname = f"ai_calls_{scope}_{stamp}.{fmt}"
+    if fmt == "csv":
+        content, media = build_csv(rows), "text/csv; charset=utf-8"
+    else:
+        rng = []
+        if date_from or date_to:
+            f_ = lambda v: (_parse_datetime(v).astimezone(IST).strftime("%d %b %Y %I:%M %p") if v and _parse_datetime(v) else "start")
+            rng.append(f"Period: {f_(date_from)} to {f_(date_to) if date_to else 'now'}")
+        if temperature and temperature != "all":
+            rng.append(f"Temperature: {temperature}")
+        if direction in ("inbound", "outbound"):
+            rng.append(f"Direction: {direction}")
+        content, media = build_pdf(rows, title, " | ".join(rng)), "application/pdf"
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/import")
 async def import_calls(file: UploadFile = File(...)):
     raw = await file.read()
@@ -812,13 +951,18 @@ async def import_calls(file: UploadFile = File(...)):
             # or a category the team set by hand.
             old = await db.ai_call_logs.find_one(
                 {"call_key": d["call_key"]},
-                {"category_manual": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1},
+                {"category_manual": 1, "category": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1},
             )
             upd = {k: d[k] for k in (
                 "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
                 "conversation", "signals", "score", "category_auto")}
             if not (old or {}).get("category_manual"):
                 upd["category"] = d["category"]
+                upd["ai_score"], upd["temperature"] = d["ai_score"], d["temperature"]
+            else:
+                upd["ai_score"], upd["temperature"] = rate_call(
+                    d["conversation"], old["category"], d["signals"], d["duration_seconds"], d["answered"])
+            upd["score_source"] = "rules"
             if d.get("name"):
                 upd["name"] = d["name"]
             if not d["summary_auto"] or (old or {}).get("summary_auto", True):
@@ -874,11 +1018,69 @@ async def patch_log(log_id: str, payload: LogPatch):
         updates["category_manual"] = True
     if not updates:
         raise HTTPException(400, "Nothing to update")
+    if "category" in updates:
+        cur = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+        if not cur:
+            raise HTTPException(404, "Call not found")
+        updates["ai_score"], updates["temperature"] = rate_call(
+            cur.get("conversation") or [], updates["category"], cur.get("signals") or [],
+            cur.get("duration_seconds") or 0, bool(cur.get("answered")))
+        updates["score_source"] = "rules"
     res = await db.ai_call_logs.find_one_and_update(
         {"_id": ObjectId(log_id)}, {"$set": updates}, return_document=True
     )
     if not res:
         raise HTTPException(404, "Call not found")
+    return _out(res, with_conversation=True)
+
+
+@router.post("/{log_id}/ai-score")
+async def ai_score_log(log_id: str):
+    """Ask the AI model to read the WHOLE conversation and give the lead a
+    0-100 score. Replaces the automatic rule-based score for this call."""
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    doc = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
+    if not doc:
+        raise HTTPException(404, "Call not found")
+    convo = doc.get("conversation") or []
+    if not doc.get("answered") or not convo:
+        raise HTTPException(400, "There is no conversation to score for this call.")
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(503, "AI scoring is not set up on the server (EMERGENT_LLM_KEY is missing).")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception:  # noqa: BLE001
+        raise HTTPException(503, "AI scoring library is not installed on the server.")
+
+    text = "\n".join(
+        f"{'AGENT' if t.get('speaker') == 'agent' else 'CUSTOMER'}: {t.get('text', '')}" for t in convo)[:12000]
+    system = (
+        "You score real-estate sales leads for a Gurgaon property consultancy. Read the whole phone "
+        "conversation between the AI AGENT and the CUSTOMER (Hindi / Hinglish / English) and rate how "
+        "likely the CUSTOMER is to buy. Judge what the customer said, not the agent's pitch. "
+        "0 = not interested / wrong number, 30 = mild interest, 60 = strong interest, 90+ = ready to visit or buy. "
+        'Reply with STRICT JSON only: {"score": <integer 0-100>, "reason": "<one short English sentence>"}'
+    )
+    try:
+        import uuid
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"calllog-score-{uuid.uuid4()}",
+                       system_message=system).with_model(*LLM_MODEL)
+        resp = await chat.send_message(UserMessage(text=text))
+        raw = (resp if isinstance(resp, str) else str(resp)).strip()
+        a, b = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[a:b + 1])
+        score = max(0, min(100, int(round(float(data.get("score"))))))
+        reason = str(data.get("reason") or "")[:300]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("AI call scoring failed: %s", e)
+        raise HTTPException(502, "The AI could not score this call right now. Please try again.")
+
+    temp = "lost" if score < 10 else ("hot" if score >= HOT_FROM else "warm" if score >= WARM_FROM else "cold")
+    res = await db.ai_call_logs.find_one_and_update(
+        {"_id": doc["_id"]},
+        {"$set": {"ai_score": score, "temperature": temp, "score_source": "ai", "ai_reason": reason}},
+        return_document=True)
     return _out(res, with_conversation=True)
 
 
@@ -904,12 +1106,15 @@ async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) ->
 
     digits = log.get("phone", "")[-10:]
     lead = await db.leads.find_one({"phone": {"$regex": re.escape(digits) + "$"}}) if digits else None
-    tag = {"qualified": "hot", "interested": "warm"}.get(log.get("category"))
+    temp = log.get("temperature")
+    tag = temp if temp in ("hot", "warm", "cold") else {"qualified": "hot", "interested": "warm"}.get(log.get("category"))
     if lead:
         lead_set = {"assigned_to": assignee["id"], "assigned_to_name": assignee["name"],
                     "assigned_at": now_iso(), "updated_at": now_iso()}
         if tag and not lead.get("tag"):
             lead_set["tag"] = tag
+        if temp and not lead.get("ai_temperature"):
+            lead_set["ai_temperature"] = temp
         await db.leads.update_one({"_id": lead["_id"]}, {"$set": lead_set})
         lead_id = str(lead["_id"])
     else:
@@ -917,6 +1122,7 @@ async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) ->
         new_lead = Lead(
             name=log.get("name") or f"AI lead {digits[-4:]}", phone=log.get("phone"), source="AI Calling",
             status="qualified" if log.get("category") == "qualified" else "new", tag=tag,
+            ai_temperature=temp,
             notes=note or None, remark=log.get("remark") or None,
             assigned_to=assignee["id"], assigned_to_name=assignee["name"], assigned_at=now_iso(),
             created_at=now_iso(), updated_at=now_iso(),
