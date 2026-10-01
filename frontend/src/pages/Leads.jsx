@@ -62,8 +62,8 @@ const writeSaved = (key, value) => {
 /* Green "AI Calling Agent" tag — shown on a lead even when it is assigned to a person */
 const AiAgentTag = ({ className = "" }) => (
   <span title="This lead was called by the AI Calling Agent" data-testid="ai-agent-tag"
-    className={`inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-gradient-to-r from-emerald-500 to-green-400 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-emerald-200 ${className}`}>
-    <Zap className="h-3 w-3 fill-white" /> AI Calling Agent
+    className={`inline-flex w-fit max-w-none items-center gap-1 whitespace-nowrap rounded-full border border-emerald-300 bg-gradient-to-r from-emerald-500 to-green-400 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-emerald-200 ${className}`}>
+    <Zap className="h-3 w-3 shrink-0 fill-white" /> AI Calling Agent
   </span>
 );
 
