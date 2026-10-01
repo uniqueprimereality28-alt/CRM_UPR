@@ -886,6 +886,7 @@ def _range_query(date_from: Optional[str], date_to: Optional[str]) -> dict:
             rng["$lte"] = d.astimezone(timezone.utc).isoformat()
     if rng:
         q["started_at"] = rng
+    q["source"] = {"$ne": MANUAL_SOURCE}   # hand-added shortlist leads are not real calls
     return q
 
 
@@ -929,6 +930,12 @@ def _list_query(date_from, date_to, category, assigned, direction, q_text,
 
 
 ASSIGNABLE_ROLES = {"sales", "team_lead"}
+
+# Leads an admin adds to the AI lead shortlist by hand / bulk import. They live in
+# ai_call_logs (so assign, rename, remark all keep working) but are tagged with this
+# source and left out of call stats and the call list.
+MANUAL_SOURCE = "manual_shortlist"
+MANUAL_TEMPS = {"hot": 75, "warm": 45, "cold": 15}
 
 
 async def _assignees() -> List[dict]:
@@ -1133,7 +1140,12 @@ async def shortlist(limit: int = 300):
             continue
         k = _phone10(d.get("phone")) or str(d["_id"])
         cur = best.get(k)
-        if not cur or (d.get("ai_score") or 0) > (cur.get("ai_score") or 0):
+        if not cur:
+            best[k] = d
+        elif (d.get("source") == MANUAL_SOURCE) != (cur.get("source") == MANUAL_SOURCE):
+            if d.get("source") == MANUAL_SOURCE:      # an admin's choice beats the AI's guess
+                best[k] = d
+        elif (d.get("ai_score") or 0) > (cur.get("ai_score") or 0):
             best[k] = d
     # which of these phones are already tagged / assigned in the CRM
     crm: dict = {}
@@ -1168,6 +1180,154 @@ async def shortlist(limit: int = 300):
     counts = {g: len(v) for g, v in groups.items()}
     unassigned_counts = {g: sum(1 for r in v if r["unassigned"]) for g, v in groups.items()}
     return {"counts": counts, "unassigned_counts": unassigned_counts, **{g: v[:max(1, min(limit, 1000))] for g, v in groups.items()}}
+
+
+class ShortlistAddIn(BaseModel):
+    phone: str
+    name: Optional[str] = ""
+    temperature: str = "warm"          # hot | warm | cold
+    callback: bool = False
+    note: Optional[str] = ""
+
+
+def _manual_doc(phone: str, name: str, temperature: str, callback: bool, note: str) -> dict:
+    temp = temperature if temperature in MANUAL_TEMPS else "warm"
+    score = MANUAL_TEMPS[temp]
+    return {
+        "source": MANUAL_SOURCE,
+        "call_key": f"manual-{phone}",
+        "phone": phone, "name": name, "direction": "outbound",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": 0, "status": "manual", "answered": True, "contacted": True,
+        "captured": [], "callback_when": "", "not_connected_reason": None,
+        "conversation": [], "summary": note or "Added to the shortlist by an admin.",
+        "summary_auto": False, "remark": "",
+        "category": "callback" if callback else ("qualified" if temp == "hot" else "interested"),
+        "category_manual": True,
+        "signals": ["interested"] + (["callback"] if callback else []),
+        "score": score, "ai_score": score, "temperature": temp, "score_source": "manual",
+        "followup_needed": False, "followup_done": False,
+        "assigned_to": None, "assigned_to_name": None, "ai_tag_synced": True,
+    }
+
+
+async def _upsert_manual(phone_raw: Any, name: str, temperature: str, callback: bool, note: str) -> Optional[str]:
+    """Add (or update) one hand-added shortlist lead. Returns "added" / "updated" / None (bad phone)."""
+    phone = _clean_phone(phone_raw)
+    if len(_phone10(phone)) < 10:
+        return None
+    name = re.sub(r"\s+", " ", name or "").strip()[:120]
+    note = (note or "").strip()[:500]
+    doc = _manual_doc(phone, name, temperature, callback, note)
+    old = await db.ai_call_logs.find_one({"source": MANUAL_SOURCE, "call_key": doc["call_key"]},
+                                         {"remark": 1, "assigned_to": 1, "name": 1, "name_manual": 1})
+    if old:
+        keep = {k: doc[k] for k in ("category", "signals", "score", "ai_score", "temperature", "summary", "started_at")}
+        if name:
+            keep["name"] = name
+        await db.ai_call_logs.update_one({"_id": old["_id"]}, {"$set": keep})   # assignment & remark untouched
+        return "updated"
+    doc["imported_at"] = now_iso()
+    await db.ai_call_logs.insert_one(doc)
+    return "added"
+
+
+@router.post("/shortlist/add")
+async def shortlist_add(payload: ShortlistAddIn, user: dict = Depends(require_admin)):
+    """Admins (Vranda / Sandeep): add one lead to the AI lead shortlist by hand."""
+    res = await _upsert_manual(payload.phone, payload.name or "", payload.temperature,
+                               payload.callback, payload.note or "")
+    if res is None:
+        raise HTTPException(400, "Enter a valid 10-digit phone number.")
+    return {"result": res}
+
+
+@router.get("/shortlist/template")
+async def shortlist_template():
+    """Sample file for the shortlist bulk import."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Shortlist"
+    ws.append(["phone", "name", "temperature", "callback", "note"])
+    ws.append(["9876543210", "Rahul Sharma", "hot", "no", "3 BHK Gurgaon, budget 1.5 Cr"])
+    ws.append(["9811122233", "Neha", "warm", "yes", "Call back after 6 pm"])
+    ws.append(["9899900011", "", "cold", "no", ""])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="1F4E79")
+    for col, w in zip("ABCDE", (16, 22, 14, 10, 50)):
+        ws.column_dimensions[col].width = w
+    help_ws = wb.create_sheet("How to fill")
+    for r in [["Column", "Required?", "What to put"],
+              ["phone", "YES", "10-digit mobile number (+91 / 0 prefix is fine)"],
+              ["name", "Optional", "Customer name"],
+              ["temperature", "Optional", "hot / warm / cold (default warm)"],
+              ["callback", "Optional", "yes / no — puts the lead in the Call back list"],
+              ["note", "Optional", "Shown as the summary in the shortlist"]]:
+        help_ws.append(r)
+    for c in help_ws[1]:
+        c.font = Font(bold=True)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="ai_shortlist_template.xlsx"'},
+    )
+
+
+@router.post("/shortlist/import")
+async def shortlist_import(file: UploadFile = File(...), user: dict = Depends(require_admin)):
+    """Admins (Vranda / Sandeep): bulk-add leads to the AI lead shortlist from a CSV / XLSX / JSON file."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "The file is empty.")
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(400, "File is too large (max 10 MB).")
+    try:
+        rows = _read_rows(file.filename or "", raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("shortlist import: unreadable file: %s", e)
+        raise HTTPException(400, "Could not read this file. Please upload a .csv, .xlsx or .json file.")
+    if not rows:
+        raise HTTPException(400, "No rows found in the file.")
+    if len(rows) > 5000:
+        raise HTTPException(400, "Too many rows (max 5000 per upload).")
+
+    def cell(r: dict, *keys: str) -> str:
+        for k in keys:
+            for rk, v in r.items():
+                if _norm(rk) == _norm(k) and v not in (None, ""):
+                    return str(v).strip()
+        return ""
+
+    added = updated = skipped = 0
+    seen: set = set()
+    for r in rows:
+        phone = cell(r, "phone", "mobile", "phone number", "mobile number", "contact", "number")
+        k = _phone10(phone)
+        if k in seen:
+            skipped += 1
+            continue
+        seen.add(k)
+        temp = cell(r, "temperature", "temp", "category", "status").lower()
+        temp = temp if temp in MANUAL_TEMPS else "warm"
+        cb = cell(r, "callback", "call back").lower() in ("yes", "y", "true", "1", "callback")
+        res = await _upsert_manual(phone, cell(r, "name", "customer name", "lead name"), temp, cb,
+                                   cell(r, "note", "notes", "summary", "remark", "remarks"))
+        if res == "added":
+            added += 1
+        elif res == "updated":
+            updated += 1
+        else:
+            skipped += 1
+    if not (added or updated):
+        raise HTTPException(400, "No usable rows. Each row needs a valid 10-digit phone number. "
+                                 "Download the template to see the format.")
+    await db.ai_call_logs.create_index("call_key", unique=False)
+    return {"added": added, "updated": updated, "skipped": skipped}
 
 
 @router.get("/stats")
