@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, User2, Phone, PhoneIncoming, PhoneOutgoing, PhoneCall, Sparkles, BadgeCheck,
   Upload, FileDown, Search, Loader2, Clock, UserCheck, CheckCircle2, RefreshCw, ArrowUpDown,
-  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet, CalendarClock,
+  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet, CalendarClock, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
@@ -20,6 +20,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "../components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../components/ui/sheet";
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription,
+} from "../components/ui/dialog";
 
 /* ---------- look & feel per category ---------- */
 const CAT = {
@@ -682,12 +685,73 @@ const FollowupCard = ({ call, onSave }) => {
   );
 };
 
+/* ---------- Edit score (pencil) popup ---------- */
+const SCORE_FIELDS = [
+  ["interested", "Showed interest", "usually 20"],
+  ["visit", "Site visit talk", "usually 25"],
+  ["budget", "Shared budget", "usually 15"],
+  ["bhk", "Property type / BHK", "usually 8"],
+  ["location", "Mentioned location", "usually 7"],
+  ["whatsapp", "WhatsApp / brochure", "usually 12"],
+  ["callback", "Asked to call later", "usually 5"],
+  ["engagement", "Back-and-forth talk", "up to 12"],
+  ["talk", "How much they spoke", "up to 8"],
+  ["duration", "How long they stayed", "up to 8"],
+];
+
+const ScoreDialog = ({ call, open, onOpenChange, onSave, saving }) => {
+  const [vals, setVals] = useState({});
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (open) { setVals({ ...(call.score_details || {}) }); setNote(call.score_source === "manual" ? (call.ai_reason || "") : ""); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const num = (k) => Math.max(0, Math.min(100, parseInt(vals[k], 10) || 0));
+  const total = Math.max(0, Math.min(100, SCORE_FIELDS.reduce((a, [k]) => a + num(k), 0)));
+  const submit = () => onSave(Object.fromEntries(SCORE_FIELDS.map(([k]) => [k, num(k)])), note);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md" data-testid="score-dialog">
+        <DialogHeader>
+          <DialogTitle>Edit lead score</DialogTitle>
+          <DialogDescription>Enter the points for each detail. The total (max 100) becomes this call&apos;s score.</DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+          {SCORE_FIELDS.map(([k, label, hint]) => (
+            <div key={k} className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-slate-700">{label}</div>
+                <div className="text-[10px] text-slate-400">{hint}</div>
+              </div>
+              <Input type="number" min={0} max={100} inputMode="numeric" className="h-8 w-20 text-right"
+                value={vals[k] ?? 0} onChange={(e) => setVals((v) => ({ ...v, [k]: e.target.value }))}
+                data-testid={`score-input-${k}`} />
+            </div>
+          ))}
+          <Textarea rows={2} placeholder="Reason (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+        </div>
+        <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Total score</span>
+          <span className="brand-font text-xl font-bold text-slate-900" data-testid="score-total">{total}<span className="text-sm font-medium text-slate-400"> / 100</span></span>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button disabled={saving} onClick={submit} data-testid="score-save">
+            {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null} Save score
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 /* ---------- Conversation panel ---------- */
 const CallSheet = ({ id, assignees, onClose, onChanged }) => {
   const [call, setCall] = useState(null);
   const [remark, setRemark] = useState("");
   const [saving, setSaving] = useState(false);
   const [scoring, setScoring] = useState(false);
+  const [scoreOpen, setScoreOpen] = useState(false);
 
   useEffect(() => {
     if (!id) { setCall(null); return; }
@@ -704,6 +768,15 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
     setSaving(true);
     try { const { data } = await api.patch(`/ai-call-logs/${id}`, body); apply(data); if (okMsg) toast.success(okMsg); }
     catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+    finally { setSaving(false); }
+  };
+
+  const saveManualScore = async (details, note) => {
+    setSaving(true);
+    try {
+      const { data } = await api.post(`/ai-call-logs/${id}/manual-score`, { details, note });
+      apply(data); setScoreOpen(false); toast.success(`Score saved: ${data.ai_score}/100`);
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
     finally { setSaving(false); }
   };
 
@@ -764,6 +837,10 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
                 <div className="mb-1.5 flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                     <Flame className="h-3 w-3" /> AI lead score
+                    <button type="button" onClick={() => setScoreOpen(true)} title="Edit score" aria-label="Edit score"
+                      className="ml-1 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-brand" data-testid="score-edit-btn">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                   <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tempMeta(call.temperature).cls}`}>
                     {tempMeta(call.temperature).label}
@@ -777,7 +854,9 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-[11px] text-slate-400">
-                    {call.score_source === "ai" ? (call.ai_reason || "Scored by AI from the full conversation.") : "Scored automatically from the full conversation."}
+                    {call.score_source === "manual" ? (call.ai_reason || "Score entered by hand.")
+                      : call.score_source === "ai" ? (call.ai_reason || "Scored by AI from the full conversation.")
+                      : "Scored automatically from the full conversation."}
                   </span>
                   {call.answered && call.conversation?.length > 0 && !["no_answer", "not_interested"].includes(call.category) && (
                     <Button size="sm" variant="outline" className="h-7 shrink-0 gap-1 text-xs" disabled={scoring} onClick={rescore} data-testid="ai-rescore-btn">
@@ -787,6 +866,8 @@ const CallSheet = ({ id, assignees, onClose, onChanged }) => {
                 </div>
               </div>
             )}
+
+            <ScoreDialog call={call} open={scoreOpen} onOpenChange={setScoreOpen} onSave={saveManualScore} saving={saving} />
 
             {/* follow-up */}
             <FollowupCard call={call} onSave={(body, msg) => patch(body, msg)} />
