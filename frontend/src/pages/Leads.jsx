@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { readSaved, writeSaved } from "../lib/persist";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
   AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall, Bot,
@@ -50,6 +49,15 @@ const FU_STATUSES = [
 ];
 
 const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" } : null);
+
+// --- keeps filters/page/numbers across a browser refresh (no extra file needed) ---
+const readSaved = (key, fallback = null) => {
+  try { const raw = sessionStorage.getItem("crm:" + key); return raw ? JSON.parse(raw) : fallback; }
+  catch { return fallback; }
+};
+const writeSaved = (key, value) => {
+  try { sessionStorage.setItem("crm:" + key, JSON.stringify(value)); } catch { /* storage blocked */ }
+};
 
 export default function Leads() {
   const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
