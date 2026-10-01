@@ -18,6 +18,7 @@ in AI_CALLING_USERNAMES (Vranda + Sandeep). Nobody else can read or write.
 Nothing in ai_calling.py is changed; this module has its own collection
 (`ai_call_logs`) so imported history never interferes with live AI calls.
 """
+import asyncio
 import csv
 import hashlib
 import io
@@ -939,23 +940,64 @@ async def _mark_lead_contacted(call: dict, actor: Optional[dict] = None) -> bool
 
 async def _backfill_contacted() -> None:
     """Existing picked-up calls (silent ones too) get marked contacted once,
-    and their CRM lead is moved new -> contacted."""
-    cur = db.ai_call_logs.find(
+    and their CRM lead is moved new -> contacted. Uses ONE pass over the leads
+    (phone -> lead map) instead of a database search per call, so it is fast."""
+    calls = await db.ai_call_logs.find(
         {"answered": True, "contacted_synced": {"$ne": True}},
         {"phone": 1, "started_at": 1},
-    )
-    async for d in cur:
-        await _mark_lead_contacted(d)
-        await db.ai_call_logs.update_one(
-            {"_id": d["_id"]}, {"$set": {"contacted": True, "contacted_synced": True}})
+    ).to_list(None)
+    if not calls:
+        return
+    by_phone: dict = {}
+    async for l in db.leads.find({}, {"phone": 1, "status": 1, "last_contacted_at": 1}):
+        key = re.sub(r"\D", "", str(l.get("phone") or ""))[-10:]
+        if key:
+            by_phone.setdefault(key, l)
+    to_contacted, touched = [], set()
+    for c in calls:
+        l = by_phone.get(re.sub(r"\D", "", str(c.get("phone") or ""))[-10:])
+        if l and l["_id"] not in touched and (l.get("status") or "new") == "new":
+            touched.add(l["_id"])
+            to_contacted.append(l["_id"])
+    if to_contacted:
+        stamp = now_iso()
+        for i in range(0, len(to_contacted), 500):
+            await db.leads.update_many(
+                {"_id": {"$in": to_contacted[i:i + 500]}, "status": {"$in": ["new", None]}},
+                {"$set": {"status": "contacted", "last_contacted_at": stamp, "updated_at": stamp}})
+    ids = [c["_id"] for c in calls]
+    for i in range(0, len(ids), 1000):
+        await db.ai_call_logs.update_many(
+            {"_id": {"$in": ids[i:i + 1000]}}, {"$set": {"contacted": True, "contacted_synced": True}})
 
 
-async def _run_backfills() -> None:
+_BACKFILL_STATE = {"done": False, "running": False}
+
+
+async def _backfills_now() -> None:
     await _backfill_reasons()
     await _backfill_pickups()
     await _backfill_scores()
     await _backfill_followups()
     await _backfill_contacted()
+
+
+async def _run_backfills(force: bool = False) -> None:
+    """Never makes a page wait. The fix-ups run once per server start in the
+    background (and again after each import, which passes force=True)."""
+    if _BACKFILL_STATE["running"] or (_BACKFILL_STATE["done"] and not force):
+        return
+    _BACKFILL_STATE["running"] = True
+
+    async def _job():
+        try:
+            await _backfills_now()
+            _BACKFILL_STATE["done"] = True
+        except Exception:  # noqa: BLE001
+            logger.exception("call-log backfill failed")
+        finally:
+            _BACKFILL_STATE["running"] = False
+    asyncio.create_task(_job())
 
 
 @router.get("/stats")
@@ -1246,6 +1288,7 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
 
     await db.ai_call_logs.create_index("call_key", unique=False)
     await db.ai_call_logs.create_index("started_at")
+    await _run_backfills(force=True)
     return {
         "added": len(fresh),
         "updated": updated,
