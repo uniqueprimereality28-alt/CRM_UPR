@@ -25,7 +25,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone, timedelta
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -403,6 +403,28 @@ def rate_call(conversation: List[dict], category: str, signals: List[str],
     return score, temperature_band(score, category)
 
 
+# Every detail the score is made of — shown in the "edit score" popup.
+SCORE_DETAILS = ["interested", "visit", "budget", "bhk", "location", "whatsapp", "callback",
+                 "engagement", "talk", "duration"]
+
+
+def score_breakdown(conversation: List[dict], category: str, signals: List[str],
+                    duration: int, answered: bool) -> Dict[str, int]:
+    """Points the automatic engine gives for each detail of this call
+    (all zeros for calls that were never picked up / not interested)."""
+    zero = {k: 0 for k in SCORE_DETAILS}
+    if not answered or category in NOT_INTERESTED_SET or "wrong_number" in (signals or []):
+        return zero
+    theirs = [t for t in (conversation or []) if t.get("speaker") != "agent"]
+    words = sum(len((t.get("text") or "").split()) for t in theirs)
+    out = {k: (SIGNAL_POINTS.get(k, 0) if k in (signals or []) else 0)
+           for k in ("interested", "visit", "budget", "bhk", "location", "whatsapp", "callback")}
+    out["engagement"] = min(12, len(theirs) * 2)
+    out["talk"] = min(8, words // 8)
+    out["duration"] = min(8, (duration or 0) // 20)
+    return out
+
+
 _CAT_LINE = {
     "qualified": "Qualified lead — clear interest with real requirements.",
     "interested": "Showed interest.",
@@ -717,6 +739,8 @@ def _build_doc(row: dict) -> Optional[dict]:
         "duration_seconds": duration,
         "status": status,
         "answered": result["answered"],
+        # Picked up (even if the person stayed silent) = the lead was CONTACTED.
+        "contacted": bool(result["answered"]),
         "not_connected_reason": None if result["answered"] else not_connected_reason(status, result["signals"], duration),
         "conversation": conversation,
         "summary": summary,
@@ -745,6 +769,11 @@ def _out(doc: dict, with_conversation: bool = False) -> dict:
     d["id"] = str(d.pop("_id"))
     turns = d.get("conversation") or []
     d["turns"] = len(turns)
+    if with_conversation:
+        manual = d.get("manual_score_details")
+        d["score_details"] = manual if (d.get("score_source") == "manual" and manual) else score_breakdown(
+            turns, d.get("category") or "other", d.get("signals") or [],
+            d.get("duration_seconds") or 0, bool(d.get("answered")))
     if not with_conversation:
         d.pop("conversation", None)
     # first customer line makes a nice preview when there's no summary
@@ -874,11 +903,59 @@ async def _backfill_followups() -> None:
         await db.ai_call_logs.update_one({"_id": d["_id"]}, {"$set": f})
 
 
+SYSTEM_ACTOR = {"_id": "system", "name": "AI Call Logs"}
+
+
+async def _mark_lead_contacted(call: dict, actor: Optional[dict] = None) -> bool:
+    """A picked-up call (even a silent one) means the lead was contacted.
+    Finds the CRM lead by phone and bumps status new -> contacted. It only ever
+    moves \"new\" forward; a lead already at qualified / site_visit / won / lost
+    is never pushed back. Never creates leads. Returns True if a lead changed."""
+    digits = (call.get("phone") or "")[-10:]
+    if not digits:
+        return False
+    lead = await db.leads.find_one({"phone": {"$regex": re.escape(digits) + "$"}})
+    if not lead:
+        return False
+    when = call.get("started_at") or now_iso()
+    upd = {}
+    if not lead.get("last_contacted_at") or str(lead["last_contacted_at"]) < str(when):
+        upd["last_contacted_at"] = when
+    changed = False
+    if (lead.get("status") or "new") == "new":
+        upd["status"] = "contacted"
+        changed = True
+    if upd:
+        upd["updated_at"] = now_iso()
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": upd})
+    if changed:
+        try:
+            await _log_activity(str(lead["_id"]), actor or SYSTEM_ACTOR, "status_change",
+                                "Status changed from new to contacted (AI call was picked up)")
+        except Exception:  # noqa: BLE001 — activity log must never block the import
+            logger.exception("activity log failed")
+    return changed
+
+
+async def _backfill_contacted() -> None:
+    """Existing picked-up calls (silent ones too) get marked contacted once,
+    and their CRM lead is moved new -> contacted."""
+    cur = db.ai_call_logs.find(
+        {"answered": True, "contacted_synced": {"$ne": True}},
+        {"phone": 1, "started_at": 1},
+    )
+    async for d in cur:
+        await _mark_lead_contacted(d)
+        await db.ai_call_logs.update_one(
+            {"_id": d["_id"]}, {"$set": {"contacted": True, "contacted_synced": True}})
+
+
 async def _run_backfills() -> None:
     await _backfill_reasons()
     await _backfill_pickups()
     await _backfill_scores()
     await _backfill_followups()
+    await _backfill_contacted()
 
 
 @router.get("/stats")
@@ -1075,7 +1152,7 @@ async def export_calls(
 
 
 @router.post("/import")
-async def import_calls(file: UploadFile = File(...)):
+async def import_calls(file: UploadFile = File(...), user: dict = Depends(require_ai_logs_access)):
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "The file is empty.")
@@ -1122,18 +1199,22 @@ async def import_calls(file: UploadFile = File(...)):
             old = await db.ai_call_logs.find_one(
                 {"call_key": d["call_key"]},
                 {"category_manual": 1, "category": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1,
-                 "followup_manual": 1},
+                 "followup_manual": 1, "score_source": 1},
             )
             upd = {k: d[k] for k in (
                 "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
                 "conversation", "signals", "score", "category_auto")}
+            keep_score = (old or {}).get("score_source") == "manual"   # hand-entered score is never overwritten
             if not (old or {}).get("category_manual"):
                 upd["category"] = d["category"]
-                upd["ai_score"], upd["temperature"] = d["ai_score"], d["temperature"]
-            else:
+                if not keep_score:
+                    upd["ai_score"], upd["temperature"] = d["ai_score"], d["temperature"]
+            elif not keep_score:
                 upd["ai_score"], upd["temperature"] = rate_call(
                     d["conversation"], old["category"], d["signals"], d["duration_seconds"], d["answered"])
-            upd["score_source"] = "rules"
+            if not keep_score:
+                upd["score_source"] = "rules"
+            upd["contacted"] = d["contacted"]
             if not (old or {}).get("followup_manual"):
                 for k in ("followup_needed", "followup_reason", "followup_at",
                           "followup_when_text", "followup_time_source"):
@@ -1153,6 +1234,16 @@ async def import_calls(file: UploadFile = File(...)):
     if fresh:
         await db.ai_call_logs.insert_many(fresh)
 
+    # Every picked-up call (even silent) => the CRM lead becomes "contacted"
+    contacted_marked = 0
+    for d in docs:
+        if not d.get("contacted"):
+            continue
+        if await _mark_lead_contacted(d, user):
+            contacted_marked += 1
+        await db.ai_call_logs.update_one(
+            {"call_key": d["call_key"]}, {"$set": {"contacted": True, "contacted_synced": True}})
+
     await db.ai_call_logs.create_index("call_key", unique=False)
     await db.ai_call_logs.create_index("started_at")
     return {
@@ -1160,6 +1251,7 @@ async def import_calls(file: UploadFile = File(...)):
         "updated": updated,
         "duplicates": updated,
         "skipped": skipped,
+        "contacted_marked": contacted_marked,
         "interested_found": sum(1 for d in fresh if d["category"] in INTERESTED_SET),
     }
 
@@ -1214,10 +1306,11 @@ async def patch_log(log_id: str, payload: LogPatch):
         cur = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)})
         if not cur:
             raise HTTPException(404, "Call not found")
-        updates["ai_score"], updates["temperature"] = rate_call(
-            cur.get("conversation") or [], updates["category"], cur.get("signals") or [],
-            cur.get("duration_seconds") or 0, bool(cur.get("answered")))
-        updates["score_source"] = "rules"
+        if cur.get("score_source") != "manual":   # keep a hand-entered score as it is
+            updates["ai_score"], updates["temperature"] = rate_call(
+                cur.get("conversation") or [], updates["category"], cur.get("signals") or [],
+                cur.get("duration_seconds") or 0, bool(cur.get("answered")))
+            updates["score_source"] = "rules"
     res = await db.ai_call_logs.find_one_and_update(
         {"_id": ObjectId(log_id)}, {"$set": updates}, return_document=True
     )
@@ -1273,6 +1366,34 @@ async def ai_score_log(log_id: str):
         {"_id": doc["_id"]},
         {"$set": {"ai_score": score, "temperature": temp, "score_source": "ai", "ai_reason": reason}},
         return_document=True)
+    return _out(res, with_conversation=True)
+
+
+class ManualScoreIn(BaseModel):
+    details: Dict[str, int]          # points for each detail, e.g. {"budget": 15, "visit": 25}
+    note: Optional[str] = None
+
+
+@router.post("/{log_id}/manual-score")
+async def manual_score_log(log_id: str, payload: ManualScoreIn):
+    """Team enters the points for each detail by hand. The total (0-100) becomes
+    the call's score and stays until someone re-scores it with AI."""
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    bad = [k for k in payload.details if k not in SCORE_DETAILS]
+    if bad:
+        raise HTTPException(400, f"Unknown score detail: {bad[0]}")
+    details = {k: max(0, min(100, int(payload.details.get(k, 0) or 0))) for k in SCORE_DETAILS}
+    score = max(0, min(100, sum(details.values())))
+    temp = "lost" if score == 0 else ("hot" if score >= HOT_FROM else "warm" if score >= WARM_FROM else "cold")
+    res = await db.ai_call_logs.find_one_and_update(
+        {"_id": ObjectId(log_id)},
+        {"$set": {"ai_score": score, "temperature": temp, "score_source": "manual",
+                  "manual_score_details": details,
+                  "ai_reason": (payload.note or "").strip()[:300]}},
+        return_document=True)
+    if not res:
+        raise HTTPException(404, "Call not found")
     return _out(res, with_conversation=True)
 
 
