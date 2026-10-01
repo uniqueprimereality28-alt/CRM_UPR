@@ -265,6 +265,10 @@ class Lead(BaseDocument):
     ai_call_uuid: Optional[str] = None
     ai_call_error: Optional[str] = None
     assigned_agent_type: Optional[str] = None
+    # Green "AI Calling Agent" tag: set when the AI agent spoke to this lead,
+    # regardless of who the lead is assigned to.
+    ai_agent: bool = False
+    ai_agent_at: Optional[str] = None
 
 
 class LeadCreate(BaseModel):
