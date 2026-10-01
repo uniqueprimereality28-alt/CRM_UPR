@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { tempMeta } from "../lib/ai";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -341,7 +342,7 @@ export default function AICallLogs() {
         onPick={(c, r) => { setConn(c); setReason(r); }} />
 
       {/* AI lead shortlist: Hot / Warm / Cold / Call back */}
-      <ShortlistPanel onOpen={setOpenId} />
+      <ShortlistPanel onOpen={setOpenId} assignees={assignees} />
 
       {/* AI lead temperature */}
       <TemperaturePanel stats={stats} temp={temp} onPick={setTemp} />
@@ -723,10 +724,14 @@ const SHORT_TABS = [
 ];
 const CAP_LABEL = { purpose: "Purpose", budget: "Budget", config: "Property", location: "Location", timeline: "Timeline" };
 
-const ShortlistPanel = ({ onOpen }) => {
+const ShortlistPanel = ({ onOpen, assignees = [] }) => {
+  const { isAdmin } = useAuth();
   const [data, setData] = useState(() => readSaved("logs:shortlist", null));
   const [which, setWhich] = useState(() => readSaved("logs:shortlist:tab", "hot"));
+  const [onlyUnassigned, setOnlyUnassigned] = useState(() => readSaved("logs:shortlist:unassigned", false));
   const [loading, setLoading] = useState(false);
+  const [editId, setEditId] = useState(null);     // row whose name is being edited (admins only)
+  const [draft, setDraft] = useState("");
   const load = useCallback(() => {
     setLoading(true);
     api.get("/ai-call-logs/shortlist")
@@ -736,8 +741,48 @@ const ShortlistPanel = ({ onOpen }) => {
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { writeSaved("logs:shortlist:tab", which); }, [which]);
-  const rows = data?.[which] || [];
+  useEffect(() => { writeSaved("logs:shortlist:unassigned", onlyUnassigned); }, [onlyUnassigned]);
+
+  // patch every row (all four lists) that matches `match`, keep the counts honest
+  const patchRows = (match, patch) => setData((d) => {
+    if (!d) return d;
+    const next = { ...d };
+    const un = { ...(d.unassigned_counts || {}) };
+    for (const g of ["hot", "warm", "cold", "callback"]) {
+      next[g] = (d[g] || []).map((r) => (match(r) ? { ...r, ...patch } : r));
+      un[g] = next[g].filter((r) => r.unassigned).length;
+    }
+    next.unassigned_counts = un;
+    writeSaved("logs:shortlist", next);
+    return next;
+  });
+  const phoneKey = (v) => String(v || "").replace(/\D/g, "").slice(-10);
+
+  const assign = async (row, userId) => {
+    try {
+      const { data: res } = await api.post(`/ai-call-logs/${row.id}/assign`, { user_id: userId });
+      patchRows((r) => phoneKey(r.phone) === phoneKey(row.phone),
+        { assigned_to: res.assigned_to, assigned_to_name: res.assigned_to_name, unassigned: !res.assigned_to });
+      toast.success(`Assigned to ${res.assigned_to_name} — AI Agent tag stays on the lead`);
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+  };
+
+  const saveName = async (row) => {
+    const name = draft.trim();
+    if (!name) return toast.error("Name can't be empty");
+    if (name === (row.name || "")) { setEditId(null); return; }
+    try {
+      await api.post(`/ai-call-logs/${row.id}/name`, { name });
+      patchRows((r) => phoneKey(r.phone) === phoneKey(row.phone), { name });
+      setEditId(null);
+      toast.success("Name updated");
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+  };
+
+  const allRows = data?.[which] || [];
+  const rows = onlyUnassigned ? allRows.filter((r) => r.unassigned) : allRows;
   const counts = data?.counts || {};
+  const unCounts = data?.unassigned_counts || {};
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4" data-testid="ai-shortlist">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -745,11 +790,18 @@ const ShortlistPanel = ({ onOpen }) => {
           <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Zap className="h-4 w-4 text-emerald-500" /> AI lead shortlist
           </h3>
-          <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later.</p>
+          <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later. Assigning keeps the AI Calling Agent tag.</p>
         </div>
-        <Button variant="outline" size="sm" className="gap-1.5" onClick={load} disabled={loading}>
-          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant={onlyUnassigned ? "default" : "outline"} size="sm" data-testid="shortlist-unassigned-filter"
+            className={onlyUnassigned ? "gap-1.5 bg-rose-600 hover:bg-rose-700" : "gap-1.5"}
+            onClick={() => setOnlyUnassigned((v) => !v)}>
+            <UserCheck className="h-3.5 w-3.5" /> Unassigned only
+          </Button>
+          <Button variant="outline" size="sm" className="gap-1.5" onClick={load} disabled={loading}>
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
+          </Button>
+        </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {SHORT_TABS.map(([key, label, cls, Icon]) => (
@@ -757,6 +809,11 @@ const ShortlistPanel = ({ onOpen }) => {
             className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition ${cls} ${which === key ? "ring-2 ring-offset-1 ring-slate-400" : "opacity-70 hover:opacity-100"}`}>
             <Icon className="h-3.5 w-3.5" /> {label}
             <span className="rounded-full bg-white/80 px-1.5 text-xs">{counts[key] ?? "…"}</span>
+            {!!unCounts[key] && (
+              <span title="Not assigned to anyone yet" className="rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white">
+                {unCounts[key]} unassigned
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -764,24 +821,56 @@ const ShortlistPanel = ({ onOpen }) => {
         {!data ? (
           <div className="flex items-center gap-2 p-4 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
         ) : rows.length === 0 ? (
-          <div className="p-4 text-sm text-slate-500">No leads in this list yet.</div>
+          <div className="p-4 text-sm text-slate-500">{onlyUnassigned ? "Everyone in this list is assigned." : "No leads in this list yet."}</div>
         ) : (
-          <table className="w-full min-w-[860px] text-left text-sm">
+          <table className="w-full min-w-[1000px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500">
-                <th className="py-2 pr-3">Name / phone</th><th className="pr-3">Result</th><th className="pr-3">Category</th>
-                <th className="pr-3">Score</th><th className="pr-3">Time</th><th>AI summary / remarks</th>
+                <th className="py-2 pr-3">Name / phone</th><th className="pr-3">Assigned</th><th className="pr-3">Result</th>
+                <th className="pr-3">Category</th><th className="pr-3">Score</th><th className="pr-3">Time</th><th>AI summary / remarks</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} onClick={() => onOpen(r.id)} data-testid={`shortlist-row-${r.id}`}
-                  className="cursor-pointer border-b border-slate-100 align-top hover:bg-emerald-50/40">
+                  className={`cursor-pointer border-b border-slate-100 align-top hover:bg-emerald-50/40 ${r.unassigned ? "bg-rose-50/30" : ""}`}>
                   <td className="py-2 pr-3">
-                    <div className="font-medium text-slate-800">{r.name || "(no name)"}</div>
+                    {editId === r.id ? (
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} className="h-7 w-40 text-sm"
+                          onKeyDown={(e) => { if (e.key === "Enter") saveName(r); if (e.key === "Escape") setEditId(null); }}
+                          data-testid={`shortlist-name-input-${r.id}`} />
+                        <Button size="sm" className="h-7 px-2" onClick={() => saveName(r)}><CheckCircle2 className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditId(null)}><X className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 font-medium text-slate-800">
+                        {r.name || "(no name)"}
+                        {isAdmin && (
+                          <button type="button" title="Edit name (admins)" data-testid={`shortlist-name-edit-${r.id}`}
+                            onClick={(e) => { e.stopPropagation(); setDraft(r.name || ""); setEditId(r.id); }}
+                            className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    )}
                     <div className="text-xs text-slate-500">{r.phone}</div>
                     <AiAgentTag className="mt-1" />
-                    {r.assigned_to_name && <div className="mt-1 text-[10px] text-slate-400">Assigned: {r.assigned_to_name}</div>}
+                  </td>
+                  <td className="pr-3" onClick={(e) => e.stopPropagation()}>
+                    {r.unassigned && (
+                      <span className="mb-1 inline-block rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700"
+                        data-testid={`shortlist-unassigned-${r.id}`}>Unassigned</span>
+                    )}
+                    <Select value={r.assigned_to || ""} onValueChange={(v) => assign(r, v)}>
+                      <SelectTrigger className="h-8 w-[160px] bg-white text-xs" data-testid={`shortlist-assign-${r.id}`}>
+                        <SelectValue placeholder="Assign to…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {assignees.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                   </td>
                   <td className="pr-3">{r.result}</td>
                   <td className="pr-3 capitalize">{(r.category || "").replace("_", " ")}</td>
@@ -799,6 +888,7 @@ const ShortlistPanel = ({ onOpen }) => {
                       )}
                     </div>
                     {r.summary}
+                    {r.remark && <div className="mt-1 text-slate-500">Remark: {r.remark}</div>}
                   </td>
                 </tr>
               ))}
