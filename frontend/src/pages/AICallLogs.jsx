@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
-import { readSaved, writeSaved } from "../lib/persist";
 import { tempMeta } from "../lib/ai";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -96,6 +95,15 @@ function buildRange({ from, to, hour }) {
   }
   return { date_from: df, date_to: dt };
 }
+
+// --- keeps filters/page/numbers across a browser refresh (no extra file needed) ---
+const readSaved = (key, fallback = null) => {
+  try { const raw = sessionStorage.getItem("crm:" + key); return raw ? JSON.parse(raw) : fallback; }
+  catch { return fallback; }
+};
+const writeSaved = (key, value) => {
+  try { sessionStorage.setItem("crm:" + key, JSON.stringify(value)); } catch { /* storage blocked */ }
+};
 
 export default function AICallLogs() {
   const [assignees, setAssignees] = useState([]);
