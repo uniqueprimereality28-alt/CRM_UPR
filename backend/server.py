@@ -833,6 +833,79 @@ async def _apply_visibility(query: dict, user: dict) -> dict:
     return q
 
 
+@api.get("/leads/paged")
+async def list_leads_paged(
+    user: dict = Depends(get_current_user),
+    status: Optional[str] = None,
+    tag: Optional[str] = None,
+    follow_up_status: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    source: Optional[str] = None,
+    search: Optional[str] = None,
+    unassigned: Optional[bool] = None,
+    follow_up_from: Optional[str] = None,
+    follow_up_to: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+):
+    """One page of leads + the headline numbers. The browser never has to
+    download every lead just to show 10 of them."""
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    query = await _leads_filter_query(user, status, tag, follow_up_status, assigned_to, source,
+                                      search, unassigned, follow_up_from, follow_up_to)
+    docs = await (db.leads.find(query).sort("created_at", -1)
+                  .skip((page - 1) * page_size).limit(page_size).to_list(page_size))
+    agg = await db.leads.aggregate([
+        {"$match": query},
+        {"$group": {"_id": None, "total": {"$sum": 1},
+                    "talk": {"$sum": {"$ifNull": ["$total_talk_time", 0]}},
+                    "value": {"$sum": {"$ifNull": ["$budget", 0]}}}},
+    ]).to_list(1)
+    t = agg[0] if agg else {"total": 0, "talk": 0, "value": 0}
+    return {"items": [Lead.from_mongo(d).model_dump(by_alias=False) for d in docs],
+            "total": t["total"], "talk": t["talk"], "value": t["value"],
+            "page": page, "page_size": page_size}
+
+
+async def _leads_filter_query(user, status, tag, follow_up_status, assigned_to, source,
+                              search, unassigned, follow_up_from, follow_up_to) -> dict:
+    base_q = _lead_visibility_query(user)
+    query = await _apply_visibility(base_q, user)
+    if can_view_all(user) or user.get("role") == ROLE_TL:
+        if assigned_to:
+            query["assigned_to"] = assigned_to
+        if unassigned:
+            query["assigned_to"] = None
+    if status:
+        query["status"] = status
+    if tag:
+        query["tag"] = tag
+    if follow_up_status:
+        query["follow_up_status"] = follow_up_status
+    if source:
+        query["source"] = source
+    if follow_up_from or follow_up_to:
+        rng: dict = {}
+        if follow_up_from:
+            rng["$gte"] = follow_up_from
+        if follow_up_to:
+            rng["$lte"] = follow_up_to
+        query["follow_up_at"] = rng
+    if search:
+        if len(search) >= 3 and not search.isdigit():
+            query["$text"] = {"$search": search}
+        else:
+            query["$or"] = [
+                {"name": {"$regex": search, "$options": "i"}},
+                {"phone": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+                {"city": {"$regex": search, "$options": "i"}},
+                {"remark": {"$regex": search, "$options": "i"}},
+            ]
+    return query
+
+
 @api.get("/leads", response_model=List[Lead])
 async def list_leads(
     user: dict = Depends(get_current_user),
