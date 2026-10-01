@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
+import { readSaved, writeSaved } from "../lib/persist";
 import { tempMeta } from "../lib/ai";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
@@ -98,28 +99,29 @@ function buildRange({ from, to, hour }) {
 
 export default function AICallLogs() {
   const [assignees, setAssignees] = useState([]);
-  const [stats, setStats] = useState(null);
-  const [list, setList] = useState(null);
+  const sv = useRef(readSaved("logs:view", {})).current;      // where you were before refresh
+  const [stats, setStats] = useState(() => readSaved("logs:stats", null));  // last numbers = instant
+  const [list, setList] = useState(() => readSaved("logs:list", null));
   const [openId, setOpenId] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
 
   // filters
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [hour, setHour] = useState(""); // "" = whole day
-  const [tab, setTab] = useState("all");
-  const [sort, setSort] = useState("newest");
-  const [assigned, setAssigned] = useState("all");
-  const [direction, setDirection] = useState("all");
-  const [conn, setConn] = useState("all");     // all | yes (connected) | no (not connected)
-  const [reason, setReason] = useState("");     // not-connected reason
-  const [temp, setTemp] = useState("all");       // AI temperature filter
-  const [followup, setFollowup] = useState("all"); // all | pending | overdue | done
-  const [q, setQ] = useState("");
-  const [qDebounced, setQDebounced] = useState("");
-  const [page, setPage] = useState(1);
+  const [from, setFrom] = useState(sv.from || "");
+  const [to, setTo] = useState(sv.to || "");
+  const [hour, setHour] = useState(sv.hour || ""); // "" = whole day
+  const [tab, setTab] = useState(sv.tab || "all");
+  const [sort, setSort] = useState(sv.sort || "newest");
+  const [assigned, setAssigned] = useState(sv.assigned || "all");
+  const [direction, setDirection] = useState(sv.direction || "all");
+  const [conn, setConn] = useState(sv.conn || "all");     // all | yes (connected) | no (not connected)
+  const [reason, setReason] = useState(sv.reason || "");     // not-connected reason
+  const [temp, setTemp] = useState(sv.temp || "all");       // AI temperature filter
+  const [followup, setFollowup] = useState(sv.followup || "all"); // all | pending | overdue | done
+  const [q, setQ] = useState(sv.q || "");
+  const [qDebounced, setQDebounced] = useState(sv.q || "");
+  const [page, setPage] = useState(sv.page || 1);
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 350);
@@ -134,7 +136,8 @@ export default function AICallLogs() {
 
   const loadStats = useCallback(() => {
     api.get("/ai-call-logs/stats", { params: { ...range } })
-      .then((r) => setStats(r.data)).catch(() => setStats({ total: 0, by_hour: Array(24).fill(0), by_category: {} }));
+      .then((r) => { setStats(r.data); writeSaved("logs:stats", r.data); })
+      .catch(() => setStats((old) => old || { total: 0, by_hour: Array(24).fill(0), by_category: {} }));
   }, [range]);
 
   const loadList = useCallback(() => {
@@ -150,13 +153,20 @@ export default function AICallLogs() {
       q: qDebounced || undefined,
     };
     api.get("/ai-call-logs", { params })
-      .then((r) => setList(r.data))
+      .then((r) => { setList(r.data); writeSaved("logs:list", r.data); })
       .catch((e) => { setList({ items: [], total: 0, pages: 1 }); toast.error(apiError(e.response?.data?.detail)); });
   }, [range, sort, page, tab, temp, followup, assigned, direction, conn, reason, qDebounced]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { loadList(); }, [loadList]);
-  useEffect(() => { setPage(1); setSelected(new Set()); }, [range, tab, temp, followup, sort, assigned, direction, conn, reason, qDebounced]);
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }   // a refresh keeps your page
+    setPage(1); setSelected(new Set());
+  }, [range, tab, temp, followup, sort, assigned, direction, conn, reason, qDebounced]);
+  useEffect(() => {
+    writeSaved("logs:view", { from, to, hour, tab, sort, assigned, direction, conn, reason, temp, followup, q, page });
+  }, [from, to, hour, tab, sort, assigned, direction, conn, reason, temp, followup, q, page]);
 
   const refreshAll = () => { loadStats(); loadList(); };
 
