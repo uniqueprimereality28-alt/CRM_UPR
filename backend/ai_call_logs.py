@@ -256,6 +256,64 @@ SIG_BHK = _rx([r"\b[1-6]\s?bhk\b", r"\bbedroom\b", r"\bflat\b", r"\bapartment\b"
                r"\bshop\b", r"\bfloor\b", r"\bpenthouse\b", "बीएचके"])
 SIG_LOCATION = _rx([r"\bsector\s?\d+", r"\bgurgaon\b", r"\bgurugram\b", r"\bdelhi\b", r"\bnoida\b", r"\bdwarka\b",
                     r"\bgolf course\b", r"\bsohna\b", r"\bnear\b.*\b(metro|school)\b", "गुड़गांव"])
+# --- "smart" lead readiness: what the customer (or the AI summary) actually captured ---
+CAP_PURPOSE = _rx([r"\bpersonal use\b", r"\bself[- ]?use\b", r"\bend[- ]?use\b", r"\binvest(ment|or|ing)?\b",
+                   r"\bown use\b", r"\bresidential\b"])
+CAP_BUDGET = _rx([r"\bbudget\b", r"\b\d+(\.\d+)?\s*(-|to)?\s*\d*\s*(lakh|lac|lakhs|crore|crores|cr|l)\b",
+                  r"\b\d[\d,]*\s*(per|/)\s*sq", "बजट", "लाख", "करोड़"])
+CAP_CONFIG = _rx([r"\b[1-6](\s?-\s?[1-6])?\s?bhk\b", r"\bplot\b", r"\bvilla\b", r"\bfloor\b", r"\bpenthouse\b",
+                  r"\b\d+(\s?-\s?\d+)?\s*sq\.?\s*(yd|yard|ft|feet)", r"\bcommercial\b", r"\bshop\b"])
+CAP_LOCATION = _rx([r"\bsector\s?\d+", r"\bdwarka\b", r"\bexpressway\b", r"\bspr\b", r"\bsohna\b",
+                    r"\bgolf course\b", r"\bmanesar\b", r"\bnew gurgaon\b", r"\bbhiwadi\b", r"\bpreferred location",
+                    r"\bnear\b", r"\bsagatpur\b", r"\bbarwah"])
+CAP_TIMELINE = _rx([r"\bwithin\s+(\d+|one|two|three|a)\s*(-\s*\d+\s*)?(day|week|month)", r"\b\d+\s*-\s*\d+\s*months?\b",
+                    r"\btimeline\b", r"\bthis month\b", r"\bnext month\b", r"\bimmediate", r"\bsoon\b",
+                    r"\bwithin\s+\d+\s*years?\b"])
+CAP_FAST = _rx([r"\bwithin\s+(one|a|1|2|two|3|three)\s*(-\s*\d+\s*)?(week|month)", r"\b1\s*-\s*2\s*months?\b",
+                r"\bthis month\b", r"\bimmediate", r"\bnext month\b"])
+HINT_CALLBACK = _rx([r"\bcall ?back\b", r"\bcall (him|her|them|me|you|again)?\s*(back|later|tomorrow|again)\b",
+                     r"\b(can'?t|cannot|could not|unable to) (talk|speak)\b", r"\bbusy\b", r"\bcall later\b",
+                     r"\bcall tomorrow\b", r"\bcallback\b", r"\bfollowing (morning|day)\b"])
+CALLBACK_WHEN = re.compile(
+    r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|\b(tomorrow|kal|today|next week|evening|morning|afternoon)\b|"
+    r"\b\d{1,2}(:\d{2})?\s?(am|pm)\b", re.I)
+
+
+_NOT_GIVEN = re.compile(
+    r"[^;.|]*\b(not|never|no)\s+(yet\s+)?(specified|discussed|disclosed|mentioned|provided|shared|stated|decided|finali[sz]ed)\b[^;.|]*"
+    r"|[^;.|]*\b(not currently looking)\b[^;.|]*", re.I)
+
+
+def captured_fields(text: str) -> List[str]:
+    """Which of purpose / budget / config / location / timeline the customer gave.
+    Phrases like "budget not specified" do NOT count as captured."""
+    text = _NOT_GIVEN.sub(" ", text or "")
+    out = []
+    for name, rx in (("purpose", CAP_PURPOSE), ("budget", CAP_BUDGET), ("config", CAP_CONFIG),
+                     ("location", CAP_LOCATION), ("timeline", CAP_TIMELINE)):
+        if rx.search(text or ""):
+            out.append(name)
+    return out
+
+
+def smart_boost(fields: List[str], text: str) -> int:
+    """Extra points for a lead that gave real buying details. 5 per detail, a budget
+    is worth more, and a short timeline (within ~2 months) is a strong buying signal."""
+    pts = 5 * len(fields)
+    if "budget" in fields:
+        pts += 3
+    if CAP_FAST.search(text or ""):
+        pts += 8
+    return pts
+
+
+def callback_when(text: str) -> str:
+    seen: dict = {}
+    for m in CALLBACK_WHEN.finditer(text or ""):
+        seen.setdefault(m.group(0).lower(), m.group(0))
+    return ", ".join(seen.values())[:60]
+
+
 SIG_WHATSAPP = _rx([r"\bwhats ?app\b", r"\bbrochure\b", r"\bmessage (me|kar)", "व्हाट्सएप"])
 SIG_CALLBACK = _rx([r"\bcall (me )?(back|later|tomorrow|kal)\b", r"\bcallback\b", r"\bbusy\b", r"\blater\b",
                     r"\bbaad (me|mein)\b", r"\bkal\b.*\bcall\b", r"\bphir se\b", "बाद में", "कल फोन", "व्यस्त"])
@@ -332,6 +390,12 @@ def analyse_call(conversation: List[dict], status: str, disposition: str, durati
     if score == 0 and len(SIG_YES.findall(txt)) >= 2 and customer_words >= 6:
         score += 1  # engaged, said yes a few times
 
+    # The AI summary often says "agreed to call back tomorrow" even when the
+    # customer's own lines don't (the agent said it) — so read the summary too.
+    if HINT_CALLBACK.search(hint) and not re.search(r"\b(not interested|do not call|dnc|wrong number)\b", hint):
+        if "callback" not in signals:
+            signals.append("callback")
+
     # Hints from the export's own disposition / summary (if present)
     if re.search(r"\b(not interested|declined|do not call|dnc|wrong number)\b", hint):
         score -= 3; signals.append("not_interested")
@@ -368,6 +432,16 @@ def analyse_call(conversation: List[dict], status: str, disposition: str, durati
             signals.append("short_call")
     else:
         cat = "other"
+    # SMART: a customer who has given real buying details (budget + at least two of
+    # purpose / property type / location / timeline) is a qualified (hot) lead,
+    # even when the exact keywords above were not spoken.
+    if cat in ("interested", "other", "callback") and not said_no:
+        cap = captured_fields(f"{txt} {hint}")
+        if "budget" in cap and len(cap) >= 3:
+            cat = "qualified"
+            for k in ("budget", "bhk", "location"):
+                if k not in signals and ({"budget": "budget", "bhk": "config", "location": "location"}[k] in cap):
+                    signals.append(k)
     return {"category": cat, "answered": cat != "no_answer",
             "signals": _dedupe(signals), "score": score}
 
@@ -383,7 +457,7 @@ def temperature_band(score: int, category: str) -> str:
 
 
 def rate_call(conversation: List[dict], category: str, signals: List[str],
-              duration: int, answered: bool) -> tuple:
+              duration: int, answered: bool, summary: str = "") -> tuple:
     """AI lead score 0-100 from the WHOLE conversation + its temperature.
     Looks at what the customer said (interest, budget, BHK, location, visit,
     WhatsApp), how much they engaged (turns / words) and how long they stayed.
@@ -396,6 +470,11 @@ def rate_call(conversation: List[dict], category: str, signals: List[str],
     pts += min(12, len(theirs) * 2)      # back-and-forth
     pts += min(8, words // 8)            # how much they talked
     pts += min(8, (duration or 0) // 20)  # how long they stayed
+    cust = " ".join((t.get("text") or "") for t in theirs)
+    cap = captured_fields(f"{cust} {summary or ''}")
+    pts += smart_boost(cap, f"{cust} {summary or ''}")
+    if len(cap) >= 2 and category not in ("qualified", "interested"):
+        pts = max(pts, WARM_FROM + 1)     # gave two real details (e.g. purpose + location) => at least warm
     if category == "qualified":
         pts = max(pts, HOT_FROM)          # a hand-marked / clear qualified lead is at least hot
     elif category == "interested":
@@ -723,8 +802,11 @@ def _build_doc(row: dict) -> Optional[dict]:
 
     result = analyse_call(conversation, status, disposition, duration, summary)
     ai_score, temperature = rate_call(conversation, result["category"], result["signals"],
-                                      duration, result["answered"])
+                                      duration, result["answered"], summary)
     summary_is_auto = not summary
+    cust_txt = " ".join(t["text"] for t in conversation if t["speaker"] != "agent")
+    captured = captured_fields(f"{cust_txt} {summary}") if result["answered"] and result["category"] not in NOT_INTERESTED_SET else []
+    cb_when = callback_when(summary) if "callback" in result["signals"] else ""
     if summary_is_auto:
         summary = auto_summary(conversation, result["category"], result["signals"])
     followup = detect_followup(conversation, result["category"], result["signals"],
@@ -740,6 +822,8 @@ def _build_doc(row: dict) -> Optional[dict]:
         "duration_seconds": duration,
         "status": status,
         "answered": result["answered"],
+        "captured": captured,
+        "callback_when": cb_when,
         # Picked up (even if the person stayed silent) = the lead was CONTACTED.
         "contacted": bool(result["answered"]),
         "not_connected_reason": None if result["answered"] else not_connected_reason(status, result["signals"], duration),
@@ -887,7 +971,7 @@ async def _backfill_scores() -> None:
     async for d in cur:
         sc, temp = rate_call(d.get("conversation") or [], d.get("category") or "other",
                              d.get("signals") or [], d.get("duration_seconds") or 0,
-                             bool(d.get("answered")))
+                             bool(d.get("answered")), d.get("summary") or "")
         await db.ai_call_logs.update_one(
             {"_id": d["_id"]}, {"$set": {"ai_score": sc, "temperature": temp, "score_source": "rules"}})
 
@@ -907,68 +991,50 @@ async def _backfill_followups() -> None:
 SYSTEM_ACTOR = {"_id": "system", "name": "AI Call Logs"}
 
 
-async def _mark_lead_contacted(call: dict, actor: Optional[dict] = None) -> bool:
-    """A picked-up call (even a silent one) means the lead was contacted.
-    Finds the CRM lead by phone and bumps status new -> contacted. It only ever
-    moves \"new\" forward; a lead already at qualified / site_visit / won / lost
-    is never pushed back. Never creates leads. Returns True if a lead changed."""
-    digits = (call.get("phone") or "")[-10:]
-    if not digits:
-        return False
-    lead = await db.leads.find_one({"phone": {"$regex": re.escape(digits) + "$"}})
-    if not lead:
-        return False
-    when = call.get("started_at") or now_iso()
-    upd = {}
-    if not lead.get("last_contacted_at") or str(lead["last_contacted_at"]) < str(when):
-        upd["last_contacted_at"] = when
-    changed = False
-    if (lead.get("status") or "new") == "new":
-        upd["status"] = "contacted"
-        changed = True
-    if upd:
-        upd["updated_at"] = now_iso()
-        await db.leads.update_one({"_id": lead["_id"]}, {"$set": upd})
-    if changed:
-        try:
-            await _log_activity(str(lead["_id"]), actor or SYSTEM_ACTOR, "status_change",
-                                "Status changed from new to contacted (AI call was picked up)")
-        except Exception:  # noqa: BLE001 — activity log must never block the import
-            logger.exception("activity log failed")
-    return changed
-
-
-async def _backfill_contacted() -> None:
-    """Existing picked-up calls (silent ones too) get marked contacted once,
-    and their CRM lead is moved new -> contacted. Uses ONE pass over the leads
-    (phone -> lead map) instead of a database search per call, so it is fast."""
+async def _sync_leads_bulk() -> None:
+    """Every picked-up AI call (even silent):
+      * the CRM lead gets the green "AI Calling Agent" tag — whoever it is assigned to
+        (assignment is never touched),
+      * a lead still on "new" moves to "contacted",
+      * last_contacted_at is brought up to date.
+    One pass over the leads (phone -> lead map), so it stays fast."""
     calls = await db.ai_call_logs.find(
-        {"answered": True, "contacted_synced": {"$ne": True}},
+        {"answered": True, "ai_tag_synced": {"$ne": True}},
         {"phone": 1, "started_at": 1},
     ).to_list(None)
     if not calls:
         return
     by_phone: dict = {}
-    async for l in db.leads.find({}, {"phone": 1, "status": 1, "last_contacted_at": 1}):
+    async for l in db.leads.find({}, {"phone": 1, "status": 1}):
         key = re.sub(r"\D", "", str(l.get("phone") or ""))[-10:]
         if key:
-            by_phone.setdefault(key, l)
-    to_contacted, touched = [], set()
+            by_phone.setdefault(key, []).append(l)
+    latest: dict = {}
     for c in calls:
-        l = by_phone.get(re.sub(r"\D", "", str(c.get("phone") or ""))[-10:])
-        if l and l["_id"] not in touched and (l.get("status") or "new") == "new":
-            touched.add(l["_id"])
-            to_contacted.append(l["_id"])
-    if to_contacted:
-        stamp = now_iso()
-        for i in range(0, len(to_contacted), 500):
-            await db.leads.update_many(
-                {"_id": {"$in": to_contacted[i:i + 500]}, "status": {"$in": ["new", None]}},
-                {"$set": {"status": "contacted", "last_contacted_at": stamp, "updated_at": stamp}})
-    ids = [c["_id"] for c in calls]
-    for i in range(0, len(ids), 1000):
+        key = re.sub(r"\D", "", str(c.get("phone") or ""))[-10:]
+        for l in by_phone.get(key, []):
+            when = str(c.get("started_at") or "")
+            if when > latest.get(l["_id"], ("", ""))[0]:
+                latest[l["_id"]] = (when, l.get("status") or "new")
+    stamp = now_iso()
+    ids = list(latest)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        await db.leads.update_many(
+            {"_id": {"$in": chunk}},
+            {"$set": {"ai_agent": True, "ai_agent_at": stamp, "last_contacted_at": stamp}})
+        await db.leads.update_many(
+            {"_id": {"$in": chunk}, "status": {"$in": ["new", None]}},
+            {"$set": {"status": "contacted", "updated_at": stamp}})
+    cids = [c["_id"] for c in calls]
+    for i in range(0, len(cids), 1000):
         await db.ai_call_logs.update_many(
-            {"_id": {"$in": ids[i:i + 1000]}}, {"$set": {"contacted": True, "contacted_synced": True}})
+            {"_id": {"$in": cids[i:i + 1000]}},
+            {"$set": {"contacted": True, "contacted_synced": True, "ai_tag_synced": True}})
+
+
+async def _backfill_contacted() -> None:
+    await _sync_leads_bulk()
 
 
 _BACKFILL_STATE = {"done": False, "running": False}
@@ -998,6 +1064,58 @@ async def _run_backfills(force: bool = False) -> None:
         finally:
             _BACKFILL_STATE["running"] = False
     asyncio.create_task(_job())
+
+
+def _phone10(v) -> str:
+    return re.sub(r"\D", "", str(v or ""))[-10:]
+
+
+@router.get("/shortlist")
+async def shortlist(limit: int = 300):
+    """The AI lead shortlist: Hot / Warm / Cold / Call back.
+    * one row per phone number (their best / latest call),
+    * a hot lead stays in HOT even if it asked for a call back (shown with a chip),
+    * a warm or cold lead that asked for a call back goes to CALL BACK only,
+    * not-interested, never-picked-up and wrong numbers are left out."""
+    await _run_backfills()
+    docs = await db.ai_call_logs.find(
+        {"answered": True, "category": {"$nin": list(NOT_INTERESTED_SET)}},
+        {"conversation": 0},
+    ).sort("started_at", -1).to_list(20000)
+    best: dict = {}
+    for d in docs:
+        if "wrong_number" in (d.get("signals") or []):
+            continue
+        k = _phone10(d.get("phone")) or str(d["_id"])
+        cur = best.get(k)
+        if not cur or (d.get("ai_score") or 0) > (cur.get("ai_score") or 0):
+            best[k] = d
+    # which of these phones are already tagged / assigned in the CRM
+    crm: dict = {}
+    async for l in db.leads.find({}, {"phone": 1, "assigned_to_name": 1}):
+        crm.setdefault(_phone10(l.get("phone")), l)
+    groups = {"hot": [], "warm": [], "cold": [], "callback": []}
+    for k, d in best.items():
+        temp = d.get("temperature") or "cold"
+        has_cb = "callback" in (d.get("signals") or [])
+        if temp == "lost":
+            continue
+        lead = crm.get(k) or {}
+        row = {
+            "id": str(d["_id"]), "name": (d.get("name") or "").strip(), "phone": d.get("phone"),
+            "result": "Interested" if d.get("category") in INTERESTED_SET else "Undecided",
+            "category": d.get("category"), "temperature": temp, "ai_score": d.get("ai_score") or 0,
+            "duration_seconds": d.get("duration_seconds") or 0, "summary": d.get("summary") or "",
+            "captured": d.get("captured") or [], "callback": has_cb,
+            "callback_when": d.get("callback_when") or "", "started_at": d.get("started_at"),
+            "assigned_to_name": lead.get("assigned_to_name"), "ai_agent": True,
+        }
+        group = "hot" if temp == "hot" else ("callback" if has_cb else temp)
+        groups[group].append(row)
+    for g in groups.values():
+        g.sort(key=lambda r: (-r["ai_score"], str(r["started_at"] or "")), reverse=False)
+    counts = {g: len(v) for g, v in groups.items()}
+    return {"counts": counts, **{g: v[:max(1, min(limit, 1000))] for g, v in groups.items()}}
 
 
 @router.get("/stats")
@@ -1253,7 +1371,8 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
                     upd["ai_score"], upd["temperature"] = d["ai_score"], d["temperature"]
             elif not keep_score:
                 upd["ai_score"], upd["temperature"] = rate_call(
-                    d["conversation"], old["category"], d["signals"], d["duration_seconds"], d["answered"])
+                    d["conversation"], old["category"], d["signals"], d["duration_seconds"], d["answered"],
+                    d.get("summary") or "")
             if not keep_score:
                 upd["score_source"] = "rules"
             upd["contacted"] = d["contacted"]
@@ -1276,16 +1395,6 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
     if fresh:
         await db.ai_call_logs.insert_many(fresh)
 
-    # Every picked-up call (even silent) => the CRM lead becomes "contacted"
-    contacted_marked = 0
-    for d in docs:
-        if not d.get("contacted"):
-            continue
-        if await _mark_lead_contacted(d, user):
-            contacted_marked += 1
-        await db.ai_call_logs.update_one(
-            {"call_key": d["call_key"]}, {"$set": {"contacted": True, "contacted_synced": True}})
-
     await db.ai_call_logs.create_index("call_key", unique=False)
     await db.ai_call_logs.create_index("started_at")
     await _run_backfills(force=True)
@@ -1294,7 +1403,6 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
         "updated": updated,
         "duplicates": updated,
         "skipped": skipped,
-        "contacted_marked": contacted_marked,
         "interested_found": sum(1 for d in fresh if d["category"] in INTERESTED_SET),
     }
 
@@ -1352,7 +1460,7 @@ async def patch_log(log_id: str, payload: LogPatch):
         if cur.get("score_source") != "manual":   # keep a hand-entered score as it is
             updates["ai_score"], updates["temperature"] = rate_call(
                 cur.get("conversation") or [], updates["category"], cur.get("signals") or [],
-                cur.get("duration_seconds") or 0, bool(cur.get("answered")))
+                cur.get("duration_seconds") or 0, bool(cur.get("answered")), cur.get("summary") or "")
             updates["score_source"] = "rules"
     res = await db.ai_call_logs.find_one_and_update(
         {"_id": ObjectId(log_id)}, {"$set": updates}, return_document=True
