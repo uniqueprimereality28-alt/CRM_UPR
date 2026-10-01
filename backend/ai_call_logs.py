@@ -315,7 +315,9 @@ def callback_when(text: str) -> str:
 
 
 SIG_WHATSAPP = _rx([r"\bwhats ?app\b", r"\bbrochure\b", r"\bmessage (me|kar)", "व्हाट्सएप"])
-SIG_CALLBACK = _rx([r"\bcall (me )?(back|later|tomorrow|kal)\b", r"\bcallback\b", r"\bbusy\b", r"\blater\b",
+SIG_CALLBACK = _rx([r"\bcall (me |him |her |us )?(maybe |again |it )?(back|later|tomorrow|kal)\b", r"\bcallback\b", r"\bbusy\b", r"\blater\b",
+                    r"\bafter a while\b", r"\b(can'?t|cannot|could not|unable to) (talk|speak)( right now| now)?\b",
+                    r"\b(tomorrow|kal)\b.{0,25}\b(morning|evening|afternoon|subah|shaam)\b",
                     r"\bbaad (me|mein)\b", r"\bkal\b.*\bcall\b", r"\bphir se\b", "बाद में", "कल फोन", "व्यस्त"])
 SIG_YES = _rx([r"\b(haan|han|ha|yes|yeah|sure|ok(ay)?|theek hai|bilkul|zaroor)\b", "हाँ", "हां", "जी हाँ", "ठीक है"])
 SIG_NO = _rx([r"\bnot interested\b", r"\bno interest\b", r"\bnahi chahiye\b", r"\bnahin chahiye\b",
@@ -586,6 +588,9 @@ _RX_FU_TOMORROW = re.compile(r"\b(tomorrow|tmrw|kal)\b|कल", re.I)
 _RX_FU_DAYAFTER = re.compile(r"\b(day after tomorrow|parso|parson)\b|परसों|परसो", re.I)
 _RX_FU_NEXTWEEK = re.compile(r"\b(next week|agle hafte|agle week|next monday)\b|अगले हफ्ते|अगले सप्ताह", re.I)
 _RX_FU_NEXTMONTH = re.compile(r"\b(next month|agle mahine|agle month)\b|अगले महीने", re.I)
+_WORD_NUMS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+              "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+_RX_FU_CLOCK_WORD = re.compile(r"\b(" + "|".join(_WORD_NUMS) + r")\s*(o'?clock|am|pm|baje|bje)\b", re.I)
 _RX_FU_CLOCK = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|baje|bje|o'?clock)\b|(\d{1,2})(?::(\d{2}))?\s*बजे", re.I)
 _PART_OF_DAY = [
     (re.compile(r"\b(subah|morning)\b|सुबह", re.I), 10),
@@ -629,6 +634,7 @@ def _extract_followup_when(text: str, base: datetime) -> tuple:
 
     hour: Optional[int] = None
     minute = 0
+    t = _RX_FU_CLOCK_WORD.sub(lambda m: f"{_WORD_NUMS[m.group(1).lower()]} {m.group(2)}", t)  # "nine o'clock" -> "9 o'clock"
     c = _RX_FU_CLOCK.search(t)
     if c:
         h = int(c.group(1) or c.group(4))
@@ -696,6 +702,8 @@ def detect_followup(conversation: List[dict], category: str, signals: List[str],
     # Agent confirmations ("Theek hai, kal 5 baje call karungi") also carry the agreed time.
     agent_confirm = " ".join(t["text"] for t in conversation
                              if t.get("speaker") != "customer"
+                             and "?" not in t.get("text", "")   # a question ("this evening, tomorrow, or ...?") is not an agreed time
+                             and not re.search(r"\bwhen should\b|\bwhat time\b", t.get("text", ""), re.I)
                              and re.search(r"\b(call|phone|contact|milte|baat)\b|कॉल|फोन", t.get("text", ""), re.I))
     when, phrase, explicit = _extract_followup_when(customer_text, base)
     if when is None and agent_confirm:
@@ -997,6 +1005,33 @@ async def _backfill_followups() -> None:
         await db.ai_call_logs.update_one({"_id": d["_id"]}, {"$set": f})
 
 
+async def _backfill_callbacks() -> None:
+    """Calls analysed before their AI summary existed missed a "call me tomorrow" request
+    (no callback signal, no follow-up). Re-read them with the summary now filled in.
+    Hand-edited follow-ups and hand-set categories are never touched."""
+    cur = db.ai_call_logs.find({
+        "answered": True, "followup_needed": {"$ne": True}, "followup_manual": {"$ne": True},
+        "category_manual": {"$ne": True}, "category": {"$in": ["other", "callback"]},
+    })
+    async for d in cur:
+        if not HINT_CALLBACK.search((d.get("summary") or "").lower()):
+            continue
+        conv = d.get("conversation") or []
+        cust = " ".join(t.get("text", "") for t in conv if t.get("speaker") == "customer")
+        if re.search(r"\bi('ll| will| shall) (call|ring|phone)( you)?( back)?\b", cust, re.I):
+            continue   # the customer said THEY will call us back - nothing for us to chase
+        res = analyse_call(conv, d.get("status") or "", "", d.get("duration_seconds") or 0, d.get("summary") or "")
+        if "callback" not in res["signals"]:
+            continue
+        f = detect_followup(conv, res["category"], res["signals"], bool(d.get("answered")),
+                            _parse_datetime(d.get("started_at")))
+        if not f["followup_needed"]:
+            continue
+        f.update({"signals": res["signals"], "category": res["category"], "category_auto": res["category"],
+                  "callback_when": callback_when(d.get("summary") or ""), "followup_done": False})
+        await db.ai_call_logs.update_one({"_id": d["_id"]}, {"$set": f})
+
+
 SYSTEM_ACTOR = {"_id": "system", "name": "AI Call Logs"}
 
 
@@ -1054,6 +1089,7 @@ async def _backfills_now() -> None:
     await _backfill_pickups()
     await _backfill_scores()
     await _backfill_followups()
+    await _backfill_callbacks()
     await _backfill_contacted()
 
 
