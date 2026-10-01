@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { readSaved, writeSaved } from "../lib/persist";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
   AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall, Bot,
@@ -53,18 +54,23 @@ const tagMeta = (v) => TAGS.find((t) => t.v === v) || (v ? { v, label: v, cls: "
 export default function Leads() {
   const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
   const [params, setParams] = useSearchParams();
-  const [leads, setLeads] = useState(null);
+  // Saved view (filters + page + last result) so a refresh stays exactly where you were
+  const saved = useRef(readSaved("leads:view", {})).current;
+  const lastData = useRef(readSaved("leads:data", null)).current;
+  const [leads, setLeads] = useState(lastData?.items || null);
+  const [total, setTotal] = useState(lastData?.total || 0);
+  const [agg, setAgg] = useState({ talk: lastData?.talk || 0, value: lastData?.value || 0 });
   const PAGE_SIZE = 10;
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(saved.page || 1);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState([]);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
-  const [tag, setTag] = useState("all");
-  const [fu, setFu] = useState("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [agentFilter, setAgentFilter] = useState(params.get("unassigned") ? "unassigned" : "all");
+  const [search, setSearch] = useState(saved.search || "");
+  const [status, setStatus] = useState(saved.status || "all");
+  const [tag, setTag] = useState(saved.tag || "all");
+  const [fu, setFu] = useState(saved.fu || "all");
+  const [dateFrom, setDateFrom] = useState(saved.dateFrom || "");
+  const [dateTo, setDateTo] = useState(saved.dateTo || "");
+  const [agentFilter, setAgentFilter] = useState(params.get("unassigned") ? "unassigned" : (saved.agentFilter || "all"));
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [assignTo, setAssignTo] = useState("");
@@ -106,16 +112,32 @@ export default function Leads() {
     }
     if (isManager && agentFilter === "unassigned") q.unassigned = true;
     else if (isManager && agentFilter !== "all") q.assigned_to = agentFilter;
+    q.page = page;
+    q.page_size = PAGE_SIZE;
     setRefreshing(true);
     try {
-      const { data } = await api.get("/leads", { params: q });
-      setLeads(data);
+      // Only ONE page of 10 comes from the server (plus the headline numbers)
+      const { data } = await api.get("/leads/paged", { params: q });
+      setLeads(data.items);
+      setTotal(data.total);
+      setAgg({ talk: data.talk, value: data.value });
       setSelected([]);
-      setPage(1); // reset to page 1 whenever the underlying result set changes
+      writeSaved("leads:data", data);
     } finally {
       setRefreshing(false);
     }
-  }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager]);
+  }, [status, tag, fu, dateFrom, dateTo, search, agentFilter, isManager, page]);
+
+  // Filters changed => back to page 1 (but not on the very first render, so a refresh keeps your page)
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    setPage(1);
+  }, [status, tag, fu, dateFrom, dateTo, search, agentFilter]);
+
+  useEffect(() => {
+    writeSaved("leads:view", { page, search, status, tag, fu, dateFrom, dateTo, agentFilter });
+  }, [page, search, status, tag, fu, dateFrom, dateTo, agentFilter]);
 
   useEffect(() => {
     const t = setTimeout(load, search ? 350 : 0);
@@ -136,12 +158,9 @@ export default function Leads() {
   // and just hidden with CSS). Rendering is capped to one page of 10 at a
   // time; everything above (filters, search, select-all, export, etc.) keeps
   // working against the full `leads` list.
-  const totalPages = Math.max(1, Math.ceil((leads?.length || 0) / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil((total || 0) / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
-  const visibleLeads = useMemo(
-    () => leads?.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
-    [leads, safePage]
-  );
+  const visibleLeads = leads; // the server already sent just this page
   // Windowed page numbers, e.g. for page 7 of 20: 5 6 7 8 9
   const pageNumbers = useMemo(() => {
     const end = Math.min(totalPages, Math.max(5, safePage + 2));
@@ -151,7 +170,7 @@ export default function Leads() {
     return nums;
   }, [safePage, totalPages]);
 
-  const pager = leads && leads.length > PAGE_SIZE && (
+  const pager = leads && total > PAGE_SIZE && (
     <div className="flex flex-wrap items-center justify-center gap-1.5 py-3">
       <button type="button" disabled={safePage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
         data-testid="leads-page-prev"
@@ -171,7 +190,7 @@ export default function Leads() {
         className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 disabled:opacity-40 hover:bg-slate-50">
         Next
       </button>
-      <span className="ml-2 text-xs text-slate-400">Page {safePage} of {totalPages} · {leads.length} leads</span>
+      <span className="ml-2 text-xs text-slate-400">Page {safePage} of {totalPages} · {total} leads</span>
     </div>
   );
   const toggle = (id) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -405,13 +424,7 @@ export default function Leads() {
     }
   };
 
-  const totals = useMemo(() => {
-    if (!leads) return { talk: 0, value: 0 };
-    return {
-      talk: leads.reduce((a, l) => a + (l.total_talk_time || 0), 0),
-      value: leads.reduce((a, l) => a + (l.budget || 0), 0),
-    };
-  }, [leads]);
+  const totals = agg; // headline numbers for ALL matching leads, calculated by the server
 
   return (
     <div className="space-y-5" data-testid="leads-page">
@@ -419,7 +432,7 @@ export default function Leads() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">{isManager ? "All Leads" : "My Leads"}</h1>
           <p className="mt-1.5 flex items-center gap-1.5 text-sm text-slate-500">
-            {leads ? `${leads.length} leads · ${fmtDuration(totals.talk)} talk time · ${fmtMoney(totals.value)} value` : "Loading…"}
+            {leads ? `${total} leads · ${fmtDuration(totals.talk)} talk time · ${fmtMoney(totals.value)} value` : "Loading…"}
             {refreshing && leads && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" data-testid="leads-refreshing" />}
           </p>
         </div>
@@ -1074,7 +1087,7 @@ export default function Leads() {
               })}
             </tbody>
           </table>
-          {leads && leads.length > PAGE_SIZE && <div className="border-t border-slate-200">{pager}</div>}
+          {leads && total > PAGE_SIZE && <div className="border-t border-slate-200">{pager}</div>}
         </div>
       </div>
     </div>
