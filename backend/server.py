@@ -1121,7 +1121,36 @@ async def export_leads(
         return ",".join(parts) + "," + last3
 
     columns = ["Name", "Phone Number", "Email", "Status", "Follow-up Status", "Tag",
-               "Budget", "Remark", "Source", "Assigned To", "Created At"]
+               "Budget", "Remark", "Source", "Assigned To", "Created At",
+               "AI Agent", "AI Temperature", "AI Call Remarks"]
+
+    # AI-agent info by phone number: a lead whose number matches an AI call gets the
+    # "AI Agent" tag and that call's remarks, even if it was added to the CRM separately.
+    def _p10(v):
+        return re.sub(r"\D", "", str(v or ""))[-10:]
+    ai_by_phone: dict = {}
+    wanted = {_p10(d.get("phone")) for d in docs if d.get("phone")}
+    wanted.discard("")
+    if wanted:
+        async for c in db.ai_call_logs.find(
+                {"answered": True},
+                {"phone": 1, "started_at": 1, "summary": 1, "remark": 1, "temperature": 1}).sort("started_at", 1):
+            k = _p10(c.get("phone"))
+            if k in wanted:
+                ai_by_phone[k] = c   # ascending sort, so the latest call wins
+
+    def ai_cols(d):
+        c = ai_by_phone.get(_p10(d.get("phone")))
+        if not c and not d.get("ai_agent"):
+            return ["", "", ""]
+        parts = []
+        if c:
+            if (c.get("summary") or "").strip():
+                parts.append(c["summary"].strip())
+            if (c.get("remark") or "").strip():
+                parts.append("Remark: " + c["remark"].strip())
+        temp = (c or {}).get("temperature") or d.get("ai_temperature") or ""
+        return ["AI Agent", str(temp).capitalize() if temp else "", " | ".join(parts)]
 
     def row_for(d):
         budget = d.get("budget")
@@ -1131,7 +1160,7 @@ async def export_leads(
             d.get("tag") or "", budget if budget else "",
             d.get("remark") or "", d.get("source") or "",
             d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
-        ]
+        ] + ai_cols(d)
 
     def row_for_pdf(d):
         budget = d.get("budget")
@@ -1141,7 +1170,7 @@ async def export_leads(
             d.get("tag") or "", f"Rs {_indian_grouping(budget)}" if budget else "",
             d.get("remark") or "", d.get("source") or "",
             d.get("assigned_to_name") or "Unassigned", (d.get("created_at") or "")[:10],
-        ]
+        ] + ai_cols(d)
 
     if format == "csv":
         buf = io.StringIO()
@@ -1182,7 +1211,7 @@ async def export_leads(
             # Name, Phone, Email, Status, Follow-up Status, Tag, Budget, Remark,
             # Source, Assigned To, Created At — Name and Remark get the most
             # room since they carry the longest free-text.
-            col_ratios = [1.3, 0.95, 1.3, 0.75, 0.9, 0.65, 0.85, 1.5, 0.85, 1.0, 0.75]
+            col_ratios = [1.2, 0.95, 1.1, 0.7, 0.8, 0.6, 0.8, 1.3, 0.75, 0.9, 0.7, 0.6, 0.7, 1.6]
             ratio_total = sum(col_ratios)
             col_widths = [usable_width * r / ratio_total for r in col_ratios]
 
