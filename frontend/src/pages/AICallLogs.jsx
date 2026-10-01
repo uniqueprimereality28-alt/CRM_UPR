@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, User2, Phone, PhoneIncoming, PhoneOutgoing, PhoneCall, Sparkles, BadgeCheck,
   Upload, FileDown, Search, Loader2, Clock, UserCheck, CheckCircle2, RefreshCw, ArrowUpDown,
-  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet, CalendarClock, Pencil,
+  PhoneOff, Copy, MessageSquare, X, Flame, Download, FileText, FileSpreadsheet, CalendarClock, Pencil, Zap, Snowflake,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration } from "../lib/api";
@@ -339,6 +339,9 @@ export default function AICallLogs() {
       {/* connected vs not connected */}
       <ConnectionPanel stats={stats} conn={conn} reason={reason}
         onPick={(c, r) => { setConn(c); setReason(r); }} />
+
+      {/* AI lead shortlist: Hot / Warm / Cold / Call back */}
+      <ShortlistPanel onOpen={setOpenId} />
 
       {/* AI lead temperature */}
       <TemperaturePanel stats={stats} temp={temp} onPick={setTemp} />
@@ -699,6 +702,110 @@ const FollowupCard = ({ call, onSave }) => {
       <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Follow-up note (optional)"
         className="mt-2 h-8 text-xs" maxLength={500}
         onBlur={() => note !== (call.followup_note || "") && onSave({ followup_note: note }, "Note saved")} />
+    </div>
+  );
+};
+
+/* Green "AI Calling Agent" tag — shown on a lead even when it is assigned to a person */
+const AiAgentTag = ({ className = "" }) => (
+  <span title="This lead was called by the AI Calling Agent" data-testid="ai-agent-tag"
+    className={`inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-gradient-to-r from-emerald-500 to-green-400 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-emerald-200 ${className}`}>
+    <Zap className="h-3 w-3 fill-white" /> AI Calling Agent
+  </span>
+);
+
+/* ---------- AI lead shortlist: Hot / Warm / Cold / Call back ---------- */
+const SHORT_TABS = [
+  ["hot", "Hot", "text-orange-700 border-orange-300 bg-orange-50", Flame],
+  ["warm", "Warm", "text-amber-700 border-amber-300 bg-amber-50", Sparkles],
+  ["cold", "Cold", "text-slate-600 border-slate-300 bg-slate-100", Snowflake],
+  ["callback", "Call back", "text-sky-700 border-sky-300 bg-sky-50", CalendarClock],
+];
+const CAP_LABEL = { purpose: "Purpose", budget: "Budget", config: "Property", location: "Location", timeline: "Timeline" };
+
+const ShortlistPanel = ({ onOpen }) => {
+  const [data, setData] = useState(() => readSaved("logs:shortlist", null));
+  const [which, setWhich] = useState(() => readSaved("logs:shortlist:tab", "hot"));
+  const [loading, setLoading] = useState(false);
+  const load = useCallback(() => {
+    setLoading(true);
+    api.get("/ai-call-logs/shortlist")
+      .then((r) => { setData(r.data); writeSaved("logs:shortlist", r.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { writeSaved("logs:shortlist:tab", which); }, [which]);
+  const rows = data?.[which] || [];
+  const counts = data?.counts || {};
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4" data-testid="ai-shortlist">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+            <Zap className="h-4 w-4 text-emerald-500" /> AI lead shortlist
+          </h3>
+          <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later.</p>
+        </div>
+        <Button variant="outline" size="sm" className="gap-1.5" onClick={load} disabled={loading}>
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Refresh
+        </Button>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {SHORT_TABS.map(([key, label, cls, Icon]) => (
+          <button key={key} type="button" onClick={() => setWhich(key)} data-testid={`shortlist-tab-${key}`}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold transition ${cls} ${which === key ? "ring-2 ring-offset-1 ring-slate-400" : "opacity-70 hover:opacity-100"}`}>
+            <Icon className="h-3.5 w-3.5" /> {label}
+            <span className="rounded-full bg-white/80 px-1.5 text-xs">{counts[key] ?? "…"}</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 overflow-x-auto">
+        {!data ? (
+          <div className="flex items-center gap-2 p-4 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+        ) : rows.length === 0 ? (
+          <div className="p-4 text-sm text-slate-500">No leads in this list yet.</div>
+        ) : (
+          <table className="w-full min-w-[860px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-[11px] uppercase tracking-wider text-slate-500">
+                <th className="py-2 pr-3">Name / phone</th><th className="pr-3">Result</th><th className="pr-3">Category</th>
+                <th className="pr-3">Score</th><th className="pr-3">Time</th><th>AI summary / remarks</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} onClick={() => onOpen(r.id)} data-testid={`shortlist-row-${r.id}`}
+                  className="cursor-pointer border-b border-slate-100 align-top hover:bg-emerald-50/40">
+                  <td className="py-2 pr-3">
+                    <div className="font-medium text-slate-800">{r.name || "(no name)"}</div>
+                    <div className="text-xs text-slate-500">{r.phone}</div>
+                    <AiAgentTag className="mt-1" />
+                    {r.assigned_to_name && <div className="mt-1 text-[10px] text-slate-400">Assigned: {r.assigned_to_name}</div>}
+                  </td>
+                  <td className="pr-3">{r.result}</td>
+                  <td className="pr-3 capitalize">{(r.category || "").replace("_", " ")}</td>
+                  <td className="pr-3 font-bold text-slate-900">{r.ai_score}<span className="text-xs font-normal text-slate-400">/100</span></td>
+                  <td className="pr-3 text-slate-600">{fmtDuration(r.duration_seconds)}</td>
+                  <td className="py-2 text-xs text-slate-600">
+                    <div className="mb-1 flex flex-wrap gap-1">
+                      {(r.captured || []).map((c) => (
+                        <span key={c} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">{CAP_LABEL[c] || c}</span>
+                      ))}
+                      {r.callback && (
+                        <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+                          Call back{r.callback_when ? `: ${r.callback_when}` : ""}
+                        </span>
+                      )}
+                    </div>
+                    {r.summary}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 };
