@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from server import db, now_iso, Lead, _log_activity
+from server import db, now_iso, Lead, _log_activity, require_admin
 from ai_calling import require_ai_logs_access, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
 from ai_call_export import build_csv, build_pdf
 
@@ -920,12 +920,21 @@ def _list_query(date_from, date_to, category, assigned, direction, q_text,
     return q
 
 
+ASSIGNABLE_ROLES = {"sales", "team_lead"}
+
+
 async def _assignees() -> List[dict]:
-    users = await db.users.find({"username": {"$in": list(AI_CALLING_USERNAMES)}, "active": {"$ne": False}}).to_list(10)
+    """Everyone an AI-call lead can be handed to: any active sales person / team
+    lead, plus Vranda and Sandeep (kept so existing assignments keep working)."""
+    users = await db.users.find({
+        "active": {"$ne": False},
+        "$or": [{"role": {"$in": list(ASSIGNABLE_ROLES)}},
+                {"username": {"$in": list(AI_CALLING_USERNAMES)}}],
+    }).to_list(500)
     order = {"vranda.aggarwal": 0, "sandeep.chauhan": 1}
-    users.sort(key=lambda u: order.get(u.get("username"), 9))
-    return [{"id": str(u["_id"]), "name": u.get("name") or u.get("username"), "username": u.get("username")}
-            for u in users]
+    users.sort(key=lambda u: (order.get(u.get("username"), 9), (u.get("name") or "").lower()))
+    return [{"id": str(u["_id"]), "name": u.get("name") or u.get("username"), "username": u.get("username"),
+             "role": u.get("role")} for u in users]
 
 
 # ---------------------------------------------------------------------------
@@ -933,7 +942,7 @@ async def _assignees() -> List[dict]:
 # ---------------------------------------------------------------------------
 @router.get("/assignees")
 async def assignees():
-    """Only these two people can ever receive AI-call leads."""
+    """Every active sales person / team lead (plus Vranda & Sandeep) can receive AI-call leads."""
     return await _assignees()
 
 
@@ -1092,8 +1101,11 @@ async def shortlist(limit: int = 300):
             best[k] = d
     # which of these phones are already tagged / assigned in the CRM
     crm: dict = {}
-    async for l in db.leads.find({}, {"phone": 1, "assigned_to_name": 1}):
-        crm.setdefault(_phone10(l.get("phone")), l)
+    async for l in db.leads.find({}, {"phone": 1, "assigned_to": 1, "assigned_to_name": 1}):
+        k10 = _phone10(l.get("phone"))
+        # if the same number exists twice in the CRM, prefer the copy that is assigned
+        if k10 not in crm or (l.get("assigned_to") and not crm[k10].get("assigned_to")):
+            crm[k10] = l
     groups = {"hot": [], "warm": [], "cold": [], "callback": []}
     for k, d in best.items():
         temp = d.get("temperature") or "cold"
@@ -1108,14 +1120,18 @@ async def shortlist(limit: int = 300):
             "duration_seconds": d.get("duration_seconds") or 0, "summary": d.get("summary") or "",
             "captured": d.get("captured") or [], "callback": has_cb,
             "callback_when": d.get("callback_when") or "", "started_at": d.get("started_at"),
-            "assigned_to_name": lead.get("assigned_to_name"), "ai_agent": True,
+            "assigned_to": lead.get("assigned_to") or d.get("assigned_to"),
+            "assigned_to_name": lead.get("assigned_to_name") or d.get("assigned_to_name"),
+            "ai_agent": True, "remark": d.get("remark") or "",
         }
+        row["unassigned"] = not row["assigned_to"]
         group = "hot" if temp == "hot" else ("callback" if has_cb else temp)
         groups[group].append(row)
     for g in groups.values():
         g.sort(key=lambda r: (-r["ai_score"], str(r["started_at"] or "")), reverse=False)
     counts = {g: len(v) for g, v in groups.items()}
-    return {"counts": counts, **{g: v[:max(1, min(limit, 1000))] for g, v in groups.items()}}
+    unassigned_counts = {g: sum(1 for r in v if r["unassigned"]) for g, v in groups.items()}
+    return {"counts": counts, "unassigned_counts": unassigned_counts, **{g: v[:max(1, min(limit, 1000))] for g, v in groups.items()}}
 
 
 @router.get("/stats")
@@ -1359,7 +1375,7 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
             old = await db.ai_call_logs.find_one(
                 {"call_key": d["call_key"]},
                 {"category_manual": 1, "category": 1, "summary_auto": 1, "summary": 1, "remark": 1, "name": 1,
-                 "followup_manual": 1, "score_source": 1},
+                 "followup_manual": 1, "score_source": 1, "name_manual": 1},
             )
             upd = {k: d[k] for k in (
                 "direction", "started_at", "duration_seconds", "status", "answered", "not_connected_reason",
@@ -1380,7 +1396,7 @@ async def import_calls(file: UploadFile = File(...), user: dict = Depends(requir
                 for k in ("followup_needed", "followup_reason", "followup_at",
                           "followup_when_text", "followup_time_source"):
                     upd[k] = d[k]
-            if d.get("name"):
+            if d.get("name") and not (old or {}).get("name_manual"):   # an admin-corrected name is never overwritten
                 upd["name"] = d["name"]
             if not d["summary_auto"] or (old or {}).get("summary_auto", True):
                 upd["summary"] = d["summary"]
@@ -1574,7 +1590,10 @@ async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) ->
     tag = temp if temp in ("hot", "warm", "cold") else {"qualified": "hot", "interested": "warm"}.get(log.get("category"))
     if lead:
         lead_set = {"assigned_to": assignee["id"], "assigned_to_name": assignee["name"],
-                    "assigned_at": now_iso(), "updated_at": now_iso()}
+                    "assigned_at": now_iso(), "updated_at": now_iso(),
+                    "ai_agent": True}   # the green AI Agent tag stays on whoever holds the lead
+        if not lead.get("ai_agent_at"):
+            lead_set["ai_agent_at"] = now_iso()
         if tag and not lead.get("tag"):
             lead_set["tag"] = tag
         if temp and not lead.get("ai_temperature"):
@@ -1586,7 +1605,7 @@ async def _apply_assignment(log: dict, assignee: Optional[dict], actor: dict) ->
         new_lead = Lead(
             name=log.get("name") or f"AI lead {digits[-4:]}", phone=log.get("phone"), source="AI Calling",
             status="qualified" if log.get("category") == "qualified" else "new", tag=tag,
-            ai_temperature=temp,
+            ai_temperature=temp, ai_agent=True, ai_agent_at=now_iso(),
             notes=note or None, remark=log.get("remark") or None,
             assigned_to=assignee["id"], assigned_to_name=assignee["name"], assigned_at=now_iso(),
             created_at=now_iso(), updated_at=now_iso(),
@@ -1607,7 +1626,33 @@ async def _resolve_assignee(user_id: Optional[str]) -> Optional[dict]:
     for a in await _assignees():
         if a["id"] == user_id:
             return a
-    raise HTTPException(403, "AI call leads can only be assigned to Vranda or Sandeep.")
+    raise HTTPException(403, "That person can't receive leads (must be an active sales person or team lead).")
+
+
+class NameIn(BaseModel):
+    name: str
+
+
+@router.post("/{log_id}/name")
+async def rename_person(log_id: str, payload: NameIn, user: dict = Depends(require_admin)):
+    """Admins only: correct the person's name. Applies to every AI call from the
+    same phone number and to the matching CRM lead(s), so the name is the same everywhere."""
+    new_name = re.sub(r"\s+", " ", payload.name or "").strip()[:120]
+    if not new_name:
+        raise HTTPException(400, "Name can't be empty.")
+    if not ObjectId.is_valid(log_id):
+        raise HTTPException(404, "Call not found")
+    log = await db.ai_call_logs.find_one({"_id": ObjectId(log_id)}, {"phone": 1, "name": 1})
+    if not log:
+        raise HTTPException(404, "Call not found")
+    digits = _phone10(log.get("phone"))
+    rx = {"$regex": re.escape(digits) + "$"} if digits else None
+    if rx:
+        await db.ai_call_logs.update_many({"phone": rx}, {"$set": {"name": new_name, "name_manual": True}})
+        await db.leads.update_many({"phone": rx}, {"$set": {"name": new_name, "updated_at": now_iso()}})
+    else:
+        await db.ai_call_logs.update_one({"_id": log["_id"]}, {"$set": {"name": new_name, "name_manual": True}})
+    return {"ok": True, "name": new_name, "previous": log.get("name")}
 
 
 @router.post("/bulk-assign")
