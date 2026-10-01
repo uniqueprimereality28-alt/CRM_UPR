@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, Upload, UserPlus, Loader2, Trash2, Filter, MessageCircle,
   AlarmClock, Flame, Tag as TagIcon, CalendarClock, Copy, Flag, PhoneCall, Bot,
-  Download, FileSpreadsheet, FileText, FileDown,
+  Download, FileSpreadsheet, FileText, FileDown, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, apiError, fmtDuration, fmtMoney, fmtDate, waLink, STATUS_META, STATUSES, promptFilename } from "../lib/api";
@@ -58,6 +58,14 @@ const readSaved = (key, fallback = null) => {
 const writeSaved = (key, value) => {
   try { sessionStorage.setItem("crm:" + key, JSON.stringify(value)); } catch { /* storage blocked */ }
 };
+
+/* Green "AI Calling Agent" tag — shown on a lead even when it is assigned to a person */
+const AiAgentTag = ({ className = "" }) => (
+  <span title="This lead was called by the AI Calling Agent" data-testid="ai-agent-tag"
+    className={`inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-gradient-to-r from-emerald-500 to-green-400 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm shadow-emerald-200 ${className}`}>
+    <Zap className="h-3 w-3 fill-white" /> AI Calling Agent
+  </span>
+);
 
 export default function Leads() {
   const { isManager, canViewAll, isAdmin, isVranda } = useAuth();
@@ -862,6 +870,7 @@ export default function Leads() {
                   testId={`lead-name-m-${l.id}`}
                   displayClassName="text-base font-bold text-slate-900"
                 />
+                {l.ai_agent && <AiAgentTag className="mt-1" />}
                 <Link to={`/leads/${l.id}`} data-testid={`open-lead-${l.id}`} className="mt-1 block text-sm text-slate-500 hover:text-brand">
                   {l.phone}
                 </Link>
@@ -989,6 +998,7 @@ export default function Leads() {
                         <Link to={`/leads/${l.id}`} data-testid={`open-lead-${l.id}`} className="mt-0.5 block px-1 text-[11px] text-slate-400 hover:text-brand">
                           {l.phone} · {l.source}
                         </Link>
+                        {l.ai_agent && <AiAgentTag className="mt-1" />}
                         {isVranda && l.ai_temperature && (
                           <Link to={`/leads/${l.id}`} title={l.ai_summary || "AI call completed"}
                             data-testid={`ai-badge-${l.id}`}
