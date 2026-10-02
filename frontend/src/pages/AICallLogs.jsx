@@ -786,6 +786,15 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
     } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
   };
 
+  const moveLead = async (row, to) => {
+    try {
+      await api.post("/ai-call-logs/shortlist/move", { id: row.id, to });
+      const label = SHORT_TABS.find((t) => t[0] === to)?.[1] || to;
+      toast.success(`${row.name || row.phone} moved to ${label}`);
+      load();
+    } catch (e) { toast.error(apiError(e.response?.data?.detail)); }
+  };
+
   const addLead = async () => {
     if (String(form.phone).replace(/\D/g, "").length < 10) return toast.error("Enter a valid 10-digit phone number");
     setSaving(true);
@@ -837,7 +846,7 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
           <h3 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
             <Zap className="h-4 w-4 text-emerald-500" /> AI lead shortlist
           </h3>
-          <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later. Assigning keeps the AI Calling Agent tag.</p>
+          <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later. Assigned leads stay here with the AI Calling Agent tag, and show what the assigned person has remarked.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {isAdmin && (
@@ -932,6 +941,18 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
                         {assignees.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {isAdmin && (
+                      <Select value="" onValueChange={(v) => moveLead(r, v)}>
+                        <SelectTrigger className="mt-1.5 h-8 w-[160px] border-dashed bg-white text-xs" data-testid={`shortlist-move-${r.id}`}>
+                          <SelectValue placeholder="Move to…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {SHORT_TABS.filter(([k]) => k !== which).map(([k, label]) => (
+                            <SelectItem key={k} value={k} data-testid={`shortlist-move-${r.id}-${k}`}>Move to {label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </td>
                   <td className="pr-3">{r.result}</td>
                   <td className="pr-3 capitalize">{(r.category || "").replace("_", " ")}</td>
@@ -950,6 +971,33 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
                     </div>
                     {r.summary}
                     {r.remark && <div className="mt-1 text-slate-500">Remark: {r.remark}</div>}
+                    {!r.unassigned && (r.agent_note || r.lead_remark || r.lead_status || r.follow_up_note) && (
+                      <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-2" data-testid={`shortlist-assignee-remark-${r.id}`}
+                        onClick={(e) => e.stopPropagation()}>
+                        <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                          <UserCheck className="h-3 w-3" /> {r.assigned_to_name || "Assigned person"}
+                          {r.lead_status && (
+                            <span className="rounded-full bg-white px-1.5 py-0.5 normal-case text-emerald-700 ring-1 ring-emerald-200">
+                              {String(r.lead_status).replace(/_/g, " ")}
+                            </span>
+                          )}
+                        </div>
+                        {r.agent_note && (
+                          <div className="text-slate-700">
+                            {r.agent_note.text}
+                            <span className="ml-1 text-[10px] text-slate-400">
+                              — {r.agent_note.by || "agent"}{r.agent_note.at ? `, ${fmtWhen(r.agent_note.at)}` : ""}
+                            </span>
+                          </div>
+                        )}
+                        {r.lead_remark && (!r.agent_note || r.lead_remark !== r.agent_note.text) && (
+                          <div className="text-slate-700">Lead remark: {r.lead_remark}</div>
+                        )}
+                        {r.follow_up_note && (
+                          <div className="text-slate-600">Follow-up: {r.follow_up_note}{r.follow_up_at ? ` (${fmtWhen(r.follow_up_at)})` : ""}</div>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}
