@@ -34,7 +34,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from server import db, now_iso, Lead, _log_activity, require_admin
-from ai_calling import require_ai_logs_access, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
+from ai_calling import require_ai_logs_access, require_vranda_only, AI_CALLING_USERNAMES, EMERGENT_LLM_KEY, LLM_MODEL
 from ai_call_export import build_csv, build_pdf
 
 logger = logging.getLogger("crm.ai_call_logs")
@@ -1267,8 +1267,8 @@ async def _upsert_manual(phone_raw: Any, name: str, temperature: str, callback: 
 
 
 @router.post("/shortlist/add")
-async def shortlist_add(payload: ShortlistAddIn, user: dict = Depends(require_admin)):
-    """Admins (Vranda / Sandeep): add one lead to the AI lead shortlist by hand."""
+async def shortlist_add(payload: ShortlistAddIn, user: dict = Depends(require_vranda_only)):
+    """Vranda only: add one lead to the AI lead shortlist by hand."""
     res = await _upsert_manual(payload.phone, payload.name or "", payload.temperature,
                                payload.callback, payload.note or "")
     if res is None:
@@ -1305,7 +1305,7 @@ async def shortlist_move(payload: ShortlistMoveIn, user: dict = Depends(require_
     return {"ok": True, "to": payload.to}
 
 
-@router.get("/shortlist/template")
+@router.get("/shortlist/template", dependencies=[Depends(require_vranda_only)])   # Vranda only
 async def shortlist_template():
     """Sample file for the shortlist bulk import."""
     from openpyxl import Workbook
@@ -1342,8 +1342,8 @@ async def shortlist_template():
 
 
 @router.post("/shortlist/import")
-async def shortlist_import(file: UploadFile = File(...), user: dict = Depends(require_admin)):
-    """Admins (Vranda / Sandeep): bulk-add leads to the AI lead shortlist from a CSV / XLSX / JSON file."""
+async def shortlist_import(file: UploadFile = File(...), user: dict = Depends(require_vranda_only)):
+    """Vranda only: bulk-add leads to the AI lead shortlist from a CSV / XLSX / JSON file."""
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "The file is empty.")
@@ -1478,7 +1478,7 @@ async def list_logs(
     return {"items": [_out(d) for d in docs], "total": total, "page": page, "pages": max(1, -(-total // limit))}
 
 
-@router.get("/template")
+@router.get("/template", dependencies=[Depends(require_vranda_only)])   # Vranda only
 async def download_template():
     """A ready-to-fill Excel file showing exactly what an upload should look like."""
     from openpyxl import Workbook
@@ -1587,7 +1587,7 @@ async def export_calls(
 
 
 @router.post("/import")
-async def import_calls(file: UploadFile = File(...), user: dict = Depends(require_ai_logs_access)):
+async def import_calls(file: UploadFile = File(...), user: dict = Depends(require_vranda_only)):   # Vranda only
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "The file is empty.")
