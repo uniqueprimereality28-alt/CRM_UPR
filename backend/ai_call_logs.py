@@ -936,6 +936,13 @@ ASSIGNABLE_ROLES = {"sales", "team_lead"}
 # source and left out of call stats and the call list.
 MANUAL_SOURCE = "manual_shortlist"
 MANUAL_TEMPS = {"hot": 75, "warm": 45, "cold": 15}
+SHORTLIST_GROUPS = ("hot", "warm", "cold", "callback")
+
+
+def _pin_rank(d: dict) -> str:
+    """Non-empty when an admin placed this lead in a list (added by hand or moved it).
+    The most recent admin decision for a phone number wins over the AI's own rating."""
+    return d.get("shortlist_pin_at") or (d.get("imported_at") if d.get("source") == MANUAL_SOURCE else "") or ""
 
 
 async def _assignees() -> List[dict]:
@@ -1142,25 +1149,42 @@ async def shortlist(limit: int = 300):
         cur = best.get(k)
         if not cur:
             best[k] = d
-        elif (d.get("source") == MANUAL_SOURCE) != (cur.get("source") == MANUAL_SOURCE):
-            if d.get("source") == MANUAL_SOURCE:      # an admin's choice beats the AI's guess
+        elif _pin_rank(d) or _pin_rank(cur):          # an admin's choice beats the AI's guess
+            if _pin_rank(d) > _pin_rank(cur):
                 best[k] = d
         elif (d.get("ai_score") or 0) > (cur.get("ai_score") or 0):
             best[k] = d
     # which of these phones are already tagged / assigned in the CRM
     crm: dict = {}
-    async for l in db.leads.find({}, {"phone": 1, "assigned_to": 1, "assigned_to_name": 1}):
+    async for l in db.leads.find({}, {"phone": 1, "assigned_to": 1, "assigned_to_name": 1, "remark": 1,
+                                      "status": 1, "follow_up_note": 1, "follow_up_at": 1,
+                                      "last_contacted_at": 1, "call_count": 1}):
         k10 = _phone10(l.get("phone"))
         # if the same number exists twice in the CRM, prefer the copy that is assigned
         if k10 not in crm or (l.get("assigned_to") and not crm[k10].get("assigned_to")):
             crm[k10] = l
+    # latest call note typed by the person the lead is assigned to (newest wins)
+    lead_ids = [str(crm[k]["_id"]) for k in best if (crm.get(k) or {}).get("assigned_to")]
+    notes_by_lead: dict = {}
+    if lead_ids:
+        async for c in db.calls.find({"lead_id": {"$in": lead_ids}, "notes": {"$nin": [None, ""]}},
+                                     {"lead_id": 1, "notes": 1, "agent_name": 1, "started_at": 1,
+                                      "outcome": 1}).sort("started_at", 1):
+            notes_by_lead[c["lead_id"]] = c       # ascending sort -> newest overwrites
     groups = {"hot": [], "warm": [], "cold": [], "callback": []}
     for k, d in best.items():
-        temp = d.get("temperature") or "cold"
-        has_cb = "callback" in (d.get("signals") or [])
-        if temp == "lost":
-            continue
+        pin = d.get("shortlist_pin")
+        if pin in SHORTLIST_GROUPS:                    # admin moved it: honour that exactly
+            temp = pin if pin != "callback" else (d.get("temperature") if d.get("temperature") in ("warm", "cold") else "warm")
+            has_cb = pin == "callback"
+        else:
+            temp = d.get("temperature") or "cold"
+            has_cb = "callback" in (d.get("signals") or [])
+            if temp == "lost":
+                continue
         lead = crm.get(k) or {}
+        note = notes_by_lead.get(str(lead.get("_id"))) if lead else None
+        lead_remark = (lead.get("remark") or "").strip()
         row = {
             "id": str(d["_id"]), "name": (d.get("name") or "").strip(), "phone": d.get("phone"),
             "result": "Interested" if d.get("category") in INTERESTED_SET else "Undecided",
@@ -1171,9 +1195,17 @@ async def shortlist(limit: int = 300):
             "assigned_to": lead.get("assigned_to") or d.get("assigned_to"),
             "assigned_to_name": lead.get("assigned_to_name") or d.get("assigned_to_name"),
             "ai_agent": True, "remark": d.get("remark") or "",
+            "pinned": bool(pin),
+            # what the assigned person has done with the lead in the CRM
+            "lead_status": lead.get("status"),
+            "lead_remark": lead_remark if lead_remark and lead_remark != (d.get("remark") or "").strip() else "",
+            "agent_note": ({"text": note.get("notes"), "by": note.get("agent_name"), "at": note.get("started_at"),
+                            "outcome": note.get("outcome")} if note else None),
+            "follow_up_note": lead.get("follow_up_note") or "", "follow_up_at": lead.get("follow_up_at"),
+            "last_contacted_at": lead.get("last_contacted_at"),
         }
         row["unassigned"] = not row["assigned_to"]
-        group = "hot" if temp == "hot" else ("callback" if has_cb else temp)
+        group = pin if pin in SHORTLIST_GROUPS else ("hot" if temp == "hot" else ("callback" if has_cb else temp))
         groups[group].append(row)
     for g in groups.values():
         g.sort(key=lambda r: (-r["ai_score"], str(r["started_at"] or "")), reverse=False)
@@ -1208,6 +1240,7 @@ def _manual_doc(phone: str, name: str, temperature: str, callback: bool, note: s
         "score": score, "ai_score": score, "temperature": temp, "score_source": "manual",
         "followup_needed": False, "followup_done": False,
         "assigned_to": None, "assigned_to_name": None, "ai_tag_synced": True,
+        "shortlist_pin": "callback" if callback else temp, "shortlist_pin_at": now_iso(),
     }
 
 
@@ -1222,7 +1255,8 @@ async def _upsert_manual(phone_raw: Any, name: str, temperature: str, callback: 
     old = await db.ai_call_logs.find_one({"source": MANUAL_SOURCE, "call_key": doc["call_key"]},
                                          {"remark": 1, "assigned_to": 1, "name": 1, "name_manual": 1})
     if old:
-        keep = {k: doc[k] for k in ("category", "signals", "score", "ai_score", "temperature", "summary", "started_at")}
+        keep = {k: doc[k] for k in ("category", "signals", "score", "ai_score", "temperature", "summary", "started_at",
+                                    "shortlist_pin", "shortlist_pin_at")}
         if name:
             keep["name"] = name
         await db.ai_call_logs.update_one({"_id": old["_id"]}, {"$set": keep})   # assignment & remark untouched
@@ -1240,6 +1274,35 @@ async def shortlist_add(payload: ShortlistAddIn, user: dict = Depends(require_ad
     if res is None:
         raise HTTPException(400, "Enter a valid 10-digit phone number.")
     return {"result": res}
+
+
+class ShortlistMoveIn(BaseModel):
+    id: str
+    to: str          # hot | warm | cold | callback
+
+
+@router.post("/shortlist/move")
+async def shortlist_move(payload: ShortlistMoveIn, user: dict = Depends(require_admin)):
+    """Admins (Vranda / Sandeep): move a lead to any shortlist (e.g. Warm -> Cold).
+    Works for every row. The choice sticks — later AI calls or re-imports don't undo it."""
+    if payload.to not in SHORTLIST_GROUPS:
+        raise HTTPException(400, "Choose Hot, Warm, Cold or Call back.")
+    if not ObjectId.is_valid(payload.id):
+        raise HTTPException(404, "Lead not found")
+    doc = await db.ai_call_logs.find_one({"_id": ObjectId(payload.id)},
+                                         {"temperature": 1, "phone": 1, "signals": 1})
+    if not doc:
+        raise HTTPException(404, "Lead not found")
+    upd: dict = {"shortlist_pin": payload.to, "shortlist_pin_at": now_iso()}
+    if payload.to == "callback":
+        if doc.get("temperature") not in ("warm", "cold"):
+            upd["temperature"], upd["ai_score"] = "warm", MANUAL_TEMPS["warm"]
+            upd["score_source"] = "manual"
+    else:
+        upd["temperature"], upd["ai_score"] = payload.to, MANUAL_TEMPS[payload.to]
+        upd["score_source"] = "manual"          # a hand-set rating is never overwritten by an import
+    await db.ai_call_logs.update_one({"_id": doc["_id"]}, {"$set": upd})
+    return {"ok": True, "to": payload.to}
 
 
 @router.get("/shortlist/template")
