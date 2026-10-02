@@ -48,7 +48,6 @@ const TABS = [
   ["all", "All"], ["qualified", "Qualified"], ["interested", "Interested"],
   ["callback", "Call back"], ["not_interested", "Not interested"],
 ];
-const TEMPS = ["hot", "warm", "cold", "lost"];
 
 const SORTS = [
   ["followup", "Follow-up soonest"], ["newest", "Newest first"], ["oldest", "Oldest first"], ["best", "Best leads first"], ["hottest", "Highest AI score"],
@@ -107,6 +106,7 @@ const writeSaved = (key, value) => {
 };
 
 export default function AICallLogs() {
+  const { isVranda } = useAuth();      // only Vranda sees upload / sample-file / import tools
   const [assignees, setAssignees] = useState([]);
   const sv = useRef(readSaved("logs:view", {})).current;      // where you were before refresh
   const [stats, setStats] = useState(() => readSaved("logs:stats", null));  // last numbers = instant
@@ -290,16 +290,18 @@ export default function AICallLogs() {
           <h1 className="brand-font mt-1 text-3xl font-bold text-slate-900">AI Call Logs</h1>
           <p className="mt-1 text-sm text-slate-500">Every call the AI agent made or received — who was interested, and what was said.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate} data-testid="download-template-btn">
-            <FileDown className="h-3.5 w-3.5" /> Sample file
-          </Button>
-          <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={importing}
-            onClick={() => fileRef.current?.click()} data-testid="import-calls-btn">
-            {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload calls
-          </Button>
-          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm,.json" className="hidden" onChange={onFile} />
-        </div>
+        {isVranda && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={downloadTemplate} data-testid="download-template-btn">
+              <FileDown className="h-3.5 w-3.5" /> Sample file
+            </Button>
+            <Button size="sm" className="gap-1.5 bg-brand hover:bg-brand-dark" disabled={importing}
+              onClick={() => fileRef.current?.click()} data-testid="import-calls-btn">
+              {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Upload calls
+            </Button>
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm,.json" className="hidden" onChange={onFile} />
+          </div>
+        )}
       </div>
 
       {/* when */}
@@ -333,7 +335,20 @@ export default function AICallLogs() {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="Calls made" value={stats ? stats.total : "…"} sub={stats ? `${stats.outbound} out · ${stats.inbound} in` : ""} icon={PhoneCall} accent="brand" testId="stat-calls" />
         <StatCard label="Connected" value={stats ? stats.connected : "…"} sub={stats && stats.total ? `${Math.round((stats.connected / stats.total) * 100)}% of calls · ${stats.not_connected} not connected` + (stats.picked_no_speech ? ` · ${stats.picked_no_speech} picked up, silent` : "") : ""} icon={Phone} accent="slate" testId="stat-connected" />
-        <StatCard label="Interested" value={stats ? stats.interested : "…"} sub="flagged automatically" icon={Sparkles} accent="amber" testId="stat-interested" />
+        <StatCard label="Interested" icon={Sparkles} accent="amber" testId="stat-interested"
+          value={stats ? ((stats.by_temperature?.hot || 0) + (stats.by_temperature?.warm || 0)) : "…"}
+          sub={stats ? (
+            <span className="inline-flex flex-wrap items-center gap-1.5" data-testid="interested-breakdown">
+              {[["hot", "Hot", "border-orange-200 bg-orange-50 text-orange-700"], ["warm", "Warm", "border-amber-200 bg-amber-50 text-amber-700"]].map(([k, label, cls]) => (
+                <button key={k} type="button" onClick={() => setTemp(temp === k ? "all" : k)} data-testid={`interested-${k}`}
+                  title={`Show only ${label.toLowerCase()} calls`}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${cls} ${temp === k ? "ring-2 ring-brand/40" : "hover:brightness-95"}`}>
+                  {label} {stats.by_temperature?.[k] || 0}
+                </button>
+              ))}
+              <span className="text-[11px] text-slate-400">= interested</span>
+            </span>
+          ) : ""} />
         <StatCard label="Qualified leads" value={stats ? stats.qualified : "…"} sub={stats ? `${stats.assigned} assigned` : ""} icon={BadgeCheck} accent="emerald" testId="stat-qualified" />
       </div>
 
@@ -343,9 +358,6 @@ export default function AICallLogs() {
 
       {/* AI lead shortlist: Hot / Warm / Cold / Call back */}
       <ShortlistPanel onOpen={setOpenId} assignees={assignees} />
-
-      {/* AI lead temperature */}
-      <TemperaturePanel stats={stats} temp={temp} onPick={setTemp} />
 
       {/* tabs + tools */}
       <div className="space-y-3">
@@ -568,38 +580,6 @@ const ConnectionPanel = ({ stats, conn, reason, onPick }) => {
   );
 };
 
-/* ---------- AI lead temperature ---------- */
-const TemperaturePanel = ({ stats, temp, onPick }) => {
-  const by = stats?.by_temperature || {};
-  const scored = TEMPS.reduce((n, t) => n + (by[t] || 0), 0);
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" data-testid="temperature-panel">
-      <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold text-slate-900">AI lead temperature</h3>
-        <span className="text-xs text-slate-400">Scored from the whole conversation · tap to filter</span>
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {TEMPS.map((t) => {
-          const m = tempMeta(t);
-          const n = by[t] || 0;
-          const active = temp === t;
-          return (
-            <button key={t} type="button" onClick={() => onPick(active ? "all" : t)} data-testid={`temp-${t}`}
-              className={`rounded-xl border p-3.5 text-left transition-all ${m.cls} ${active ? "ring-2 ring-brand/40" : "hover:brightness-95"}`}>
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider">
-                <span className={`h-2 w-2 rounded-full ${m.dot}`} />{m.label}
-              </div>
-              <div className="brand-font mt-1.5 text-2xl font-bold">{stats ? n : "…"}</div>
-              <div className="text-[11px] opacity-70">{scored ? Math.round((n / scored) * 100) : 0}% of calls</div>
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-3 text-[11px] text-slate-400">Hot = 60+ · Warm = 30–59 · Cold = under 30 · Lost = not interested, no answer or silent.</p>
-    </div>
-  );
-};
-
 /* ---------- One row ---------- */
 const CallRow = ({ c, checked, onCheck, onOpen }) => {
   const meta = catMeta(c.category);
@@ -725,7 +705,7 @@ const SHORT_TABS = [
 const CAP_LABEL = { purpose: "Purpose", budget: "Budget", config: "Property", location: "Location", timeline: "Timeline" };
 
 const ShortlistPanel = ({ onOpen, assignees = [] }) => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isVranda } = useAuth();
   const [data, setData] = useState(() => readSaved("logs:shortlist", null));
   const [which, setWhich] = useState(() => readSaved("logs:shortlist:tab", "hot"));
   const [onlyUnassigned, setOnlyUnassigned] = useState(() => readSaved("logs:shortlist:unassigned", false));
@@ -849,7 +829,7 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
           <p className="text-xs text-slate-500">One row per person. Hot = gave real buying details (budget, property, location, timeline). Call back = asked to be called later. Assigned leads stay here with the AI Calling Agent tag, and show what the assigned person has remarked.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {isAdmin && (
+          {isVranda && (
             <>
               <Button size="sm" className="gap-1.5 bg-emerald-600 hover:bg-emerald-700" onClick={() => setAddOpen(true)} data-testid="shortlist-add-btn">
                 <Plus className="h-3.5 w-3.5" /> Add lead
@@ -1006,7 +986,7 @@ const ShortlistPanel = ({ onOpen, assignees = [] }) => {
         )}
       </div>
 
-      {isAdmin && (
+      {isVranda && (
         <Dialog open={addOpen} onOpenChange={setAddOpen}>
           <DialogContent className="max-w-md" data-testid="shortlist-add-dialog">
             <DialogHeader>
