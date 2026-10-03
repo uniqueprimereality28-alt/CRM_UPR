@@ -1,0 +1,20 @@
+[
+  {
+    "_id": "6a70d7eb408a3683e5467c6b",
+    "group_id": "6a708521d17689b86fe37835",
+    "sender_id": "6a70851ed17689b86fe37833",
+    "sender_name": "Vranda Aggarwal",
+    "sender_role": "superadmin",
+    "text": "test123",
+    "created_at": "2026-08-03T18:03:23.092349+00:00"
+  },
+  {
+    "_id": "6a70d80a408a3683e5467c6c",
+    "group_id": "6a708521d17689b86fe37835",
+    "sender_id": "6a708520d17689b86fe37834",
+    "sender_name": "Sandeep Chauhan",
+    "sender_role": "admin",
+    "text": "ok",
+    "created_at": "2026-08-03T18:03:54.283428+00:00"
+  }
+]
