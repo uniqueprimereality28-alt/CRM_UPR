@@ -333690,5 +333690,940 @@
     "actor_name": "Amit Nindaniya",
     "meta": {},
     "created_at": "2026-10-02T11:39:29.325573+00:00"
+  },
+  {
+    "_id": "6ac0f40bef61e2a35497a96d",
+    "lead_id": "6a9d01547a490c5e04a6f4d9",
+    "type": "call_logged",
+    "message": "Call connected · 10s (logged offline)",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 10,
+      "offline": true
+    },
+    "created_at": "2026-10-03T12:24:43.565588+00:00"
+  },
+  {
+    "_id": "6ac0f40def61e2a35497a96f",
+    "lead_id": "6a9d01557a490c5e04a6f4dd",
+    "type": "call_started",
+    "message": "Call initiated to 9811204682",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:24:45.231415+00:00"
+  },
+  {
+    "_id": "6ac0f444ef61e2a35497a971",
+    "lead_id": "6a9d01567a490c5e04a6f4e0",
+    "type": "call_started",
+    "message": "Call initiated to 9811044990",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:25:40.248277+00:00"
+  },
+  {
+    "_id": "6ac0f471ef61e2a35497a972",
+    "lead_id": "6a9d01567a490c5e04a6f4e0",
+    "type": "call_logged",
+    "message": "Call connected · 0m 44s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 44
+    },
+    "created_at": "2026-10-03T12:26:25.577221+00:00"
+  },
+  {
+    "_id": "6ac0f472ef61e2a35497a974",
+    "lead_id": "6a9d01567a490c5e04a6f4e2",
+    "type": "call_started",
+    "message": "Call initiated to 9811172486",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:26:26.593174+00:00"
+  },
+  {
+    "_id": "6ac0f482ef61e2a35497a975",
+    "lead_id": "6a9d01567a490c5e04a6f4e2",
+    "type": "call_logged",
+    "message": "Call connected · 0m 15s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 15
+    },
+    "created_at": "2026-10-03T12:26:42.432070+00:00"
+  },
+  {
+    "_id": "6ac0f48aef61e2a35497a977",
+    "lead_id": "6a9d01507a490c5e04a6f4c3",
+    "type": "call_started",
+    "message": "Call initiated to 9810054543",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:26:50.372718+00:00"
+  },
+  {
+    "_id": "6ac0f4cbef61e2a35497a978",
+    "lead_id": "6a9d01507a490c5e04a6f4c3",
+    "type": "call_logged",
+    "message": "Call connected · 1m 4s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 64
+    },
+    "created_at": "2026-10-03T12:27:55.150451+00:00"
+  },
+  {
+    "_id": "6ac0f4d0ef61e2a35497a97a",
+    "lead_id": "6a9d01507a490c5e04a6f4c5",
+    "type": "call_started",
+    "message": "Call initiated to 9871557556",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:28:00.374805+00:00"
+  },
+  {
+    "_id": "6ac0f4f9ef61e2a35497a97b",
+    "lead_id": "6a9d01507a490c5e04a6f4c5",
+    "type": "call_logged",
+    "message": "Call connected · 0m 41s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 41
+    },
+    "created_at": "2026-10-03T12:28:41.992959+00:00"
+  },
+  {
+    "_id": "6ac0f506ef61e2a35497a97d",
+    "lead_id": "6a9d01517a490c5e04a6f4c6",
+    "type": "call_started",
+    "message": "Call initiated to 9899599986",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:28:54.440647+00:00"
+  },
+  {
+    "_id": "6ac0f551ef61e2a35497a97e",
+    "lead_id": "6a9d01517a490c5e04a6f4c6",
+    "type": "call_logged",
+    "message": "Call connected · 1m 13s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 73
+    },
+    "created_at": "2026-10-03T12:30:09.059054+00:00"
+  },
+  {
+    "_id": "6ac0f556ef61e2a35497a980",
+    "lead_id": "6a9d01517a490c5e04a6f4c9",
+    "type": "call_started",
+    "message": "Call initiated to 9811310712",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:30:14.600379+00:00"
+  },
+  {
+    "_id": "6ac0f5d9ef61e2a35497a981",
+    "lead_id": "6a9d01517a490c5e04a6f4c9",
+    "type": "call_logged",
+    "message": "Call connected · 2m 9s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 129
+    },
+    "created_at": "2026-10-03T12:32:25.575088+00:00"
+  },
+  {
+    "_id": "6ac0f5dbef61e2a35497a983",
+    "lead_id": "6a9d01517a490c5e04a6f4ca",
+    "type": "call_started",
+    "message": "Call initiated to 9811558569",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:32:27.879038+00:00"
+  },
+  {
+    "_id": "6ac0f5dcef61e2a35497a985",
+    "lead_id": "6a9d01517a490c5e04a6f4ca",
+    "type": "call_started",
+    "message": "Call initiated to 9811558569",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:32:28.237333+00:00"
+  },
+  {
+    "_id": "6ac0f641ef61e2a35497a986",
+    "lead_id": "6a9d01517a490c5e04a6f4ca",
+    "type": "call_logged",
+    "message": "Call connected · 1m 39s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 99
+    },
+    "created_at": "2026-10-03T12:34:09.078879+00:00"
+  },
+  {
+    "_id": "6ac0f64def61e2a35497a988",
+    "lead_id": "6a9d01527a490c5e04a6f4cd",
+    "type": "call_started",
+    "message": "Call initiated to 9990212777",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:34:21.764986+00:00"
+  },
+  {
+    "_id": "6ac0f6a4ef61e2a35497a989",
+    "lead_id": "6a9d01527a490c5e04a6f4cd",
+    "type": "call_logged",
+    "message": "Call connected · 1m 25s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 85
+    },
+    "created_at": "2026-10-03T12:35:48.111222+00:00"
+  },
+  {
+    "_id": "6ac0f6a7ef61e2a35497a98b",
+    "lead_id": "6a9d01527a490c5e04a6f4cf",
+    "type": "call_started",
+    "message": "Call initiated to 9818439433",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:35:51.223208+00:00"
+  },
+  {
+    "_id": "6ac0f6c6ef61e2a35497a98c",
+    "lead_id": "6a9d01527a490c5e04a6f4cf",
+    "type": "call_logged",
+    "message": "Call connected · 0m 32s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 32
+    },
+    "created_at": "2026-10-03T12:36:22.671151+00:00"
+  },
+  {
+    "_id": "6ac0f6ceef61e2a35497a98e",
+    "lead_id": "6a9d01537a490c5e04a6f4d3",
+    "type": "call_started",
+    "message": "Call initiated to 9811049496",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:36:30.107789+00:00"
+  },
+  {
+    "_id": "6ac0f6f7ef61e2a35497a98f",
+    "lead_id": "6a9d01537a490c5e04a6f4d3",
+    "type": "call_logged",
+    "message": "Call connected · 0m 40s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 40
+    },
+    "created_at": "2026-10-03T12:37:11.764296+00:00"
+  },
+  {
+    "_id": "6ac0f6fbef61e2a35497a991",
+    "lead_id": "6a9d01547a490c5e04a6f4d6",
+    "type": "call_started",
+    "message": "Call initiated to 9868072349",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:37:15.042382+00:00"
+  },
+  {
+    "_id": "6ac0f7b2ef61e2a35497a993",
+    "lead_id": "6a9d01507a490c5e04a6f4c3",
+    "type": "call_started",
+    "message": "Call initiated to 9810054543",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:40:18.016006+00:00"
+  },
+  {
+    "_id": "6ac0f7d0ef61e2a35497a994",
+    "lead_id": "6a9d01507a490c5e04a6f4c3",
+    "type": "call_logged",
+    "message": "Call connected · 0m 34s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 34
+    },
+    "created_at": "2026-10-03T12:40:48.734403+00:00"
+  },
+  {
+    "_id": "6ac0f808ef61e2a35497a996",
+    "lead_id": "6a9d01447a490c5e04a6f485",
+    "type": "call_started",
+    "message": "Call initiated to 9810550644",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:41:44.618970+00:00"
+  },
+  {
+    "_id": "6ac0f956ef61e2a35497a997",
+    "lead_id": "6a9d01447a490c5e04a6f485",
+    "type": "call_logged",
+    "message": "Call connected · 5m 33s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 333
+    },
+    "created_at": "2026-10-03T12:47:18.983763+00:00"
+  },
+  {
+    "_id": "6ac0fa0fef61e2a35497a999",
+    "lead_id": "6a9d013f7a490c5e04a6f470",
+    "type": "call_started",
+    "message": "Call initiated to 9654046283",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:50:23.663215+00:00"
+  },
+  {
+    "_id": "6ac0fa61ef61e2a35497a99a",
+    "lead_id": "6a9d013f7a490c5e04a6f470",
+    "type": "call_logged",
+    "message": "Call connected · 1m 21s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 81
+    },
+    "created_at": "2026-10-03T12:51:45.920534+00:00"
+  },
+  {
+    "_id": "6ac0fa64ef61e2a35497a99c",
+    "lead_id": "6a9d013f7a490c5e04a6f46f",
+    "type": "call_started",
+    "message": "Call initiated to 11-45123287",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:51:48.927041+00:00"
+  },
+  {
+    "_id": "6ac0fa9bef61e2a35497a99e",
+    "lead_id": "6a9d013f7a490c5e04a6f470",
+    "type": "call_started",
+    "message": "Call initiated to 9654046283",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:52:43.375709+00:00"
+  },
+  {
+    "_id": "6ac0fa9cef61e2a35497a9a0",
+    "lead_id": "6a9d013f7a490c5e04a6f470",
+    "type": "call_started",
+    "message": "Call initiated to 9654046283",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:52:44.318684+00:00"
+  },
+  {
+    "_id": "6ac0fa9cef61e2a35497a9a1",
+    "lead_id": "6a9d013f7a490c5e04a6f46f",
+    "type": "call_logged",
+    "message": "Call connected · 0m 49s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 49
+    },
+    "created_at": "2026-10-03T12:52:44.563793+00:00"
+  },
+  {
+    "_id": "6ac0faacef61e2a35497a9a2",
+    "lead_id": "6a9d013f7a490c5e04a6f470",
+    "type": "call_logged",
+    "message": "Call connected · 0m 16s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 16
+    },
+    "created_at": "2026-10-03T12:53:00.314138+00:00"
+  },
+  {
+    "_id": "6ac0facfef61e2a35497a9a4",
+    "lead_id": "6a9d013d7a490c5e04a6f462",
+    "type": "call_started",
+    "message": "Call initiated to 9891248158",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:53:35.830921+00:00"
+  },
+  {
+    "_id": "6ac0fadfef61e2a35497a9a5",
+    "lead_id": "6a9d013d7a490c5e04a6f462",
+    "type": "call_logged",
+    "message": "Call connected · 0m 14s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 14
+    },
+    "created_at": "2026-10-03T12:53:51.330122+00:00"
+  },
+  {
+    "_id": "6ac0fae1ef61e2a35497a9a7",
+    "lead_id": "6a9d013d7a490c5e04a6f465",
+    "type": "call_started",
+    "message": "Call initiated to 9717304448",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:53:53.375238+00:00"
+  },
+  {
+    "_id": "6ac0fafeef61e2a35497a9a8",
+    "lead_id": "6a9d013d7a490c5e04a6f465",
+    "type": "call_logged",
+    "message": "Call connected · 0m 28s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 28
+    },
+    "created_at": "2026-10-03T12:54:22.675252+00:00"
+  },
+  {
+    "_id": "6ac0fb02ef61e2a35497a9aa",
+    "lead_id": "6a9d013d7a490c5e04a6f466",
+    "type": "call_started",
+    "message": "Call initiated to 9711196770",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:54:26.289761+00:00"
+  },
+  {
+    "_id": "6ac0fb2fef61e2a35497a9ab",
+    "lead_id": "6a9d013d7a490c5e04a6f466",
+    "type": "call_logged",
+    "message": "Call connected · 0m 44s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 44
+    },
+    "created_at": "2026-10-03T12:55:11.083770+00:00"
+  },
+  {
+    "_id": "6ac0fb3cef61e2a35497a9ad",
+    "lead_id": "6a9d013d7a490c5e04a6f465",
+    "type": "call_started",
+    "message": "Call initiated to 9717304448",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:55:24.080759+00:00"
+  },
+  {
+    "_id": "6ac0fb41ef61e2a35497a9ae",
+    "lead_id": "6a9d013d7a490c5e04a6f465",
+    "type": "call_logged",
+    "message": "Call connected · 0m 4s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 4
+    },
+    "created_at": "2026-10-03T12:55:29.247428+00:00"
+  },
+  {
+    "_id": "6ac0fb43ef61e2a35497a9b0",
+    "lead_id": "6a9d013d7a490c5e04a6f462",
+    "type": "call_started",
+    "message": "Call initiated to 9891248158",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:55:31.239255+00:00"
+  },
+  {
+    "_id": "6ac0fb48ef61e2a35497a9b1",
+    "lead_id": "6a9d013d7a490c5e04a6f462",
+    "type": "call_logged",
+    "message": "Call connected · 0m 4s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 4
+    },
+    "created_at": "2026-10-03T12:55:36.141204+00:00"
+  },
+  {
+    "_id": "6ac0fb49ef61e2a35497a9b3",
+    "lead_id": "6a9d013c7a490c5e04a6f460",
+    "type": "call_started",
+    "message": "Call initiated to 9810081213",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:55:37.051677+00:00"
+  },
+  {
+    "_id": "6ac0fb7aef61e2a35497a9b4",
+    "lead_id": "6a9d013c7a490c5e04a6f460",
+    "type": "call_logged",
+    "message": "Call connected · 0m 48s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 48
+    },
+    "created_at": "2026-10-03T12:56:26.398774+00:00"
+  },
+  {
+    "_id": "6ac0fb85ef61e2a35497a9b5",
+    "lead_id": "6a9d013c7a490c5e04a6f460",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:56:37.527130+00:00"
+  },
+  {
+    "_id": "6ac0fb8fef61e2a35497a9b7",
+    "lead_id": "6a9d013c7a490c5e04a6f45f",
+    "type": "call_started",
+    "message": "Call initiated to 9910758984",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:56:47.166497+00:00"
+  },
+  {
+    "_id": "6ac0fba9ef61e2a35497a9b8",
+    "lead_id": "6a9d013c7a490c5e04a6f45f",
+    "type": "call_logged",
+    "message": "Call connected · 0m 25s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 25
+    },
+    "created_at": "2026-10-03T12:57:13.439374+00:00"
+  },
+  {
+    "_id": "6ac0fbb0ef61e2a35497a9ba",
+    "lead_id": "6a9d01387a490c5e04a6f449",
+    "type": "call_started",
+    "message": "Call initiated to 9811069224",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:57:20.915088+00:00"
+  },
+  {
+    "_id": "6ac0fbcdef61e2a35497a9bb",
+    "lead_id": "6a9d01387a490c5e04a6f449",
+    "type": "call_logged",
+    "message": "Call connected · 0m 27s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 27
+    },
+    "created_at": "2026-10-03T12:57:49.036571+00:00"
+  },
+  {
+    "_id": "6ac0fbd3ef61e2a35497a9bd",
+    "lead_id": "6a9d01397a490c5e04a6f44e",
+    "type": "call_started",
+    "message": "Call initiated to 9810034299",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:57:55.170824+00:00"
+  },
+  {
+    "_id": "6ac0fc02ef61e2a35497a9be",
+    "lead_id": "6a9d01397a490c5e04a6f44e",
+    "type": "call_logged",
+    "message": "Call connected · 0m 46s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 46
+    },
+    "created_at": "2026-10-03T12:58:42.510333+00:00"
+  },
+  {
+    "_id": "6ac0fc04ef61e2a35497a9c0",
+    "lead_id": "6a9d01397a490c5e04a6f450",
+    "type": "call_started",
+    "message": "Call initiated to 9872468000",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:58:44.526640+00:00"
+  },
+  {
+    "_id": "6ac0fc39ef61e2a35497a9c1",
+    "lead_id": "6a9d01397a490c5e04a6f450",
+    "type": "call_logged",
+    "message": "Call connected · 0m 52s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 52
+    },
+    "created_at": "2026-10-03T12:59:37.586569+00:00"
+  },
+  {
+    "_id": "6ac0fc3bef61e2a35497a9c3",
+    "lead_id": "6a9d01397a490c5e04a6f451",
+    "type": "call_started",
+    "message": "Call initiated to 9213314852",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:59:39.422434+00:00"
+  },
+  {
+    "_id": "6ac0fc46ef61e2a35497a9c4",
+    "lead_id": "6a9d01397a490c5e04a6f451",
+    "type": "call_logged",
+    "message": "Call connected · 0m 10s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 10
+    },
+    "created_at": "2026-10-03T12:59:50.498606+00:00"
+  },
+  {
+    "_id": "6ac0fc48ef61e2a35497a9c6",
+    "lead_id": "6a9d01397a490c5e04a6f452",
+    "type": "call_started",
+    "message": "Call initiated to 9910689789",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T12:59:52.032994+00:00"
+  },
+  {
+    "_id": "6ac0fc74ef61e2a35497a9c7",
+    "lead_id": "6a9d01397a490c5e04a6f452",
+    "type": "call_logged",
+    "message": "Call connected · 0m 43s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 43
+    },
+    "created_at": "2026-10-03T13:00:36.085488+00:00"
+  },
+  {
+    "_id": "6ac0fc76ef61e2a35497a9c9",
+    "lead_id": "6a9d013a7a490c5e04a6f453",
+    "type": "call_started",
+    "message": "Call initiated to 9810817991",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:00:38.008818+00:00"
+  },
+  {
+    "_id": "6ac0fc8bef61e2a35497a9ca",
+    "lead_id": "6a9d013a7a490c5e04a6f453",
+    "type": "call_logged",
+    "message": "Call connected · 0m 20s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 20
+    },
+    "created_at": "2026-10-03T13:00:59.274659+00:00"
+  },
+  {
+    "_id": "6ac0fc8def61e2a35497a9cc",
+    "lead_id": "6a9d013a7a490c5e04a6f454",
+    "type": "call_started",
+    "message": "Call initiated to 9868733356",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:01:01.441952+00:00"
+  },
+  {
+    "_id": "6ac0fcb3ef61e2a35497a9cd",
+    "lead_id": "6a9d013a7a490c5e04a6f454",
+    "type": "call_logged",
+    "message": "Call connected · 0m 36s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 36
+    },
+    "created_at": "2026-10-03T13:01:39.099833+00:00"
+  },
+  {
+    "_id": "6ac0fcb3ef61e2a35497a9cf",
+    "lead_id": "6a9d013a7a490c5e04a6f456",
+    "type": "call_started",
+    "message": "Call initiated to 9871063743",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:01:39.954968+00:00"
+  },
+  {
+    "_id": "6ac0fce0ef61e2a35497a9d0",
+    "lead_id": "6a9d013a7a490c5e04a6f456",
+    "type": "call_logged",
+    "message": "Call connected · 0m 42s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 42
+    },
+    "created_at": "2026-10-03T13:02:24.391205+00:00"
+  },
+  {
+    "_id": "6ac0fcfaef61e2a35497a9d1",
+    "lead_id": "6a9d013a7a490c5e04a6f456",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:02:50.621194+00:00"
+  },
+  {
+    "_id": "6ac0fd0aef61e2a35497a9d3",
+    "lead_id": "6a9d013b7a490c5e04a6f458",
+    "type": "call_started",
+    "message": "Call initiated to 9818341496",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:03:06.671889+00:00"
+  },
+  {
+    "_id": "6ac0fd0bef61e2a35497a9d5",
+    "lead_id": "6a9d013b7a490c5e04a6f458",
+    "type": "call_started",
+    "message": "Call initiated to 9818341496",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:03:07.353995+00:00"
+  },
+  {
+    "_id": "6ac0fd3bef61e2a35497a9d6",
+    "lead_id": "6a9d013b7a490c5e04a6f458",
+    "type": "call_logged",
+    "message": "Call connected · 0m 48s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 48
+    },
+    "created_at": "2026-10-03T13:03:55.953482+00:00"
+  },
+  {
+    "_id": "6ac0fd48ef61e2a35497a9d7",
+    "lead_id": "6a9d013b7a490c5e04a6f458",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:04:08.290664+00:00"
+  },
+  {
+    "_id": "6ac0fd54ef61e2a35497a9d9",
+    "lead_id": "6a9d013b7a490c5e04a6f45a",
+    "type": "call_started",
+    "message": "Call initiated to 9810090598",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:04:20.232294+00:00"
+  },
+  {
+    "_id": "6ac0fd81ef61e2a35497a9da",
+    "lead_id": "6a9d013b7a490c5e04a6f45a",
+    "type": "call_logged",
+    "message": "Call connected · 0m 45s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 45
+    },
+    "created_at": "2026-10-03T13:05:05.872269+00:00"
+  },
+  {
+    "_id": "6ac0fd8bef61e2a35497a9db",
+    "lead_id": "6a9d013b7a490c5e04a6f45a",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:05:15.057650+00:00"
+  },
+  {
+    "_id": "6ac0fd9bef61e2a35497a9dd",
+    "lead_id": "6a9d01337a490c5e04a6f434",
+    "type": "call_started",
+    "message": "Call initiated to 9999703251",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:05:31.203006+00:00"
+  },
+  {
+    "_id": "6ac0fdafef61e2a35497a9de",
+    "lead_id": "6a9d01337a490c5e04a6f434",
+    "type": "call_logged",
+    "message": "Call connected · 0m 20s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 20
+    },
+    "created_at": "2026-10-03T13:05:51.768041+00:00"
+  },
+  {
+    "_id": "6ac0fdb0ef61e2a35497a9e0",
+    "lead_id": "6a9d01347a490c5e04a6f435",
+    "type": "call_started",
+    "message": "Call initiated to 9888056500",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:05:52.958947+00:00"
+  },
+  {
+    "_id": "6ac0fdd7ef61e2a35497a9e1",
+    "lead_id": "6a9d01347a490c5e04a6f435",
+    "type": "call_logged",
+    "message": "Call connected · 0m 36s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 36
+    },
+    "created_at": "2026-10-03T13:06:31.991316+00:00"
+  },
+  {
+    "_id": "6ac0fdd9ef61e2a35497a9e2",
+    "lead_id": "6a9d01347a490c5e04a6f435",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:06:33.311363+00:00"
+  },
+  {
+    "_id": "6ac0fde5ef61e2a35497a9e4",
+    "lead_id": "6a9d01347a490c5e04a6f436",
+    "type": "call_started",
+    "message": "Call initiated to 8130704311",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:06:45.416264+00:00"
+  },
+  {
+    "_id": "6ac0fe0eef61e2a35497a9e5",
+    "lead_id": "6a9d01347a490c5e04a6f436",
+    "type": "call_logged",
+    "message": "Call connected · 0m 40s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 40
+    },
+    "created_at": "2026-10-03T13:07:26.814053+00:00"
+  },
+  {
+    "_id": "6ac0fe11ef61e2a35497a9e6",
+    "lead_id": "6a9d01347a490c5e04a6f436",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:07:29.519111+00:00"
+  },
+  {
+    "_id": "6ac0fe19ef61e2a35497a9e8",
+    "lead_id": "6a9d01347a490c5e04a6f438",
+    "type": "call_started",
+    "message": "Call initiated to 9412071365",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:07:37.371625+00:00"
+  },
+  {
+    "_id": "6ac0fe3def61e2a35497a9e9",
+    "lead_id": "6a9d01347a490c5e04a6f438",
+    "type": "call_logged",
+    "message": "Call connected · 0m 36s",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {
+      "duration": 36
+    },
+    "created_at": "2026-10-03T13:08:13.880223+00:00"
+  },
+  {
+    "_id": "6ac0fe47ef61e2a35497a9ea",
+    "lead_id": "6a9d01347a490c5e04a6f438",
+    "type": "followup",
+    "message": "Follow-up status: not_interested",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:08:23.758623+00:00"
+  },
+  {
+    "_id": "6ac0fe58ef61e2a35497a9ec",
+    "lead_id": "6a9d01347a490c5e04a6f439",
+    "type": "call_started",
+    "message": "Call initiated to 9350815193",
+    "actor_id": "6a7d699a7180db9441c77473",
+    "actor_name": "Albeera Khan",
+    "meta": {},
+    "created_at": "2026-10-03T13:08:40.600851+00:00"
   }
 ]

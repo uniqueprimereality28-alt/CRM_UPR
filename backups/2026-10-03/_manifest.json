@@ -1,12 +1,12 @@
 {
-  "backed_up_at": "2026-10-03T00:37:35.387937Z",
+  "backed_up_at": "2026-10-03T23:58:48.454615Z",
   "collections": {
     "ai_agents": 1,
-    "activities": 31769,
+    "activities": 31855,
     "ai_calls": 0,
     "notifications": 0,
-    "attendance": 410,
-    "calls": 9497,
+    "attendance": 414,
+    "calls": 9540,
     "settings": 5,
     "ai_call_logs": 1062,
     "leads": 11405,
